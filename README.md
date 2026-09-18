@@ -1,6 +1,6 @@
 # DataMoov for Google Sheets
 
-A free, open-source alternative to Supermetrics that runs entirely inside your Google Sheet. Pull Google Ads, Facebook Ads, GA4, HubSpot, Zendesk, PostgreSQL, BigQuery and GitHub data into a tab, keep it fresh on a schedule, and never send a byte of your data to anyone else.
+A free (for personal and noncommercial use) alternative to Supermetrics that runs entirely inside your Google Sheet, with the source available here. Pull Google Ads, Facebook Ads, GA4, HubSpot, Zendesk, PostgreSQL, BigQuery and GitHub data into a tab, keep it fresh on a schedule, and never send a byte of your data to anyone else.
 
 Created with ♥ by [justdataplease.com](https://justdataplease.com).
 
@@ -39,7 +39,7 @@ Credentials do not grant access by themselves. Google Ads needs a developer toke
 3. Turn on the **Google Sheets API** advanced service if the editor asks for it, then reload the spreadsheet.
 4. Choose **DataMoov → Open DataMoov**, grant the requested permissions, add a connection, and build your first report.
 
-Developers can instead push with [clasp](https://github.com/google/clasp): run `npm ci --ignore-scripts`, `npm run login`, then `DATAMOOV_DEV_SPREADSHEET_ID=<your spreadsheet id> node tools/create-dev.mjs` once and `npm run push:dev` for each release.
+Developers can instead push with [clasp](https://github.com/google/clasp): run `npm ci --ignore-scripts`, `npm run login`, then `DATAMOOV_DEV_SPREADSHEET_ID=<your spreadsheet id> node tools/create-dev.mjs` once and `npm run push:dev` for each release. For a production spreadsheet, record it in `data/production-project.json` with `"production": true` and run `npm run push:prod` with `DATAMOOV_CONFIRM=<scriptId>`.
 
 ## Add a source
 
@@ -65,3 +65,7 @@ Offline tests cover pagination, empty results, zero and false values, row and ti
 DataMoov has no backend, no telemetry and no exception upload. Provider credentials live in the Google user's private script properties, saved report definitions live there too, and report output is written only into the user's spreadsheet. The transport refuses any host other than the configured provider. Sanitized error messages are stored with the report so you can read them in the sidebar, and nowhere else. Removing a connection or report deletes its stored record.
 
 Anyone who can edit the bound Apps Script project can read its code and change it, so share the script only with people you trust.
+
+## License
+
+[PolyForm Strict 1.0.0](LICENSE). Free for personal and noncommercial use. Commercial use, modifications, derivative works and redistribution need written permission from JustDataPlease; ask at [justdataplease.com](https://justdataplease.com). Copyright stays with JustDataPlease.

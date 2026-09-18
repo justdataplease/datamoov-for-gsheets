@@ -6,7 +6,9 @@ import { google } from 'googleapis';
 import { initAuth } from '../node_modules/@google/clasp/build/src/auth/auth.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const recordPath = path.join(root, 'data/development-project.json');
+// Usage: node tools/publish.mjs data/development-project.json
+//        DATAMOOV_CONFIRM=<scriptId> node tools/publish.mjs data/production-project.json
+const recordPath = path.resolve(root, process.argv[2] || 'data/development-project.json');
 
 async function filesIn(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -35,7 +37,10 @@ export async function projectFiles() {
 
 async function main() {
   const record = JSON.parse(await readFile(recordPath, 'utf8'));
-  if (!record.scriptId || !record.spreadsheetId) throw new Error('Run node tools/create-dev.mjs first to record the development project.');
+  if (!record.scriptId || !record.spreadsheetId) throw new Error('The project record needs scriptId and spreadsheetId. Run node tools/create-dev.mjs for a development project.');
+  if (record.production === true && process.env.DATAMOOV_CONFIRM !== record.scriptId) {
+    throw new Error('This record is marked production. Re-run with DATAMOOV_CONFIRM=' + record.scriptId + ' to replace its code.');
+  }
   // Script IDs listed in the record (for example a production or customer copy) are never overwritten by this tool.
   if ((record.protectedScriptIds || []).includes(record.scriptId)) throw new Error('The recorded script ID is protected. Publication stopped.');
   const { credentials } = await initAuth({ authFilePath: path.join(root, '.local/clasprc.json') });
@@ -56,7 +61,7 @@ async function main() {
   record.lastPublishedAt = new Date().toISOString();
   record.files = files.map(file => ({name:file.name, type:file.type, sha256:createHash('sha256').update(file.source).digest('hex')}));
   await writeFile(recordPath, JSON.stringify(record,null,2)+'\n');
-  console.log(JSON.stringify({verifiedFiles:files.length, spreadsheetUrl:record.spreadsheetUrl, scriptUrl:record.scriptUrl, protectedProjectsChanged:false},null,2));
+  console.log(JSON.stringify({target:record.production ? 'production' : 'development', verifiedFiles:files.length, spreadsheetUrl:record.spreadsheetUrl, scriptUrl:record.scriptUrl, protectedProjectsChanged:false},null,2));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
