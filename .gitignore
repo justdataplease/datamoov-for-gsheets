@@ -1,0 +1,12 @@
+node_modules/
+.local/
+.clasprc.json
+**/.clasprc.json
+.env
+.env.*
+!.env.example
+data/
+coverage/
+*.log
+.clasp.json
+.clasp.original.json

@@ -1,0 +1,28 @@
+{
+  "name": "datamoov-sheets",
+  "version": "1.0.0-beta.1",
+  "private": true,
+  "description": "Standalone DataMoov reporting app for Google Sheets.",
+  "devDependencies": {
+    "@google/clasp": "3.4.1",
+    "@playwright/test": "1.63.0",
+    "prettier": "3.9.8"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "clasp": "clasp --auth .local/clasprc.json",
+    "login": "node -e \"require('node:fs').mkdirSync('.local',{recursive:true})\" && npm run clasp -- login",
+    "auth:status": "npm run clasp -- show-authorized-user",
+    "pull": "npm run clasp -- pull",
+    "status": "npm run clasp -- show-file-status",
+    "check": "node tools/check-source.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "preview": "node tools/preview.mjs",
+    "test:browser": "playwright test",
+    "push:dev": "node tools/publish-dev.mjs",
+    "format": "prettier --write \"src/**/*.{js,html,json}\"",
+    "format:check": "prettier --check \"src/**/*.{js,html,json}\""
+  }
+}

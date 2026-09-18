@@ -1,0 +1,846 @@
+<script>
+  (function () {
+    'use strict';
+    const $ = (id) => document.getElementById(id);
+    const state = {
+      catalog: [],
+      connections: [],
+      reports: [],
+      limits: { maxRows: 5000, defaultRows: 1000 },
+      reportId: null,
+      connectionId: null,
+      columns: [],
+      activeTab: 'reports',
+      loaded: false,
+    };
+    const api = (name, ...args) =>
+      new Promise((resolve, reject) => {
+        if (!window.google || !google.script || !google.script.run) {
+          reject(new Error('Open DataMoov from your spreadsheet to connect to Google services.'));
+          return;
+        }
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler((error) =>
+            reject(new Error((error && error.message) || 'The request could not be completed.'))
+          )
+          [name](...args);
+      });
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = String(text);
+      return node;
+    };
+    const button = (label, className, handler) => {
+      const node = el('button', className, label);
+      node.type = 'button';
+      node.addEventListener('click', handler);
+      return node;
+    };
+    const provider = (id) => state.catalog.find((item) => item.id === id);
+    const currentProvider = () => provider($('report-provider').value);
+    const currentReport = () =>
+      (currentProvider()?.reports || []).find((item) => item.id === $('report-type').value);
+    const option = (value, label) => {
+      const node = el('option', '', label);
+      node.value = value;
+      return node;
+    };
+    const defaultValue = (field) => (field.default == null ? '' : field.default);
+    const fieldKey = (field) => field.key || field.name;
+    function notice(message, kind = 'success') {
+      $('notice').textContent = message;
+      $('notice').className = 'notice ' + kind;
+      $('notice').setAttribute('role', kind === 'error' ? 'alert' : 'status');
+      $('notice').hidden = !message;
+    }
+    function tab(name) {
+      state.activeTab = name;
+      for (const item of ['reports', 'compose', 'connections']) {
+        $('panel-' + item).hidden = item !== name;
+        $('tab-' + item).setAttribute('aria-selected', String(item === name));
+        $('tab-' + item).tabIndex = item === name ? 0 : -1;
+      }
+    }
+    async function busy(node, label, work) {
+      const previous = node.textContent;
+      node.disabled = true;
+      node.textContent = label;
+      node.setAttribute('aria-busy', 'true');
+      try {
+        return await work();
+      } catch (error) {
+        notice(error.message || 'Something went wrong. Please try again.', 'error');
+        return null;
+      } finally {
+        node.disabled = false;
+        if (node.textContent === label) node.textContent = previous;
+        node.removeAttribute('aria-busy');
+      }
+    }
+    async function formBusy(formId, submitId, label, work) {
+      const fieldset = $(formId);
+      return busy($(submitId), label, async () => {
+        fieldset.disabled = true;
+        try {
+          return await work();
+        } finally {
+          fieldset.disabled = false;
+        }
+      });
+    }
+    function upsert(items, item) {
+      const index = items.findIndex((existing) => existing.id === item.id);
+      if (index < 0) items.push(item);
+      else items[index] = item;
+    }
+    function fillProviders(select, selected) {
+      select.replaceChildren();
+      for (const source of state.catalog) select.append(option(source.id, source.label));
+      if (selected && provider(selected)) select.value = selected;
+    }
+    function refreshConnections(selected) {
+      const dropdown = $('report-connection');
+      const previous = selected || dropdown.value;
+      const connections = state.connections.filter(
+        (item) => item.connectorId === $('report-provider').value
+      );
+      dropdown.replaceChildren();
+      if (!connections.length) dropdown.append(option('', 'Connect an account first'));
+      connections.forEach((item) => dropdown.append(option(item.id, item.label)));
+      if (connections.some((item) => item.id === previous)) dropdown.value = previous;
+      $('connection-empty').hidden = connections.length > 0;
+    }
+    function providerBadge(source) {
+      const badge = el(
+        'span',
+        'provider-badge',
+        (source?.label || '?')
+          .split(/\s+/)
+          .map((word) => word[0])
+          .slice(0, 2)
+          .join('')
+      );
+      if (/^#[a-f\d]{6}$/i.test(source?.color || '')) {
+        badge.style.color = source.color;
+        badge.style.backgroundColor = source.color + '12';
+      }
+      badge.setAttribute('aria-hidden', 'true');
+      return badge;
+    }
+    function empty(title, description, icon = '▦') {
+      const node = el('div', 'empty-state');
+      node.append(
+        el('span', 'empty-icon', icon),
+        el('strong', '', title),
+        el('p', '', description)
+      );
+      return node;
+    }
+    function detail(label, value) {
+      const row = el('div', 'card-detail');
+      row.append(el('span', '', label), el('strong', '', value));
+      return row;
+    }
+    function timeLabel(value) {
+      if (!value) return 'Not run yet';
+      const date = new Date(value);
+      if (!Number.isFinite(date.getTime())) return 'Last run recorded';
+      return date.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    }
+    function renderReports() {
+      $('report-count').textContent = String(state.reports.length);
+      const list = $('reports-list');
+      list.replaceChildren();
+      if (!state.reports.length)
+        list.append(
+          empty(
+            'Your first report starts here',
+            'Connect a data source and bring the numbers you care about into Sheets.'
+          )
+        );
+      for (const report of state.reports) {
+        const source = provider(report.connectorId);
+        const card = el('article', 'report-card');
+        const content = el('div', 'card-content');
+        const top = el('div', 'card-top');
+        const names = el('div');
+        names.append(
+          el('div', 'card-title', report.name),
+          el('div', 'card-subtitle', source?.label || report.connectorId)
+        );
+        const failed = Boolean(report.lastError) || ['failed', 'error'].includes(report.status);
+        const running = ['running', 'started'].includes(report.status);
+        const status = failed
+          ? ['Needs attention', 'error']
+          : running
+            ? ['Running', 'running']
+            : report.lastRun
+              ? ['Up to date', 'success']
+              : ['Ready', ''];
+        top.append(providerBadge(source), names, el('span', 'status ' + status[1], status[0]));
+        content.append(
+          top,
+          detail(
+            '↳',
+            (report.target?.sheetName || '') + ' · ' + (report.target?.startCell || 'A1')
+          ),
+          detail(
+            'Refresh',
+            { manual: 'On demand', hourly: 'Every hour', daily: 'Daily', weekly: 'Weekly' }[
+              report.schedule
+            ] ||
+              report.schedule ||
+              'On demand'
+          ),
+          detail(
+            'Updated',
+            timeLabel(report.lastRun) +
+              (report.lastRowCount != null
+                ? ' · ' + report.lastRowCount.toLocaleString() + ' rows'
+                : '')
+          )
+        );
+        if (report.lastError) content.append(el('p', 'card-error', report.lastError));
+        const actions = el('div', 'card-bottom');
+        actions.append(
+          button('Edit', 'text-button subtle', () => editReport(report)),
+          button('Remove', 'text-button subtle', (event) =>
+            busy(event.currentTarget, 'Removing…', async () => {
+              if (
+                !window.confirm(
+                  'Remove "' +
+                    report.name +
+                    '"? The report definition and its schedule will be removed. Existing sheet data stays in place.'
+                )
+              )
+                return;
+              await api('dmvDeleteReport', report.id);
+              state.reports = state.reports.filter((item) => item.id !== report.id);
+              renderReports();
+              if (state.reportId === report.id) resetReport();
+              notice('Report removed. Existing sheet data was kept.');
+            })
+          ),
+          button('▶ Run', 'run-button', (event) =>
+            busy(event.currentTarget, 'Running…', async () => {
+              notice('Refreshing ' + report.name + '…', 'info');
+              try {
+                const result = await api('dmvRunReport', report.id);
+                report.lastRun = result.updatedAt || new Date().toISOString();
+                report.lastRowCount = result.rowCount;
+                report.lastError = null;
+                report.status = 'success';
+                renderReports();
+                notice(
+                  (result.rowCount || 0).toLocaleString() +
+                    ' rows updated in ' +
+                    report.target.sheetName +
+                    '.' +
+                    (result.warning ? ' ' + result.warning : ''),
+                  result.warning ? 'info' : 'success'
+                );
+              } catch (error) {
+                report.status = 'failed';
+                report.lastError = error.message;
+                renderReports();
+                throw error;
+              }
+            })
+          )
+        );
+        card.append(content, actions);
+        list.append(card);
+      }
+    }
+    function renderConnections() {
+      const list = $('connections-list');
+      list.replaceChildren();
+      if (!state.connections.length)
+        list.append(
+          empty(
+            'Bring your accounts together',
+            'Add a connection below. You can reuse it across your reports.',
+            '⌁'
+          )
+        );
+      for (const connection of state.connections) {
+        const source = provider(connection.connectorId);
+        const card = el('article', 'connection-card');
+        const top = el('div', 'card-top');
+        const names = el('div');
+        names.append(
+          el('div', 'card-title', connection.label),
+          el('div', 'card-subtitle', source?.label || connection.connectorId)
+        );
+        top.append(providerBadge(source), names);
+        const content = el('div', 'card-content');
+        content.append(top);
+        const actions = el('div', 'card-bottom');
+        actions.append(
+          button('Edit', 'text-button subtle', () => editConnection(connection)),
+          button('Remove', 'text-button subtle', (event) =>
+            busy(event.currentTarget, 'Removing…', async () => {
+              if (
+                !window.confirm(
+                  'Remove "' +
+                    connection.label +
+                    '"? Reports using this connection must be updated first.'
+                )
+              )
+                return;
+              await api('dmvDeleteConnection', connection.id);
+              state.connections = state.connections.filter((item) => item.id !== connection.id);
+              renderConnections();
+              refreshConnections();
+              if (state.connectionId === connection.id) resetConnection();
+              notice('Connection removed.');
+            })
+          ),
+          button('Test', 'run-button', (event) =>
+            busy(event.currentTarget, 'Testing…', async () => {
+              const result = await api('dmvTestConnection', connection.id);
+              if (!result.ok) throw new Error(result.message || 'Connection test failed.');
+              notice(result.message || 'Connection is ready.');
+            })
+          )
+        );
+        card.append(content, actions);
+        list.append(card);
+      }
+    }
+    function createField(field, prefix, value, configured) {
+      const key = fieldKey(field);
+      const wrap = el('div', 'auth-field');
+      wrap.dataset.key = key;
+      const label = el('label', '', field.label || key);
+      label.htmlFor = prefix + key;
+      const isSecret = field.secret || field.type === 'password';
+      let input;
+      if (field.options || field.type === 'select') {
+        input = el('select');
+        const options = field.options || [];
+        options.forEach((item) =>
+          input.append(
+            option(
+              typeof item === 'string' ? item : item.value,
+              typeof item === 'string' ? item : item.label
+            )
+          )
+        );
+      } else if (field.type === 'textarea' || field.multiline) {
+        input = el('textarea');
+        if (isSecret) input.classList.add('secret');
+        input.rows = field.rows || 3;
+      } else {
+        input = el('input');
+        input.type = isSecret
+          ? 'password'
+          : ['number', 'email', 'url', 'date'].includes(field.type)
+            ? field.type
+            : 'text';
+        if (field.min != null) input.min = field.min;
+        if (field.max != null) input.max = field.max;
+      }
+      input.id = prefix + key;
+      input.name = key;
+      input.value = isSecret ? '' : value == null ? defaultValue(field) : value;
+      input.required = Boolean(field.required) && !(isSecret && configured);
+      input.dataset.required = input.required ? 'true' : 'false';
+      input.dataset.secret = isSecret ? 'true' : 'false';
+      input.autocomplete = isSecret ? 'new-password' : 'off';
+      input.spellcheck = !isSecret && field.type !== 'textarea';
+      input.placeholder =
+        isSecret && configured ? 'Saved — leave blank to keep' : field.placeholder || '';
+      if (field.pattern) input.pattern = field.pattern;
+      wrap.append(label, input);
+      if (field.help || field.description)
+        wrap.append(el('p', 'field-help', field.help || field.description));
+      return wrap;
+    }
+    function updateConditionalFields(container, fields) {
+      const inputs = new Map(
+        Array.from(container.querySelectorAll('input,select,textarea')).map((input) => [
+          input.name,
+          input,
+        ])
+      );
+      for (const field of fields) {
+        const wrap = Array.from(container.children).find(
+          (node) => node.dataset.key === fieldKey(field)
+        );
+        if (!wrap) continue;
+        const rule = field.showWhen;
+        const visible =
+          !rule ||
+          (Array.isArray(rule.value) ? rule.value : [rule.value])
+            .map(String)
+            .includes(String(inputs.get(rule.key)?.value));
+        wrap.hidden = !visible;
+        const input = wrap.querySelector('input,select,textarea');
+        input.disabled = !visible;
+        input.required = visible && input.dataset.required === 'true';
+      }
+      const nativeNote = container.querySelector('.native-auth-note');
+      if (nativeNote) nativeNote.hidden = inputs.get('authMode')?.value !== 'native';
+    }
+    function readFields(container, fields, omitEmptySecrets) {
+      const result = {};
+      for (const field of fields) {
+        const input = Array.from(container.querySelectorAll('input,select,textarea')).find(
+          (node) => node.name === fieldKey(field)
+        );
+        if (!input || input.disabled) continue;
+        const value = input.value;
+        if (omitEmptySecrets && input.dataset.secret === 'true' && !value) continue;
+        result[fieldKey(field)] = field.type === 'number' && value !== '' ? Number(value) : value;
+      }
+      return result;
+    }
+    function renderAuth(connection) {
+      const source = provider($('connection-provider').value);
+      const container = $('auth-fields');
+      container.replaceChildren();
+      for (const field of source?.authFields || []) {
+        container.append(
+          createField(
+            field,
+            'auth-',
+            connection?.values?.[fieldKey(field)],
+            connection?.configuredFields?.includes(fieldKey(field))
+          )
+        );
+      }
+      if ((source?.authFields || []).some((field) => fieldKey(field) === 'authMode')) {
+        container.append(
+          el(
+            'p',
+            'native-auth-note',
+            'Use your signed-in Google account. Google may ask you to grant access when you test or run this connection.'
+          )
+        );
+      }
+      updateConditionalFields(container, source?.authFields || []);
+    }
+    function resetConnection(connectorId) {
+      state.connectionId = null;
+      $('connection-form').reset();
+      fillProviders($('connection-provider'), connectorId || $('report-provider').value);
+      $('connection-provider').disabled = false;
+      $('connection-editor-title').textContent = 'Add a connection';
+      $('save-connection').textContent = 'Save connection';
+      $('cancel-connection').hidden = true;
+      renderAuth();
+    }
+    function editConnection(connection) {
+      state.connectionId = connection.id;
+      fillProviders($('connection-provider'), connection.connectorId);
+      $('connection-provider').disabled = true;
+      $('connection-label').value = connection.label;
+      $('connection-editor-title').textContent = 'Edit connection';
+      $('save-connection').textContent = 'Save changes';
+      $('cancel-connection').hidden = false;
+      renderAuth(connection);
+      tab('connections');
+      $('connection-label').focus();
+    }
+    function resetReport(connectorId) {
+      state.reportId = null;
+      $('report-form').reset();
+      $('data-preview').hidden = true;
+      $('report-editor-title').textContent = 'Build a report';
+      $('tab-compose').textContent = 'New report';
+      $('save-report').textContent = 'Save report';
+      $('reset-report').hidden = true;
+      fillProviders($('report-provider'), connectorId);
+      $('row-limit').value = state.limits.defaultRows || 1000;
+      $('row-limit').max = state.limits.maxRows || 5000;
+      $('target-sheet').value = state.target?.sheetName || 'DataMoov report';
+      $('target-cell').value = state.target?.startCell || 'A1';
+      changeProvider();
+      updateDates();
+      updateSchedule();
+    }
+    function changeProvider(selectedType) {
+      refreshConnections();
+      $('report-type').replaceChildren();
+      const reports = currentProvider()?.reports || [];
+      reports.forEach((report) => $('report-type').append(option(report.id, report.label)));
+      if (reports.some((report) => report.id === selectedType))
+        $('report-type').value = selectedType;
+      renderReportFields();
+    }
+    function renderReportFields(config = {}, selectedFields) {
+      const report = currentReport();
+      $('data-preview').hidden = true;
+      $('report-description').textContent = report?.description || '';
+      $('date-section').hidden = !report?.dateRange;
+      const configContainer = $('report-config');
+      configContainer.replaceChildren();
+      for (const field of report?.configFields || [])
+        configContainer.append(createField(field, 'config-', config[fieldKey(field)], false));
+      updateConditionalFields(configContainer, report?.configFields || []);
+      $('discover-fields').hidden = !report?.supportsDiscovery;
+      $('column-help').hidden = !report?.supportsDiscovery;
+      state.columns = (report?.fields || []).slice();
+      for (const key of selectedFields || []) {
+        if (!state.columns.some((field) => field.key === key))
+          state.columns.push({ key, label: key, type: 'string' });
+      }
+      renderColumns(selectedFields);
+      if (!state.reportId && !$('report-name').value) $('report-name').value = report?.label || '';
+      updateDates();
+    }
+    function selectedColumnKeys() {
+      return Array.from($('column-list').querySelectorAll('input:checked')).map(
+        (input) => input.value
+      );
+    }
+    function renderColumns(selected) {
+      const marked = state.columns.some((field) => typeof field.default === 'boolean');
+      const choices =
+        selected ||
+        state.columns
+          .filter((field) => (marked ? field.default === true : field.default !== false))
+          .map((field) => field.key);
+      const container = $('column-list');
+      container.replaceChildren();
+      const roles = ['dimension', 'metric', 'other'];
+      for (const role of roles) {
+        const fields = state.columns.filter(
+          (field) =>
+            (field.role || 'other') === role ||
+            (role === 'other' && !['dimension', 'metric'].includes(field.role))
+        );
+        if (!fields.length) continue;
+        if (state.columns.some((field) => field.role))
+          container.append(
+            el(
+              'p',
+              'column-group',
+              role === 'dimension' ? 'Dimensions' : role === 'metric' ? 'Metrics' : 'Other columns'
+            )
+          );
+        for (const field of fields) {
+          const label = el('label', 'column-option');
+          const input = el('input');
+          input.type = 'checkbox';
+          input.value = field.key;
+          input.checked = choices.includes(field.key);
+          label.append(
+            input,
+            el('span', '', field.label || field.key),
+            el(
+              'span',
+              'column-type',
+              field.type === 'number' ? '#' : field.type === 'date' ? 'date' : ''
+            )
+          );
+          container.append(label);
+        }
+      }
+      if (!state.columns.length)
+        container.append(
+          el('p', 'field-help', 'Load columns to choose what appears in your report.')
+        );
+      updateColumnCount();
+    }
+    function updateColumnCount() {
+      $('selected-count').textContent = '(' + selectedColumnKeys().length + ')';
+    }
+    function updateDates() {
+      const custom = !$('date-section').hidden && $('date-preset').value === 'custom';
+      $('custom-dates').hidden = !custom;
+      $('start-date').required = custom;
+      $('end-date').required = custom;
+    }
+    function updateSchedule() {
+      $('schedule-note').hidden = $('report-schedule').value === 'manual';
+    }
+    function collectReport(validate = true) {
+      if (validate && !$('report-form').reportValidity()) return null;
+      const fields = selectedColumnKeys();
+      if (!fields.length) throw new Error('Choose at least one column for your report.');
+      const dateRange = { preset: $('date-preset').value };
+      if (dateRange.preset === 'custom') {
+        dateRange.startDate = $('start-date').value;
+        dateRange.endDate = $('end-date').value;
+        if (currentReport()?.dateRange && dateRange.startDate > dateRange.endDate)
+          throw new Error('The start date must be before the end date.');
+      }
+      return {
+        ...(state.reportId ? { id: state.reportId } : {}),
+        name: $('report-name').value.trim(),
+        connectorId: $('report-provider').value,
+        connectionId: $('report-connection').value,
+        reportType: $('report-type').value,
+        fields,
+        config: readFields($('report-config'), currentReport()?.configFields || [], false),
+        dateRange,
+        target: {
+          sheetName: $('target-sheet').value.trim(),
+          startCell: $('target-cell').value.trim().toUpperCase(),
+        },
+        maxRows: Number($('row-limit').value),
+        schedule: $('report-schedule').value,
+      };
+    }
+    function editReport(report) {
+      state.reportId = report.id;
+      $('data-preview').hidden = true;
+      fillProviders($('report-provider'), report.connectorId);
+      changeProvider(report.reportType);
+      refreshConnections(report.connectionId);
+      renderReportFields(report.config || {}, report.fields);
+      $('report-name').value = report.name;
+      $('target-sheet').value = report.target?.sheetName || '';
+      $('target-cell').value = report.target?.startCell || 'A1';
+      $('row-limit').value = report.maxRows || state.limits.defaultRows;
+      $('report-schedule').value = report.schedule || 'manual';
+      $('date-preset').value = report.dateRange?.preset || 'last30';
+      $('start-date').value = report.dateRange?.startDate || '';
+      $('end-date').value = report.dateRange?.endDate || '';
+      $('report-editor-title').textContent = 'Edit report';
+      $('tab-compose').textContent = 'Edit report';
+      $('save-report').textContent = 'Save changes';
+      $('reset-report').hidden = false;
+      updateDates();
+      updateSchedule();
+      tab('compose');
+    }
+    function renderPreview(result) {
+      const rows = (result.rows || []).slice(0, 20);
+      const columns = result.columns || [];
+      const table = el('table');
+      const head = el('thead');
+      const headings = el('tr');
+      columns.forEach((column) => headings.append(el('th', '', column.label || column.key)));
+      head.append(headings);
+      table.append(head);
+      const body = el('tbody');
+      rows.forEach((row) => {
+        const tr = el('tr');
+        columns.forEach((column, index) => {
+          const value = Array.isArray(row) ? row[index] : row[column.key];
+          tr.append(
+            el(
+              'td',
+              '',
+              value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : value
+            )
+          );
+        });
+        body.append(tr);
+      });
+      table.append(body);
+      $('preview-table').replaceChildren(table);
+      $('preview-row-count').textContent = rows.length + ' sample rows';
+      const metadata = result.metadata || {};
+      const labels = [];
+      if (metadata.currency) labels.push('Currency: ' + metadata.currency);
+      if (metadata.timezone || metadata.timeZone)
+        labels.push('Timezone: ' + (metadata.timezone || metadata.timeZone));
+      if (result.totalRows != null)
+        labels.push(result.totalRows.toLocaleString() + ' rows fetched');
+      if (metadata.truncated) labels.push('Row limit reached');
+      const container = $('preview-metadata');
+      container.replaceChildren();
+      if (labels.length) container.append(el('p', '', labels.join(' · ')));
+      const warnings = Array.isArray(metadata.warnings)
+        ? metadata.warnings
+        : metadata.warnings
+          ? [metadata.warnings]
+          : [];
+      if (metadata.warning) warnings.push(metadata.warning);
+      if (metadata.note) warnings.push(metadata.note);
+      if (metadata.attribution) container.append(el('p', '', metadata.attribution));
+      warnings.forEach((warning) =>
+        container.append(
+          el(
+            'p',
+            'inline-note',
+            typeof warning === 'object' ? warning.message || JSON.stringify(warning) : warning
+          )
+        )
+      );
+      if (!rows.length)
+        container.append(
+          el(
+            'p',
+            'inline-note',
+            'No rows matched this report. Try a different date range or filter.'
+          )
+        );
+      $('data-preview').hidden = false;
+      $('data-preview').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    async function bootstrap() {
+      $('boot-state').hidden = false;
+      $('retry-bootstrap').hidden = true;
+      try {
+        const data = await api('dmvBootstrap');
+        state.catalog = data.catalog || [];
+        state.connections = data.connections || [];
+        state.reports = data.reports || [];
+        state.limits = data.limits || state.limits;
+        state.target = data.defaultTarget;
+        if (data.dateTimezone)
+          $('date-help').textContent =
+            'Recent day ranges end yesterday. Date presets use ' +
+            data.dateTimezone +
+            '; provider reporting timezones appear in the preview.';
+        $('sheet-options').replaceChildren(
+          ...(data.sheetNames || []).map((name) => option(name, name))
+        );
+        renderReports();
+        renderConnections();
+        if (!state.loaded) {
+          resetReport();
+          resetConnection();
+          $('report-fields').disabled = false;
+          $('connection-fields').disabled = false;
+          state.loaded = true;
+        } else refreshConnections();
+        notice('');
+      } catch (error) {
+        notice(error.message || 'Could not open the workspace.', 'error');
+        $('retry-bootstrap').hidden = false;
+      } finally {
+        $('boot-state').hidden = true;
+      }
+    }
+    document.querySelectorAll('[data-tab]').forEach((node) => {
+      node.addEventListener('click', () => tab(node.dataset.tab));
+      node.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const names = ['reports', 'compose', 'connections'];
+        const index = names.indexOf(state.activeTab);
+        const next =
+          event.key === 'Home'
+            ? 0
+            : event.key === 'End'
+              ? 2
+              : (index + (event.key === 'ArrowRight' ? 1 : 2)) % 3;
+        tab(names[next]);
+        $('tab-' + names[next]).focus();
+      });
+    });
+    $('new-report').addEventListener('click', () => {
+      resetReport();
+      tab('compose');
+    });
+    $('refresh-reports').addEventListener('click', (event) =>
+      busy(event.currentTarget, '…', bootstrap)
+    );
+    $('retry-bootstrap').addEventListener('click', bootstrap);
+    $('reset-report').addEventListener('click', () => {
+      resetReport();
+      tab('reports');
+    });
+    $('report-provider').addEventListener('change', () => {
+      $('report-name').value = '';
+      changeProvider();
+    });
+    $('report-type').addEventListener('change', () => {
+      if (!state.reportId) $('report-name').value = '';
+      renderReportFields();
+    });
+    $('date-preset').addEventListener('change', updateDates);
+    $('report-schedule').addEventListener('change', updateSchedule);
+    $('column-list').addEventListener('change', updateColumnCount);
+    $('report-config').addEventListener('change', () =>
+      updateConditionalFields($('report-config'), currentReport()?.configFields || [])
+    );
+    $('connect-source').addEventListener('click', () => {
+      resetConnection($('report-provider').value);
+      tab('connections');
+      $('connection-label').focus();
+    });
+    $('connection-provider').addEventListener('change', () => renderAuth());
+    $('auth-fields').addEventListener('change', () =>
+      updateConditionalFields(
+        $('auth-fields'),
+        provider($('connection-provider').value)?.authFields || []
+      )
+    );
+    $('cancel-connection').addEventListener('click', () => resetConnection());
+    $('connection-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const connection = {
+        ...(state.connectionId ? { id: state.connectionId } : {}),
+        label: $('connection-label').value.trim(),
+        connectorId: $('connection-provider').value,
+        credentials: readFields(
+          $('auth-fields'),
+          provider($('connection-provider').value)?.authFields || [],
+          true
+        ),
+      };
+      formBusy('connection-fields', 'save-connection', 'Saving…', async () => {
+        const saved = await api('dmvSaveConnection', connection);
+        upsert(state.connections, saved);
+        renderConnections();
+        refreshConnections(saved.id);
+        resetConnection(saved.connectorId);
+        notice('Connection saved. Test it before running your first report.');
+      });
+    });
+    $('report-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      let report;
+      try {
+        report = collectReport();
+      } catch (error) {
+        notice(error.message, 'error');
+        return;
+      }
+      if (!report) return;
+      formBusy('report-fields', 'save-report', 'Saving…', async () => {
+        const saved = await api('dmvSaveReport', report);
+        upsert(state.reports, saved);
+        renderReports();
+        resetReport();
+        tab('reports');
+        notice('Report saved. Run it to refresh your sheet.');
+      });
+    });
+    $('discover-fields').addEventListener('click', (event) =>
+      busy(event.currentTarget, 'Loading…', async () => {
+        if (!$('report-connection').value)
+          throw new Error('Add a connection before loading columns.');
+        const fields = await api('dmvDiscoverFields', {
+          connectionId: $('report-connection').value,
+          reportType: $('report-type').value,
+          config: readFields($('report-config'), currentReport()?.configFields || [], false),
+        });
+        state.columns = Array.isArray(fields) ? fields : fields.fields || [];
+        renderColumns();
+        notice('Columns loaded. Choose the fields you need.');
+      })
+    );
+    $('preview-report').addEventListener('click', () => {
+      let report;
+      try {
+        report = collectReport();
+      } catch (error) {
+        notice(error.message, 'error');
+        return;
+      }
+      if (!report) return;
+      formBusy('report-fields', 'preview-report', 'Loading…', async () => {
+        renderPreview(await api('dmvPreviewReport', report));
+        notice('Preview ready. No sheet data was changed.');
+      });
+    });
+    if (window.DATAMOOV_LOCAL_PREVIEW === true) $('preview-banner').hidden = false;
+    tab('reports');
+    bootstrap();
+  })();
+</script>

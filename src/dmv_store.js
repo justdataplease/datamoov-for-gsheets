@@ -1,0 +1,63 @@
+/* Private per-user storage, locks and the active spreadsheet. */
+function dmvStore_() {
+  return PropertiesService.getUserProperties();
+}
+
+function dmvId_() {
+  return Utilities.getUuid();
+}
+
+function dmvKey_(kind, id) {
+  if (!/^[a-zA-Z0-9-]{1,80}$/.test(String(id || ''))) throw new Error('Invalid saved item.');
+  return 'dmv:v1:' + kind + ':' + id;
+}
+
+function dmvRead_(kind, id) {
+  var raw = dmvStore_().getProperty(dmvKey_(kind, id));
+  if (!raw) throw new Error('This ' + kind + ' no longer exists. Refresh the sidebar.');
+  return JSON.parse(raw);
+}
+
+function dmvSave_(kind, value) {
+  var text = JSON.stringify(value);
+  if (Utilities.newBlob(text).getBytes().length > 8000)
+    throw new Error('This configuration is too large. Shorten the query or select fewer fields.');
+  dmvStore_().setProperty(dmvKey_(kind, value.id), text);
+  return value;
+}
+
+function dmvList_(kind) {
+  var values = dmvStore_().getProperties();
+  var prefix = 'dmv:v1:' + kind + ':';
+  return Object.keys(values)
+    .filter(function (key) {
+      return key.indexOf(prefix) === 0;
+    })
+    .map(function (key) {
+      return JSON.parse(values[key]);
+    });
+}
+
+function dmvLocked_(callback) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000))
+    throw new Error('Another refresh is updating this report. Try again shortly.');
+  try {
+    return callback();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function dmvSpreadsheet_() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  if (!spreadsheet) throw new Error('Open DataMoov from a Google spreadsheet.');
+  return spreadsheet;
+}
+
+function dmvReportHere_(id) {
+  var report = dmvRead_('report', id);
+  if (report.spreadsheetId !== dmvSpreadsheet_().getId())
+    throw new Error('This report belongs to a different spreadsheet.');
+  return report;
+}

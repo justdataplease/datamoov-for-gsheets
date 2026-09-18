@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <base target="_top" />
+    <?!= include('dmv_styles'); ?>
+  </head>
+  <body>
+    <div class="app-shell">
+      <div id="preview-banner" class="preview-banner" hidden>
+        LOCAL PREVIEW &middot; Sample data &middot; No Sheets writes
+      </div>
+      <header class="app-header">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"
+            ><svg viewBox="0 0 24 24">
+              <path d="M5 5h5v14H5zM13 5h5v9h-5zM13 17h5v2h-5z" fill="currentColor" /></svg
+          ></span>
+          <div><strong>DataMoov</strong><span>YOUR DATA, IN SHEETS</span></div>
+        </div>
+        <span class="edition">Sheets</span>
+      </header>
+      <nav class="tabs" aria-label="Workspace" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          id="tab-reports"
+          aria-controls="panel-reports"
+          aria-selected="true"
+          data-tab="reports"
+        >
+          Reports<span id="report-count" class="tab-count">0</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-compose"
+          aria-controls="panel-compose"
+          aria-selected="false"
+          data-tab="compose"
+        >
+          New report
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-connections"
+          aria-controls="panel-connections"
+          aria-selected="false"
+          data-tab="connections"
+        >
+          Connections
+        </button>
+      </nav>
+      <main>
+        <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+        <div id="boot-state" class="boot-state">
+          <span class="spinner" aria-hidden="true"></span>Opening your workspace&hellip;
+        </div>
+        <button type="button" id="retry-bootstrap" class="button secondary" hidden>
+          Try again
+        </button>
+        <section id="panel-reports" role="tabpanel" aria-labelledby="tab-reports">
+          <div class="section-heading">
+            <div>
+              <h1>Your reports</h1>
+              <p>Fresh numbers. Familiar spreadsheet.</p>
+            </div>
+            <button
+              type="button"
+              class="icon-button"
+              id="refresh-reports"
+              aria-label="Refresh reports"
+              title="Refresh reports"
+            >
+              &#8635;
+            </button>
+          </div>
+          <div id="reports-list" class="card-list"></div>
+          <button type="button" id="new-report" class="button primary full">
+            <span aria-hidden="true">+</span> Create a report
+          </button>
+          <p class="footnote">
+            Nothing leaves your Google account. Credentials and reports are stored in your account
+            and this spreadsheet. DataMoov has no servers and keeps no copy of your data.
+          </p>
+        </section>
+        <section id="panel-compose" role="tabpanel" aria-labelledby="tab-compose" hidden>
+          <div class="section-heading">
+            <div>
+              <h1 id="report-editor-title">Build a report</h1>
+              <p>Choose the essentials. Bring them to Sheets.</p>
+            </div>
+            <button type="button" class="text-button" id="reset-report" hidden>Cancel</button>
+          </div>
+          <form id="report-form">
+            <fieldset id="report-fields" disabled>
+              <div class="step-heading">
+                <span>1</span>
+                <h2>Choose your data</h2>
+              </div>
+              <label for="report-provider">Data source</label
+              ><select id="report-provider" required></select>
+              <label for="report-connection">Connection</label
+              ><select id="report-connection" required></select>
+              <div id="connection-empty" class="inline-note" hidden>
+                Add a connection to access this source.
+                <button type="button" id="connect-source" class="text-button">
+                  Connect account &rarr;
+                </button>
+              </div>
+              <label for="report-type">Report</label
+              ><select id="report-type" required></select>
+              <p id="report-description" class="field-help"></p>
+              <div id="report-config"></div>
+              <div class="step-heading">
+                <span>2</span>
+                <h2>Shape your report</h2>
+              </div>
+              <div id="date-section">
+                <label for="date-preset">Date range</label
+                ><select id="date-preset">
+                  <option value="last7">Last 7 days</option>
+                  <option value="last30" selected>Last 30 days</option>
+                  <option value="thisMonth">This month</option>
+                  <option value="lastMonth">Last month</option>
+                  <option value="custom">Custom dates</option>
+                </select>
+                <div id="custom-dates" class="two-columns" hidden>
+                  <div>
+                    <label for="start-date">Start date</label><input type="date" id="start-date" />
+                  </div>
+                  <div>
+                    <label for="end-date">End date</label><input type="date" id="end-date" />
+                  </div>
+                </div>
+                <p id="date-help" class="field-help">
+                  Recent day ranges end yesterday. Provider reporting timezones are shown in the
+                  preview.
+                </p>
+              </div>
+              <div class="field-heading">
+                <label>Columns <span id="selected-count" class="muted"></span></label
+                ><button type="button" id="discover-fields" class="text-button" hidden>
+                  Load columns
+                </button>
+              </div>
+              <div id="column-list" class="column-list"></div>
+              <p id="column-help" class="field-help" hidden>
+                Load available columns for this account or query, including supported custom fields.
+              </p>
+              <div class="step-heading">
+                <span>3</span>
+                <h2>Send to Sheets</h2>
+              </div>
+              <label for="report-name">Report name</label
+              ><input
+                id="report-name"
+                type="text"
+                required
+                maxlength="120"
+                placeholder="e.g. Weekly campaign performance"
+              />
+              <div class="target-grid">
+                <div>
+                  <label for="target-sheet">Output tab</label
+                  ><input
+                    id="target-sheet"
+                    type="text"
+                    required
+                    maxlength="100"
+                    list="sheet-options"
+                    placeholder="DataMoov report"
+                  /><datalist id="sheet-options"></datalist>
+                </div>
+                <div>
+                  <label for="target-cell">Start cell</label
+                  ><input
+                    id="target-cell"
+                    type="text"
+                    required
+                    pattern="[A-Za-z]+[1-9][0-9]*"
+                    value="A1"
+                    placeholder="A1"
+                  />
+                </div>
+              </div>
+              <div class="two-columns">
+                <div>
+                  <label for="row-limit">Maximum rows</label
+                  ><input
+                    id="row-limit"
+                    type="number"
+                    min="1"
+                    max="5000"
+                    step="1"
+                    value="1000"
+                    required
+                  />
+                </div>
+                <div>
+                  <label for="report-schedule">Refresh</label
+                  ><select id="report-schedule">
+                    <option value="manual">Manual</option>
+                    <option value="hourly">Hourly</option>
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                  </select>
+                </div>
+              </div>
+              <p class="field-help">
+                Each run replaces this report's output range. Choose a blank area or a new tab.
+              </p>
+              <p id="schedule-note" class="inline-note" hidden>
+                Scheduled refreshes run with your account and connections.
+              </p>
+              <div class="action-row">
+                <button type="button" id="preview-report" class="button secondary">
+                  Preview data</button
+                ><button type="submit" id="save-report" class="button primary">Save report</button>
+              </div>
+            </fieldset>
+          </form>
+          <section id="data-preview" class="data-preview" aria-label="Report preview" hidden>
+            <div class="field-heading">
+              <h2>Data preview</h2>
+              <span id="preview-row-count" class="muted"></span>
+            </div>
+            <div id="preview-metadata" class="preview-metadata"></div>
+            <div id="preview-table" class="table-scroll" tabindex="0"></div>
+            <p class="field-help">
+              Preview only. Your sheet is updated when you run the saved report.
+            </p>
+          </section>
+        </section>
+        <section id="panel-connections" role="tabpanel" aria-labelledby="tab-connections" hidden>
+          <div class="section-heading">
+            <div>
+              <h1>Connections</h1>
+              <p>One account. As many reports as you need.</p>
+            </div>
+          </div>
+          <div id="connections-list" class="card-list"></div>
+          <div class="connection-editor">
+            <div class="field-heading">
+              <h2 id="connection-editor-title">Add a connection</h2>
+              <button type="button" id="cancel-connection" class="text-button" hidden>
+                Cancel
+              </button>
+            </div>
+            <form id="connection-form">
+              <fieldset id="connection-fields" disabled>
+                <label for="connection-provider">Data source</label
+                ><select id="connection-provider" required></select>
+                <label for="connection-label">Connection name</label
+                ><input
+                  id="connection-label"
+                  type="text"
+                  required
+                  maxlength="120"
+                  placeholder="e.g. Marketing account"
+                />
+                <div id="auth-fields"></div>
+                <p class="field-help">
+                  Credentials are saved for your account. Saved secrets are never displayed.
+                </p>
+                <button type="submit" id="save-connection" class="button primary full">
+                  Save connection
+                </button>
+              </fieldset>
+            </form>
+          </div>
+        </section>
+      </main>
+      <footer class="app-footer">
+        <span
+          >Created with <span class="heart" aria-label="love">&hearts;</span> by
+          <a href="https://justdataplease.com" target="_blank" rel="noopener"
+            >justdataplease.com</a
+          ></span
+        >
+        <span class="footer-brand">DataMoov</span>
+      </footer>
+    </div>
+    <?!= include('dmv_client'); ?>
+  </body>
+</html>
