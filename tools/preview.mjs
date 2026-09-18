@@ -21,7 +21,9 @@ export async function previewCatalog() {
 export function previewFixture(catalog) {
   const connections = catalog.map((source, index) => ({ id: 'demo-' + source.id, label: source.label + (source.category === 'Database' ? ' · Demo warehouse' : ' · Demo account'), connectorId: source.id,
     values: Object.fromEntries((source.authFields || []).filter(field => !field.secret && field.type !== 'password' && field.key !== 'serviceAccountJson').map(field => [field.key, field.default ?? ({ customerId: '1234567890', propertyId: '123456789', subdomain: 'demo-team', email: 'demo@example.com', host: 'localhost', database: 'analytics', username: 'report_reader' }[field.key] || '')])),
-    configuredFields: (source.authFields || []).filter(field => field.secret || field.type === 'password' || field.key === 'serviceAccountJson').map(field => field.key) }));
+    configuredFields: (source.authFields || []).filter(field => field.secret || field.type === 'password' || field.key === 'serviceAccountJson')
+      .filter(field => !field.showWhen || [field.showWhen.value].flat().includes(source.authFields.find(item => item.key === field.showWhen.key)?.default ?? ''))
+      .map(field => field.key) }));
   const featured = ['google_ads', 'ga4', 'hubspot'].map(id => catalog.find(source => source.id === id)).filter(Boolean);
   const reports = featured.map((source, index) => {
     const report = source.reports[0];
@@ -63,6 +65,13 @@ function installPreview(initial) {
   }
   const handlers = {
     dmvBootstrap: () => copy(data),
+    dmvDiscoverAccounts(input) {
+      window.DATAMOOV_PREVIEW_LAST_ACCOUNT_REQUEST = copy(input);
+      if (Array.isArray(window.DATAMOOV_PREVIEW_ACCOUNTS)) return { accounts: copy(window.DATAMOOV_PREVIEW_ACCOUNTS), complete: true };
+      const keys = data.catalog.find(source => source.id === input.connectorId)?.accountDiscovery?.credentialKeys || [];
+      return { accounts: [1, 2].map(index => ({ id: 'sample-account-' + index, label: 'Sample account ' + index,
+        credentials: Object.fromEntries(keys.map(key => [key, key === 'loginCustomerId' ? '' : String(900000000 + index)])) })), complete: true };
+    },
     dmvSaveConnection(input) {
       if (!input.label) throw new Error('Enter a connection name.');
       const source = data.catalog.find(item => item.id === input.connectorId);
@@ -104,7 +113,14 @@ function installPreview(initial) {
     dmvRunReport(id) {
       const report = data.reports.find(item => item.id === id);
       if (!report) throw new Error('Report not found.');
+      if (window.DATAMOOV_PREVIEW_PENDING_NEXT) {
+        const result = copy(window.DATAMOOV_PREVIEW_PENDING_NEXT);
+        delete window.DATAMOOV_PREVIEW_PENDING_NEXT;
+        report.status = 'paused'; report.fetchedRowCount = result.rowCount; delete report.lastError;
+        return result;
+      }
       report.lastRun = new Date().toISOString(); report.lastRowCount = 8; report.status = 'success'; delete report.lastError;
+      delete report.fetchedRowCount;
       return { ok: true, rowCount: 8, updatedAt: report.lastRun };
     },
   };

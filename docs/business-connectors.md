@@ -34,11 +34,37 @@ See [ticket metrics](https://developer.zendesk.com/api-reference/ticketing/ticke
 
 ## BigQuery
 
-Use the native Google authorization, an access token, or service-account JSON.
+Use **Google account** (native authorization, the default), **OAuth client
+credentials**, an access token, or service-account JSON.
 The principal needs BigQuery Job User on the query project and Data Viewer on
 the queried datasets. The connector requests the `bigquery.readonly` OAuth
 scope, which the [queries endpoint](https://docs.cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query)
 supports separately from IAM permissions.
+
+For **OAuth client credentials**, open the **Connection** dialog and enter your
+client ID, client secret and an already-authorized refresh token issued for that
+same client with `https://www.googleapis.com/auth/bigquery.readonly` access.
+The client ID and secret alone do not grant dataset or project access. Enable
+the BigQuery API in your credentials' Cloud project and grant the authorized
+identity the required IAM permissions. DataMoov obtains access tokens
+automatically from the refresh token; it does not provide an OAuth callback
+server or issue the initial refresh token. See Google's
+[offline-access setup](https://developers.google.com/identity/protocols/oauth2/web-server#offline).
+
+Choose **Save connection**, then configure a report and **Preview** it. Saving
+new or changed OAuth credentials verifies the token exchange only, not
+BigQuery project or dataset permissions. **Query project ID**, **Location**,
+**Read-only SQL** and **Maximum bytes billed** remain report settings, unchanged
+by the authentication mode. Use an actual preview to check access to the
+selected query project and data.
+
+When editing the same saved OAuth credentials, blank secret fields retain the
+stored values; enter replacements to rotate them. A different client ID needs
+its matching secret and refresh token. Keep different clients separate with a
+new connection where appropriate. Custom OAuth does not bypass the add-on's
+existing Apps Script/Sheets permission grant; the manifest scopes are unchanged.
+Native authorization, refresh-token OAuth and service accounts can support
+scheduled refreshes; pasted expiring access tokens need manual replacement.
 
 The connector accepts one SELECT or WITH query. A shared conservative scanner
 rejects write keywords, scripts, wrapper escapes, and incomplete syntax. Raw,
@@ -68,3 +94,5 @@ Run `node --test tests/business-connectors.test.mjs tests/sql.test.mjs` and
 values, custom fields, row-budget failure, blocked credential forwarding,
 read-only SQL boundaries, dry-run scan caps, async jobs, result completeness,
 and precise numeric/nested value handling.
+
+DataMoov

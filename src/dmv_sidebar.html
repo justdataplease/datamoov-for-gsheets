@@ -262,6 +262,25 @@
                   placeholder="e.g. Marketing account"
                 />
                 <div id="auth-fields"></div>
+                <div id="account-discovery" class="account-discovery" hidden>
+                  <p class="field-help">
+                    Use the Google account currently signed in to Sheets. Grant access if Google
+                    asks, then choose an account below.
+                  </p>
+                  <button type="button" id="discover-accounts" class="button secondary full">
+                    Connect Google - Load available accounts
+                  </button>
+                  <label for="discovered-account" id="discovered-account-label">Account</label>
+                  <select id="discovered-account" disabled>
+                    <option value="">Load available accounts first</option>
+                  </select>
+                  <p
+                    id="account-discovery-status"
+                    class="field-help"
+                    role="status"
+                    aria-live="polite"
+                  ></p>
+                </div>
                 <p class="field-help">
                   Credentials are saved for your account. Saved secrets are never displayed.
                 </p>

@@ -1,6 +1,6 @@
 /* Small provider-neutral helpers shared by every connector. No Google services at load time. */
 
-// Credential fields for Google APIs: native account, pasted token, or service-account JSON.
+// Credential fields for Google APIs: native account, own OAuth client, token, or service account.
 function dmvGoogleAuthFields_(serviceAccountHelp) {
   return [
     {
@@ -10,9 +10,35 @@ function dmvGoogleAuthFields_(serviceAccountHelp) {
       default: 'native',
       options: [
         { value: 'native', label: 'Google account' },
+        { value: 'oauth', label: 'OAuth client credentials' },
         { value: 'token', label: 'Access token' },
         { value: 'service_account', label: 'Service account' },
       ],
+    },
+    {
+      key: 'clientId',
+      label: 'OAuth client ID',
+      type: 'text',
+      required: true,
+      showWhen: { key: 'authMode', value: 'oauth' },
+      help: 'Use your own Google OAuth client. A client ID and secret alone do not grant account access.',
+    },
+    {
+      key: 'clientSecret',
+      label: 'OAuth client secret',
+      type: 'password',
+      secret: true,
+      required: true,
+      showWhen: { key: 'authMode', value: 'oauth' },
+    },
+    {
+      key: 'refreshToken',
+      label: 'OAuth refresh token',
+      type: 'password',
+      secret: true,
+      required: true,
+      showWhen: { key: 'authMode', value: 'oauth' },
+      help: 'Supply a refresh token already granted for this client and the API you need. DataMoov obtains and refreshes access tokens automatically.',
     },
     {
       key: 'accessToken',
@@ -120,4 +146,50 @@ function dmvQueryString_(params) {
       return encodeURIComponent(key) + '=' + encodeURIComponent(String(params[key]));
     })
     .join('&');
+}
+
+// A chunk is a complete provider page, not a complete report. Only the aggregate may be written.
+function dmvMergeChunk_(previous, chunk, maxRows) {
+  if (
+    !chunk ||
+    !chunk.metadata ||
+    typeof chunk.metadata.complete !== 'boolean' ||
+    chunk.nextState === undefined ||
+    chunk.metadata.complete !== (chunk.nextState === null) ||
+    chunk.truncated ||
+    chunk.metadata.truncated
+  )
+    throw new Error('The connector returned an invalid continuation chunk.');
+  var page = dmvNormalizeResult_({ columns: chunk.columns, rows: chunk.rows }, maxRows);
+  if (previous && JSON.stringify(previous.columns) !== JSON.stringify(page.columns))
+    throw new Error('The report columns changed during continuation. Run it again.');
+  var rows = previous ? previous.rows.slice() : [];
+  dmvAppendPage_(rows, page.rows, maxRows);
+  var result = dmvNormalizeResult_(
+    {
+      columns: page.columns,
+      rows: rows,
+      metadata: Object.assign({}, chunk.metadata, { complete: true }),
+    },
+    maxRows
+  );
+  var pages = (previous ? previous.pages : 0) + 1;
+  if (pages > 100) throw new Error('This report needs too many chunks. Narrow its scope.');
+  return {
+    columns: result.columns,
+    rows: result.rows,
+    metadata: chunk.metadata,
+    state: chunk.nextState,
+    pages: pages,
+  };
+}
+
+// Previews and direct adapter calls exhaust all pages within the existing request/time budget.
+function dmvFetchChunks_(ctx, fetchChunk) {
+  var result = null;
+  do {
+    ctx.checkDeadline();
+    result = dmvMergeChunk_(result, fetchChunk(ctx, result ? result.state : null), ctx.maxRows);
+  } while (!result.metadata.complete);
+  return { columns: result.columns, rows: result.rows, metadata: result.metadata };
 }

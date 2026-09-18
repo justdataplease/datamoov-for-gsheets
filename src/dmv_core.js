@@ -43,6 +43,8 @@ function dmvCatalog_() {
           category: definition.category,
           color: definition.color,
           authFields: definition.authFields || [],
+          accountDiscovery: definition.accountDiscovery || null,
+          supportsAccountDiscovery: typeof definition.discoverAccounts === 'function',
           reports: definition.reports.map(function (report) {
             return {
               id: report.id,

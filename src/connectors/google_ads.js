@@ -36,7 +36,6 @@ function dmvGoogleAdsConnection_(ctx) {
     .replace(/-/g, '')
     .trim();
   if (!/^\d{10}$/.test(id)) throw new Error('Enter a 10-digit Google Ads customer ID.');
-  if (!c.developerToken) throw new Error('Enter your Google Ads developer token.');
   var login = String(c.loginCustomerId || '')
     .replace(/-/g, '')
     .trim();
@@ -44,8 +43,8 @@ function dmvGoogleAdsConnection_(ctx) {
     throw new Error('The manager customer ID must contain 10 digits.');
   var headers = {
     Authorization: 'Bearer ' + dmvBearer_(ctx),
-    'developer-token': c.developerToken,
   };
+  if (c.developerToken) headers['developer-token'] = c.developerToken;
   if (login) headers['login-customer-id'] = login;
   return { id: id, headers: headers, base: 'https://googleads.googleapis.com/v25/' };
 }
@@ -182,6 +181,83 @@ function dmvGoogleAdsTest_(ctx) {
     throw new Error('Google Ads did not return the requested account.');
 }
 
+function dmvGoogleAdsDiscoverAccounts_(ctx) {
+  var headers = {
+    Authorization: 'Bearer ' + dmvBearer_(ctx),
+  };
+  if (ctx.credentials.developerToken) headers['developer-token'] = ctx.credentials.developerToken;
+  var base = 'https://googleads.googleapis.com/v25/';
+  var result = ctx.http({ url: base + 'customers:listAccessibleCustomers', headers: headers });
+  var resources = result.resourceNames === undefined ? [] : result.resourceNames;
+  if (!Array.isArray(resources) || resources.length > 1000)
+    throw new Error('Google Ads returned an invalid or oversized account list.');
+  var choices = [],
+    byId = Object.create(null),
+    seen = Object.create(null);
+  resources.forEach(function (resource) {
+    ctx.checkDeadline();
+    var match = /^customers\/(\d{10})$/.exec(String(resource));
+    if (!match) throw new Error('Google Ads returned an invalid accessible account.');
+    var managerId = match[1];
+    if (seen[managerId]) return;
+    seen[managerId] = true;
+    var accountHeaders = {
+      Authorization: headers.Authorization,
+      'login-customer-id': managerId,
+    };
+    if (headers['developer-token']) accountHeaders['developer-token'] = headers['developer-token'];
+    var rows = dmvGoogleAdsPages_(
+      ctx,
+      { base: base, headers: accountHeaders },
+      'customers/' + managerId + '/googleAds:search',
+      "SELECT customer_client.id, customer_client.descriptive_name, customer_client.manager, customer_client.status FROM customer_client WHERE customer_client.status = 'ENABLED'",
+      1000
+    );
+    rows.forEach(function (row) {
+      var customer = row.customerClient;
+      if (!customer || !/^\d{10}$/.test(String(customer.id || '')))
+        throw new Error('Google Ads returned an invalid client account.');
+      if (customer.manager === true || customer.status !== 'ENABLED') return;
+      var id = String(customer.id),
+        login = id === managerId ? '' : managerId;
+      var choice = {
+        id: id,
+        label:
+          String(customer.descriptiveName || 'Google Ads account').slice(0, 160) + ' (' + id + ')',
+        credentials: { customerId: id, loginCustomerId: login },
+      };
+      if (byId[id] !== undefined) {
+        if (!login) choices[byId[id]] = choice;
+      } else {
+        byId[id] = choices.length;
+        choices.push(choice);
+        if (choices.length > 1000)
+          throw new Error('Too many Google Ads accounts to list completely.');
+      }
+    });
+  });
+  return choices;
+}
+
+function dmvGoogleAdsErrorMessage_(code, body) {
+  var details = body && body.error && body.error.details;
+  if (!Array.isArray(details)) return '';
+  var errors = [];
+  details.slice(0, 20).forEach(function (detail) {
+    if (detail && Array.isArray(detail.errors)) errors = errors.concat(detail.errors.slice(0, 20));
+  });
+  var has = function (value) {
+    return errors.some(function (error) {
+      return error && error.errorCode && error.errorCode.authorizationError === value;
+    });
+  };
+  if (has('CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION'))
+    return 'The Google Cloud project used for this Google sign-in has Google Ads Test access only. Open Google Ads API Overview in that project and apply for Explorer access to use production accounts.';
+  if (has('USER_PERMISSION_DENIED'))
+    return 'This Google account cannot access the selected Google Ads account. Use Find accounts to choose an accessible account, or grant access to this Google account.';
+  return '';
+}
+
 dmvRegisterConnector_({
   id: 'google_ads',
   label: 'Google Ads',
@@ -189,7 +265,14 @@ dmvRegisterConnector_({
   category: 'Marketing',
   color: '#4285f4',
   test: dmvGoogleAdsTest_,
+  errorMessage: dmvGoogleAdsErrorMessage_,
   allowedHosts: ['googleads.googleapis.com'],
+  accountDiscovery: {
+    label: 'Google Ads account',
+    credentialKeys: ['customerId', 'loginCustomerId'],
+    showWhen: { key: 'authMode', value: 'native' },
+  },
+  discoverAccounts: dmvGoogleAdsDiscoverAccounts_,
   googleScopes: ['https://www.googleapis.com/auth/adwords'],
   authFields: [
     {
@@ -205,7 +288,12 @@ dmvRegisterConnector_({
       type: 'text',
       required: false,
     },
-    { key: 'developerToken', label: 'Developer token', type: 'password', required: true },
+    {
+      key: 'developerToken',
+      label: 'Legacy developer token (optional)',
+      type: 'password',
+      required: false,
+    },
   ].concat(dmvGoogleAuthFields_()),
   reports: [
     {

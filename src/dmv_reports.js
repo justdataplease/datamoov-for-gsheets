@@ -92,7 +92,7 @@ function dmvSaveReport(input) {
       throw new Error('Keep at most ' + DMV_LIMITS.maxReports + ' reports in this app.');
     var report = dmvValidateReport_(input, spreadsheet);
     report.revision = previous ? previous.revision + 1 : 1;
-    report.status = previous ? previous.status : 'ready';
+    report.status = previous && !dmvPendingReport_(previous) ? previous.status : 'ready';
     ['lastRun', 'lastRowCount', 'lastError'].forEach(function (key) {
       if (previous && previous[key] !== undefined) report[key] = previous[key];
     });
@@ -107,6 +107,7 @@ function dmvSaveReport(input) {
         'The refresh schedule could not be created. Check Google authorization and try again.'
       );
     }
+    dmvClearContinuation_(report.id);
     return report;
   });
 }
@@ -118,6 +119,7 @@ function dmvDeleteReport(id) {
       throw new Error('Wait for the current refresh to finish.');
     dmvStore_().deleteProperty(dmvKey_('report', id));
     dmvStore_().deleteProperty(dmvOutputKey_(report.spreadsheetId, id));
+    dmvClearContinuation_(id);
     dmvEnsureSchedule_();
     return { ok: true };
   });
@@ -142,16 +144,20 @@ function dmvDiscoverFields(input) {
   }
 }
 
-function dmvFetchReport_(report, spreadsheet) {
-  var connection = dmvRead_('connection', report.connectionId);
-  var connector = dmvConnector_(connection.connectorId);
-  var definition = dmvDefinition_(connector, report.reportType);
-  var dates = definition.dateRange
+function dmvReportDates_(definition, report, spreadsheet) {
+  return definition.dateRange
     ? dmvDateRange_(
         report.dateRange,
         Utilities.formatDate(new Date(), spreadsheet.getSpreadsheetTimeZone(), 'yyyy-MM-dd')
       )
     : {};
+}
+
+function dmvFetchReport_(report, spreadsheet) {
+  var connection = dmvRead_('connection', report.connectionId);
+  var connector = dmvConnector_(connection.connectorId);
+  var definition = dmvDefinition_(connector, report.reportType);
+  var dates = dmvReportDates_(definition, report, spreadsheet);
   try {
     return dmvNormalizeResult_(
       definition.fetch(dmvContext_(connector, connection, report, dates)),
@@ -179,32 +185,61 @@ function dmvRunReport(id) {
 }
 
 function dmvExecuteReport_(requested) {
-  var token = dmvId_();
+  var token = dmvId_(),
+    connectionRevision;
   var report = dmvLocked_(function () {
     var current = dmvRead_('report', requested.id);
     if (current.runToken && Date.now() - current.startedAt < 300000)
       throw new Error('This report is already refreshing.');
+    connectionRevision = dmvRead_('connection', current.connectionId).revision || 0;
     current.status = 'running';
     current.runToken = token;
     current.startedAt = Date.now();
     current.lastError = '';
+    current.continuationRequested =
+      typeof dmvDefinition_(dmvConnector_(current.connectorId), current.reportType).fetchChunk ===
+      'function';
+    if (current.continuationRequested) current.nextRunAt = Date.now();
     return dmvSave_('report', current);
   });
   try {
     var spreadsheet = SpreadsheetApp.openById(report.spreadsheetId);
-    var result = dmvFetchReport_(report, spreadsheet);
+    // Arm recovery before the first chunk, including for manual reports and abrupt termination.
+    if (dmvPendingReport_(report)) dmvLocked_(dmvEnsureSchedule_);
+    var result = dmvPendingReport_(report)
+      ? dmvFetchContinued_(report, spreadsheet, token, connectionRevision)
+      : dmvFetchReport_(report, spreadsheet);
     return dmvLocked_(function () {
       var current = dmvRead_('report', report.id);
       if (current.runToken !== token || current.revision !== report.revision)
         throw new Error('The report changed during the refresh. Run it again.');
+      if ((dmvRead_('connection', current.connectionId).revision || 0) !== connectionRevision)
+        throw new Error('The connection changed during the refresh. Run it again.');
+      if (result.pending) {
+        current.status = 'paused';
+        current.runToken = null;
+        current.nextRunAt = Date.now();
+        dmvSave_('report', current);
+        return {
+          ok: true,
+          pending: true,
+          rowCount: result.rowCount,
+          message:
+            'Rows fetched so far. Existing output is unchanged. Resume now or wait for the hourly scheduler.',
+        };
+      }
       var warning = dmvWriteReport_(spreadsheet, current, result);
       current.status = 'success';
       current.lastRun = new Date().toISOString();
       current.lastRowCount = result.rows.length;
       current.lastError = '';
       current.runToken = null;
+      delete current.continuation;
+      delete current.continuationRequested;
+      delete current.fetchedRowCount;
       current.nextRunAt = dmvNextRun_(current.schedule);
       dmvSave_('report', current);
+      dmvFinishContinuation_(current.id);
       return {
         ok: true,
         rowCount: result.rows.length,
@@ -221,8 +256,12 @@ function dmvExecuteReport_(requested) {
         current.status = 'error';
         current.lastError = message;
         current.runToken = null;
+        delete current.continuation;
+        delete current.continuationRequested;
+        delete current.fetchedRowCount;
         current.nextRunAt = dmvNextRun_(current.schedule);
         dmvSave_('report', current);
+        dmvFinishContinuation_(current.id);
       }
     });
     throw new Error(message);

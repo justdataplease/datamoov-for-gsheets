@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { createHash } from 'node:crypto';
+import { gzipSync, gunzipSync } from 'node:zlib';
 
 export const plain = (value) => JSON.parse(JSON.stringify(value));
 
@@ -152,7 +153,11 @@ export function createDatamoovSandbox() {
       DigestAlgorithm: { SHA_256: 'SHA_256' }, Charset: { UTF_8: 'UTF_8' },
       computeDigest: (_algorithm, value) => [...createHash('sha256').update(String(value), 'utf8').digest()],
       getUuid: () => `id-${++serial}`,
-      newBlob: (text) => ({ getBytes: () => [...Buffer.from(String(text))] }),
+      newBlob: (value) => ({ getBytes: () => [...Buffer.from(Array.isArray(value) ? value : String(value))],
+        getDataAsString: () => Buffer.from(Array.isArray(value) ? value : String(value)).toString('utf8') }),
+      gzip: (blob) => ({ getBytes: () => [...gzipSync(Buffer.from(blob.getBytes()))] }),
+      ungzip: (blob) => ({ getDataAsString: () => gunzipSync(Buffer.from(blob.getBytes())).toString('utf8') }),
+      base64Decode: (value) => [...Buffer.from(value, 'base64')],
       formatDate: (date, timezone) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date),
       base64Encode: (value) => Buffer.from(value).toString('base64'),
       sleep: (milliseconds) => { state.sleeps.push(milliseconds); now += milliseconds; },
@@ -186,7 +191,7 @@ export function createDatamoovSandbox() {
     } },
   };
   const context = vm.createContext(fakeServices, { codeGeneration: { strings: false, wasm: false } });
-  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_connections.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js']) {
+  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_connections.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js', 'dmv_continuation.js']) {
     new vm.Script(readFileSync(new URL(`../../src/${filename}`, import.meta.url), 'utf8'), { filename }).runInContext(context, { timeout: 1000 });
   }
   const book = addSpreadsheet();

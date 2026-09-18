@@ -15,7 +15,7 @@ function dmvScheduledReports_() {
 
 function dmvEnsureSchedule_() {
   var enabled = dmvScheduledReports_().some(function (report) {
-    return report.schedule !== 'manual';
+    return report.schedule !== 'manual' || dmvPendingReport_(report);
   });
   var triggers = ScriptApp.getProjectTriggers().filter(function (trigger) {
     return trigger.getHandlerFunction() === 'dmvRefreshScheduled';
@@ -31,7 +31,10 @@ function dmvRefreshScheduled() {
   var started = Date.now();
   var due = dmvScheduledReports_()
     .filter(function (report) {
-      return report.schedule !== 'manual' && (!report.nextRunAt || report.nextRunAt <= started);
+      return (
+        (report.schedule !== 'manual' || dmvPendingReport_(report)) &&
+        (!report.nextRunAt || report.nextRunAt <= started)
+      );
     })
     .sort(function (a, b) {
       return (a.nextRunAt || 0) - (b.nextRunAt || 0);
@@ -44,4 +47,5 @@ function dmvRefreshScheduled() {
       /* Sanitized failure is stored with the report. */
     }
   }
+  dmvLocked_(dmvEnsureSchedule_);
 }

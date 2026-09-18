@@ -9,6 +9,10 @@
       limits: { maxRows: 20000, defaultRows: 1000 },
       reportId: null,
       connectionId: null,
+      accountEpoch: 0,
+      accountChoices: [],
+      accountSelection: null,
+      accountPreserved: false,
       columns: [],
       activeTab: 'reports',
       loaded: false,
@@ -154,6 +158,12 @@
         minute: '2-digit',
       });
     }
+    function continuationMessage(report) {
+      return (
+        (report.fetchedRowCount || 0).toLocaleString() +
+        ' rows fetched. Existing sheet output is unchanged. Resume continues this report; the hourly scheduler also resumes it.'
+      );
+    }
     function renderReports() {
       $('report-count').textContent = String(state.reports.length);
       const list = $('reports-list');
@@ -177,13 +187,16 @@
         );
         const failed = Boolean(report.lastError) || ['failed', 'error'].includes(report.status);
         const running = ['running', 'started'].includes(report.status);
+        const paused = report.status === 'paused';
         const status = failed
           ? ['Needs attention', 'error']
           : running
             ? ['Running', 'running']
-            : report.lastRun
-              ? ['Up to date', 'success']
-              : ['Ready', ''];
+            : paused
+              ? ['Paused', 'paused']
+              : report.lastRun
+                ? ['Up to date', 'success']
+                : ['Ready', ''];
         top.append(providerBadge(source), names, el('span', 'status ' + status[1], status[0]));
         content.append(
           top,
@@ -207,6 +220,7 @@
                 : '')
           )
         );
+        if (paused) content.append(el('p', 'card-progress', continuationMessage(report)));
         if (report.lastError) content.append(el('p', 'card-error', report.lastError));
         const actions = el('div', 'card-bottom');
         actions.append(
@@ -228,15 +242,24 @@
               notice('Report removed. Existing sheet data was kept.');
             })
           ),
-          button('▶ Run', 'run-button', (event) =>
-            busy(event.currentTarget, 'Running…', async () => {
-              notice('Refreshing ' + report.name + '…', 'info');
+          button(paused ? '▶ Resume' : '▶ Run', 'run-button', (event) =>
+            busy(event.currentTarget, paused ? 'Resuming…' : 'Running…', async () => {
+              notice((paused ? 'Resuming ' : 'Refreshing ') + report.name + '…', 'info');
               try {
                 const result = await api('dmvRunReport', report.id);
+                if (result.pending) {
+                  report.fetchedRowCount = result.rowCount;
+                  report.lastError = null;
+                  report.status = 'paused';
+                  renderReports();
+                  notice(continuationMessage(report), 'info');
+                  return;
+                }
                 report.lastRun = result.updatedAt || new Date().toISOString();
                 report.lastRowCount = result.rowCount;
                 report.lastError = null;
                 report.status = 'success';
+                delete report.fetchedRowCount;
                 renderReports();
                 notice(
                   (result.rowCount || 0).toLocaleString() +
@@ -404,6 +427,10 @@
       return result;
     }
     function renderAuth(connection) {
+      state.accountEpoch++;
+      state.accountChoices = [];
+      state.accountSelection = null;
+      state.accountPreserved = false;
       const source = provider($('connection-provider').value);
       const container = $('auth-fields');
       container.replaceChildren();
@@ -422,11 +449,108 @@
           el(
             'p',
             'native-auth-note',
-            'Use your signed-in Google account. Google may ask you to grant access when you test or run this connection.'
+            'Uses the Google account currently signed in to Sheets. Google may ask you to grant access.'
           )
         );
       }
       updateConditionalFields(container, source?.authFields || []);
+      state.accountPreserved = Boolean(connection && accountDiscoveryActive());
+      renderAccountDiscovery();
+    }
+    function accountDiscoveryActive() {
+      const source = provider($('connection-provider').value);
+      const discovery = source?.accountDiscovery;
+      if (!source?.supportsAccountDiscovery || !discovery) return false;
+      const rule = discovery.showWhen;
+      return (
+        !rule ||
+        (Array.isArray(rule.value) ? rule.value : [rule.value])
+          .map(String)
+          .includes(String($('auth-' + rule.key)?.value))
+      );
+    }
+    function renderAccountDiscovery() {
+      const source = provider($('connection-provider').value);
+      const discovery = source?.accountDiscovery;
+      const active = accountDiscoveryActive();
+      $('account-discovery').hidden = !active;
+      const selector = $('discovered-account');
+      selector.replaceChildren(
+        option(
+          '',
+          state.accountChoices.length ? 'Choose an account...' : 'Load available accounts first'
+        )
+      );
+      state.accountChoices.forEach((account, index) =>
+        selector.append(option(String(index), account.label || account.id))
+      );
+      selector.value = state.accountSelection === null ? '' : String(state.accountSelection);
+      selector.disabled = !active || !state.accountChoices.length;
+      $('discovered-account-label').textContent = discovery?.label || 'Account';
+      $('discover-accounts').disabled = false;
+      $('discover-accounts').textContent = 'Connect Google - Load available accounts';
+      $('account-discovery-status').textContent = state.accountPreserved
+        ? 'Your saved account is kept. Load accounts only if you want to choose another.'
+        : state.accountSelection !== null
+          ? 'Account selected. Save this connection to continue.'
+          : '';
+      for (const key of discovery?.credentialKeys || []) {
+        const input = $('auth-' + key);
+        if (!input) continue;
+        input.readOnly = active;
+        if (active) {
+          input.closest('.auth-field').hidden =
+            !state.accountPreserved && state.accountSelection === null;
+          input.required = false;
+        }
+      }
+    }
+    function invalidateAccounts(clearIds) {
+      state.accountEpoch++;
+      state.accountChoices = [];
+      state.accountSelection = null;
+      state.accountPreserved = false;
+      if (clearIds)
+        for (const key of provider($('connection-provider').value)?.accountDiscovery
+          ?.credentialKeys || []) {
+          if ($('auth-' + key)) $('auth-' + key).value = '';
+        }
+      renderAccountDiscovery();
+    }
+    async function discoverAccounts() {
+      const source = provider($('connection-provider').value);
+      if (!accountDiscoveryActive()) return;
+      const epoch = ++state.accountEpoch;
+      const node = $('discover-accounts');
+      node.disabled = true;
+      node.textContent = 'Loading available accounts...';
+      $('account-discovery-status').textContent = 'Checking access with your Google account...';
+      try {
+        const result = await api('dmvDiscoverAccounts', {
+          ...(state.connectionId ? { id: state.connectionId } : {}),
+          connectorId: source.id,
+          credentials: readFields($('auth-fields'), source.authFields || [], true),
+        });
+        if (epoch !== state.accountEpoch) return;
+        if (!result || result.complete !== true || !Array.isArray(result.accounts))
+          throw new Error('The account list could not be loaded completely. Try again.');
+        state.accountChoices = result.accounts;
+        state.accountSelection = null;
+        renderAccountDiscovery();
+        $('account-discovery-status').textContent = result.accounts.length
+          ? 'Choose the account to use. No account is selected automatically.'
+          : 'No accessible accounts found. Check access for the Google account signed in to Sheets, then load accounts again.';
+      } catch (error) {
+        if (epoch !== state.accountEpoch) return;
+        $('account-discovery-status').textContent =
+          (error.message || 'Account discovery failed.') +
+          ' Review the provider access requirements, then try again.';
+      } finally {
+        if (epoch === state.accountEpoch) {
+          node.disabled = false;
+          node.textContent = 'Connect Google - Load available accounts';
+        }
+      }
     }
     function resetConnection(connectorId) {
       state.connectionId = null;
@@ -764,15 +888,38 @@
       $('connection-label').focus();
     });
     $('connection-provider').addEventListener('change', () => renderAuth());
-    $('auth-fields').addEventListener('change', () =>
+    const authChanged = (event) => {
+      const clearIds = accountDiscoveryActive() || event.target.name === 'authMode';
       updateConditionalFields(
         $('auth-fields'),
         provider($('connection-provider').value)?.authFields || []
-      )
-    );
+      );
+      invalidateAccounts(clearIds);
+    };
+    $('auth-fields').addEventListener('input', authChanged);
+    $('auth-fields').addEventListener('change', authChanged);
+    $('discover-accounts').addEventListener('click', discoverAccounts);
+    $('discovered-account').addEventListener('change', () => {
+      const selected = $('discovered-account').value;
+      const account = selected === '' ? null : state.accountChoices[Number(selected)];
+      state.accountSelection = account ? Number(selected) : null;
+      state.accountPreserved = false;
+      for (const key of provider($('connection-provider').value)?.accountDiscovery
+        ?.credentialKeys || []) {
+        if ($('auth-' + key)) $('auth-' + key).value = account?.credentials?.[key] || '';
+      }
+      renderAccountDiscovery();
+    });
     $('cancel-connection').addEventListener('click', () => resetConnection());
     $('connection-form').addEventListener('submit', (event) => {
       event.preventDefault();
+      if (accountDiscoveryActive() && state.accountSelection === null && !state.accountPreserved) {
+        notice(
+          'Load available accounts and choose the account for this connection first.',
+          'error'
+        );
+        return;
+      }
       const connection = {
         ...(state.connectionId ? { id: state.connectionId } : {}),
         label: $('connection-label').value.trim(),

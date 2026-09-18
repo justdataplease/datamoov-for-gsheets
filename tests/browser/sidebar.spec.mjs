@@ -89,10 +89,83 @@ test('failed report save retains the draft and retry creates one report', async 
   await expect(page.locator('.report-card').filter({ hasText: 'Keep this draft' })).toHaveCount(1);
 });
 
+test('paused reports preserve the previous output details and resume after refreshing the list', async ({ page }) => {
+  const card = page.locator('.report-card').filter({ hasText: 'Campaign performance' });
+  const updated = card.locator('.card-detail').filter({ hasText: 'Updated' });
+  const previousUpdated = await updated.textContent();
+  const previous = (await rpc(page, 'dmvBootstrap')).reports[0];
+  await page.evaluate(() => {
+    window.DATAMOOV_PREVIEW_PENDING_NEXT = { ok: true, pending: true, rowCount: 4, message: 'Report paused.' };
+  });
+  await card.getByRole('button', { name: /Run/ }).click();
+  await expect(card.locator('.status')).toHaveText('Paused');
+  await expect(card.getByRole('button', { name: /Resume/ })).toBeEnabled();
+  await expect(updated).toHaveText(previousUpdated);
+  await expect(page.locator('#notice')).toContainText('4 rows fetched');
+  await expect(page.locator('#notice')).toContainText('Existing sheet output is unchanged');
+  await expect(page.locator('#notice')).toContainText('hourly scheduler');
+  await expect(page.locator('#notice')).toHaveClass('notice info');
+  const paused = (await rpc(page, 'dmvBootstrap')).reports[0];
+  expect(paused.status).toBe('paused');
+  expect(paused.fetchedRowCount).toBe(4);
+  expect(paused.lastRun).toBe(previous.lastRun);
+  expect(paused.lastRowCount).toBe(previous.lastRowCount);
+
+  await page.locator('#refresh-reports').click();
+  await expect(page.locator('#boot-state')).toBeHidden();
+  await expect(card.locator('.status')).toHaveText('Paused');
+  await expect(card.locator('.card-progress')).toContainText('4 rows fetched');
+  await expect(updated).toHaveText(previousUpdated);
+  await noOverflow(page);
+  await card.getByRole('button', { name: /Resume/ }).click();
+  await expect(page.locator('#notice')).toContainText('8 rows updated');
+  await expect(card.locator('.status')).toHaveText('Up to date');
+  await expect(card.locator('.card-progress')).toHaveCount(0);
+  await expect(card.getByRole('button', { name: /Run/ })).toBeEnabled();
+  expect((await rpc(page, 'dmvBootstrap')).reports[0]).not.toHaveProperty('fetchedRowCount');
+});
+
+test('a saved paused report without previous output stays not run until continuation completes', async ({ page }) => {
+  const template = (await rpc(page, 'dmvBootstrap')).reports[0];
+  await rpc(page, 'dmvSaveReport', {
+    ...template,
+    id: undefined,
+    name: 'Paused first refresh',
+    status: 'paused',
+    fetchedRowCount: 0,
+    lastRun: undefined,
+    lastRowCount: undefined,
+  });
+  await page.locator('#refresh-reports').click();
+  const card = page.locator('.report-card').filter({ hasText: 'Paused first refresh' });
+  await expect(card.locator('.status')).toHaveText('Paused');
+  await expect(card).toContainText('Not run yet');
+  await expect(card.locator('.card-progress')).toContainText('0 rows fetched');
+  await page.evaluate(() => {
+    window.DATAMOOV_PREVIEW_PENDING_NEXT = { ok: true, pending: true, rowCount: 3 };
+  });
+  await card.getByRole('button', { name: /Resume/ }).click();
+  await expect(card.locator('.card-progress')).toContainText('3 rows fetched');
+  await expect(card).toContainText('Not run yet');
+  await expect(card.locator('.status')).toHaveText('Paused');
+  await card.getByRole('button', { name: /Resume/ }).click();
+  await expect(page.locator('#notice')).toContainText('8 rows updated');
+  await expect(card.locator('.status')).toHaveText('Up to date');
+  await expect(card).not.toContainText('Not run yet');
+});
+
 test('Google authorization fields follow mode and saved secrets stay blank on edit', async ({ page }) => {
   await page.locator('#tab-connections').click();
   await page.locator('#connection-provider').selectOption('google_ads');
   await expect(page.locator('#auth-authMode')).toHaveValue('native');
+  await expect(page.locator('#auth-accessToken')).toBeHidden();
+  await expect(page.locator('#auth-serviceAccountJson')).toBeHidden();
+  for (const key of ['clientId','clientSecret','refreshToken']) await expect(page.locator('#auth-'+key)).toBeHidden();
+  await page.locator('#auth-authMode').selectOption('oauth');
+  for (const key of ['clientId','clientSecret','refreshToken']) await expect(page.locator('#auth-'+key)).toBeVisible();
+  await expect(page.locator('#account-discovery')).toBeHidden();
+  await expect(page.locator('#auth-customerId')).toBeEditable();
+  await expect(page.locator('#auth-loginCustomerId')).toBeEditable();
   await expect(page.locator('#auth-accessToken')).toBeHidden();
   await expect(page.locator('#auth-serviceAccountJson')).toBeHidden();
   await page.locator('#auth-authMode').selectOption('token');
@@ -101,6 +174,7 @@ test('Google authorization fields follow mode and saved secrets stay blank on ed
   await page.locator('#auth-authMode').selectOption('service_account');
   await expect(page.locator('#auth-accessToken')).toBeHidden();
   await expect(page.locator('#auth-serviceAccountJson')).toBeVisible();
+  for (const key of ['clientId','clientSecret','refreshToken']) await expect(page.locator('#auth-'+key)).toBeHidden();
   const connection = page.locator('.connection-card').filter({ hasText: 'Google Ads' }).first();
   await connection.getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(page.locator('#auth-developerToken')).toHaveValue('');
@@ -197,4 +271,139 @@ test('field discovery selects only declared defaults and retains unmarked-schema
   });
   await page.locator('#discover-fields').click();
   await expect(page.locator('#column-list input:checked')).toHaveCount(2);
+});
+
+test('native Google discovery requires an explicit account choice before saving', async ({ page }) => {
+  await page.locator('#tab-connections').click();
+  await page.locator('#connection-provider').selectOption('ga4');
+  await page.locator('#connection-label').fill('Selected Google property');
+  await expect(page.locator('#auth-propertyId')).toBeHidden();
+  await page.locator('#save-connection').click();
+  await expect(page.locator('#notice')).toContainText('choose the account');
+  await page.locator('#discover-accounts').click();
+  await expect(page.locator('#discovered-account option')).toHaveCount(3);
+  await expect(page.locator('#discovered-account')).toHaveValue('');
+  await expect(page.locator('#auth-propertyId')).toBeHidden();
+  await page.locator('#discovered-account').selectOption('1');
+  await expect(page.locator('#auth-propertyId')).toHaveValue('900000002');
+  await expect(page.locator('#auth-propertyId')).toHaveAttribute('readonly', '');
+  await noOverflow(page);
+  await page.locator('#save-connection').click();
+  await expect(page.locator('#notice')).toContainText('Connection saved');
+  const saved=(await rpc(page,'dmvBootstrap')).connections.find(item=>item.label==='Selected Google property');
+  expect(saved.values.propertyId).toBe('900000002');
+});
+
+test('native account choices clear when credentials change and manual auth keeps editable IDs', async ({ page }) => {
+  await page.locator('#tab-connections').click();
+  await page.locator('#connection-provider').selectOption('google_ads');
+  await page.locator('#auth-developerToken').fill('offline-developer-token');
+  await page.locator('#discover-accounts').click();
+  await expect(page.locator('#discovered-account option')).toHaveCount(3);
+  await page.locator('#discovered-account').selectOption('0');
+  await expect(page.locator('#auth-customerId')).toHaveValue('900000001');
+  await page.locator('#auth-developerToken').fill('different-developer-token');
+  await expect(page.locator('#discovered-account')).toBeDisabled();
+  await expect(page.locator('#auth-customerId')).toHaveValue('');
+  await page.locator('#auth-authMode').selectOption('token');
+  await expect(page.locator('#account-discovery')).toBeHidden();
+  await expect(page.locator('#auth-customerId')).toBeEditable();
+  await page.locator('#auth-customerId').fill('5555555555');
+  await page.locator('#auth-accessToken').fill('offline-token');
+  await expect(page.locator('#auth-customerId')).toHaveValue('5555555555');
+  await page.locator('#auth-authMode').selectOption('native');
+  await expect(page.locator('#auth-customerId')).toHaveValue('');
+  await expect(page.locator('#auth-customerId')).toBeHidden();
+});
+
+test('native discovery handles empty accounts, errors and stale provider responses', async ({ page }) => {
+  await page.locator('#tab-connections').click();
+  await page.locator('#connection-provider').selectOption('ga4');
+  await page.evaluate(()=>{window.DATAMOOV_PREVIEW_ACCOUNTS=[];});
+  await page.locator('#discover-accounts').click();
+  await expect(page.locator('#account-discovery-status')).toContainText('No accessible accounts');
+  await expect(page.locator('#discovered-account')).toBeDisabled();
+  await page.evaluate(()=>{delete window.DATAMOOV_PREVIEW_ACCOUNTS;window.DATAMOOV_PREVIEW_FAIL_NEXT='dmvDiscoverAccounts';});
+  await page.locator('#discover-accounts').click();
+  await expect(page.locator('#account-discovery-status')).toContainText('Review the provider access requirements');
+  await page.evaluate(()=>{delete window.DATAMOOV_PREVIEW_LAST_ACCOUNT_REQUEST;});
+  await page.locator('#discover-accounts').click();
+  await page.locator('#connection-provider').selectOption('google_ads');
+  await page.waitForFunction(()=>window.DATAMOOV_PREVIEW_LAST_ACCOUNT_REQUEST?.connectorId==='ga4');
+  await expect(page.locator('#discovered-account option')).toHaveCount(1);
+  await expect(page.locator('#discovered-account')).toBeDisabled();
+  await expect(page.locator('#auth-customerId')).toHaveValue('');
+});
+
+test('OAuth client credentials require a grant, retain a failed draft, and keep saved secrets redacted', async ({ page }) => {
+  await page.locator('#tab-connections').click();
+  await page.locator('#connection-provider').selectOption('ga4');
+  await page.locator('#connection-label').fill('Own OAuth analytics');
+  await page.locator('#auth-authMode').selectOption('oauth');
+  await expect(page.locator('#auth-propertyId')).toBeEditable();
+  await page.locator('#auth-propertyId').fill('654321');
+  await expect(page.locator('#auth-fields')).toContainText('alone do not grant account access');
+  await expect(page.locator('#auth-fields')).toContainText('already granted for this client');
+  await expect(page.locator('#auth-fields')).toContainText('access tokens automatically');
+  const before=await page.locator('.connection-card').count();
+  for (const [key,value] of [['clientId','offline-client.apps.googleusercontent.com'],['clientSecret','offline-client-secret'],['refreshToken','offline-refresh-token']]) {
+    await page.locator('#save-connection').click();
+    await expect(page.locator('#auth-'+key)).toBeFocused();
+    await expect(page.locator('.connection-card')).toHaveCount(before);
+    await page.locator('#auth-'+key).fill(value);
+  }
+  await expect(page.locator('#auth-clientSecret')).toHaveAttribute('type','password');
+  await expect(page.locator('#auth-refreshToken')).toHaveAttribute('type','password');
+  await page.evaluate(()=>{window.DATAMOOV_PREVIEW_FAIL_NEXT='dmvSaveConnection';});
+  await page.locator('#save-connection').click();
+  await expect(page.locator('#notice')).toContainText('Simulated request failure');
+  await expect(page.locator('#auth-clientSecret')).toHaveValue('offline-client-secret');
+  await expect(page.locator('#auth-refreshToken')).toHaveValue('offline-refresh-token');
+  await page.locator('#save-connection').click();
+  await expect(page.locator('#notice')).toContainText('Connection saved');
+  await expect(page.locator('#auth-clientSecret')).toHaveValue('');
+  await expect(page.locator('#auth-refreshToken')).toHaveValue('');
+  const saved=(await rpc(page,'dmvBootstrap')).connections.find(item=>item.label==='Own OAuth analytics');
+  expect(saved.values).toMatchObject({authMode:'oauth',propertyId:'654321',clientId:'offline-client.apps.googleusercontent.com'});
+  expect(saved.values).not.toHaveProperty('clientSecret');
+  expect(saved.values).not.toHaveProperty('refreshToken');
+  expect(saved.configuredFields).toEqual(expect.arrayContaining(['clientSecret','refreshToken']));
+  await page.locator('.connection-card').filter({hasText:'Own OAuth analytics'}).getByRole('button',{name:'Edit',exact:true}).click();
+  for (const key of ['clientSecret','refreshToken']) {
+    await expect(page.locator('#auth-'+key)).toHaveValue('');
+    await expect(page.locator('#auth-'+key)).toHaveAttribute('placeholder',/leave blank to keep/);
+  }
+  await expect(page.locator('#auth-clientId')).toHaveValue('offline-client.apps.googleusercontent.com');
+  await page.locator('#connection-label').fill('Renamed own OAuth');
+  await page.locator('#save-connection').click();
+  await expect(page.locator('#notice')).toContainText('Connection saved');
+  const renamed=(await rpc(page,'dmvBootstrap')).connections.find(item=>item.label==='Renamed own OAuth');
+  expect(renamed.configuredFields).toEqual(expect.arrayContaining(['clientSecret','refreshToken']));
+  expect(JSON.stringify(renamed)).not.toContain('offline-client-secret');
+  expect(JSON.stringify(renamed)).not.toContain('offline-refresh-token');
+});
+
+test('OAuth mode keeps manual IDs separate from native selection and clears credentials on provider change', async ({ page }) => {
+  await page.locator('#tab-connections').click();
+  await page.locator('#connection-provider').selectOption('ga4');
+  await page.locator('#discover-accounts').click();
+  await expect(page.locator('#discovered-account option')).toHaveCount(3);
+  await page.locator('#discovered-account').selectOption('0');
+  await page.locator('#auth-authMode').selectOption('oauth');
+  await expect(page.locator('#auth-propertyId')).toHaveValue('');
+  await expect(page.locator('#auth-propertyId')).toBeEditable();
+  await page.locator('#auth-propertyId').fill('654321');
+  await page.locator('#auth-clientId').fill('offline-client');
+  await page.locator('#auth-clientSecret').fill('offline-secret');
+  await page.locator('#auth-refreshToken').fill('offline-refresh');
+  await expect(page.locator('#auth-propertyId')).toHaveValue('654321');
+  await page.locator('#auth-authMode').selectOption('native');
+  await expect(page.locator('#auth-propertyId')).toHaveValue('');
+  await expect(page.locator('#discovered-account')).toBeDisabled();
+  for (const key of ['clientId','clientSecret','refreshToken']) await expect(page.locator('#auth-'+key)).toBeDisabled();
+  await page.locator('#connection-provider').selectOption('bigquery');
+  await page.locator('#auth-authMode').selectOption('oauth');
+  for (const key of ['clientId','clientSecret','refreshToken']) await expect(page.locator('#auth-'+key)).toHaveValue('');
+  await expect(page.locator('#account-discovery')).toBeHidden();
+  await noOverflow(page);
 });

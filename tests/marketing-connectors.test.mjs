@@ -230,3 +230,49 @@ test('GA4 accepts an omitted zero row count but rejects malformed metric values'
   const invalid=queue([metadata(),compatibility(),{rowCount:1,dimensionHeaders:[{name:'date'}],metricHeaders:[{name:'sessions'}],rows:[{dimensionValues:[{value:'20260901'}],metricValues:[{value:'unknown'}]}]}]);
   assert.throws(()=>report.fetch(context({http:invalid.http,fields})),/numeric/);
 });
+
+test('GA4 continuation serializes one page and resumes with fresh authorization without repeating discovery', () => {
+  const fields=['date','sessions','totalRevenue'];
+  const firstCalls=queue([metadata(),compatibility(['date'],['sessions','totalRevenue']),gaPage([['20260901','0','12.25']])]);
+  const first=load().connectors.ga4.reports[0].fetchChunk(context({fields,http:firstCalls.http,accessToken:()=> 'first-secret-token'}),null);
+  assert.equal(firstCalls.calls.length,3);
+  assert.equal(first.rows.length,1);
+  assert.equal(first.metadata.complete,false);
+  assert.equal(first.nextState.offset,1);
+  assert.equal(first.nextState.expected,2);
+  assert.equal(first.nextState.pages,1);
+  const serialized=JSON.stringify(first.nextState);
+  assert.doesNotMatch(serialized,/first-secret-token|Authorization|accessToken|credentials/);
+  const resumedCalls=queue([gaPage([['20260902','2','0']])]);
+  const saved=JSON.parse(serialized);
+  const last=load().connectors.ga4.reports[0].fetchChunk(context({fields,http:resumedCalls.http,accessToken:()=> 'new-secret-token'}),saved);
+  assert.equal(resumedCalls.calls.length,1);
+  assert.match(resumedCalls.calls[0].url,/:runReport$/);
+  assert.equal(resumedCalls.calls[0].headers.Authorization,'Bearer new-secret-token');
+  assert.equal(resumedCalls.calls[0].body.offset,'1');
+  assert.deepEqual(plain(resumedCalls.calls[0].body),{...plain(firstCalls.calls[2].body),offset:'1'});
+  assert.equal(last.rows.length,1);
+  assert.equal(last.rows[0].totalRevenue,0);
+  assert.equal(last.metadata.complete,true);
+  assert.equal(last.nextState,null);
+  assert.deepEqual(plain(last.columns),plain(first.columns));
+  assert.equal(JSON.stringify(saved),serialized);
+});
+
+test('GA4 continuation rejects changing totals, metadata, report settings, and lossy later pages', () => {
+  const fields=['date','sessions','totalRevenue'];
+  const report=load().connectors.ga4.reports[0];
+  const initial=report.fetchChunk(context({fields,http:queue([metadata(),compatibility(['date'],['sessions','totalRevenue']),gaPage([['20260901','1','1']])]).http}),null);
+  const state=plain(initial.nextState);
+  const changedCount=gaPage([['20260902','2','0']],3);
+  const changedCurrency=gaPage([['20260902','2','0']]); changedCurrency.metadata.currencyCode='USD';
+  const changedZone=gaPage([['20260902','2','0']]); changedZone.metadata.timeZone='UTC';
+  const sampled=gaPage([['20260902','2','0']]); sampled.metadata.samplingMetadatas=[{samplesReadCount:'1',samplingSpaceSize:'2'}];
+  for (const [page,error] of [[changedCount,/changed/],[changedCurrency,/metadata changed/],[changedZone,/metadata changed/],[sampled,/sampled/],[gaPage([],2),/incomplete/]]) {
+    assert.throws(()=>report.fetchChunk(context({fields,http:queue([page]).http}),state),error);
+  }
+  for (const changes of [{startDate:'2026-08-01'},{maxRows:200},{fields:['sessions','date','totalRevenue']},{credentials:{accessToken:'offline-token',propertyId:'456'}}]) {
+    assert.throws(()=>report.fetchChunk(context({fields,...changes}),state),/continuation no longer matches/);
+  }
+  assert.throws(()=>report.fetchChunk(context({fields}),{...state,pages:100}),/too many pages/);
+});

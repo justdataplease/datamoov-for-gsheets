@@ -258,7 +258,8 @@
     background: #fff0ef;
     color: var(--danger);
   }
-  .status.running {
+  .status.running,
+  .status.paused {
     background: #f0edff;
     color: var(--primary);
   }
@@ -592,6 +593,12 @@
     overflow-wrap: anywhere;
     margin-top: 7px;
   }
+  .card-progress {
+    font-size: 10px;
+    color: var(--primary);
+    line-height: 1.6;
+    margin-top: 7px;
+  }
   .app-footer {
     font-size: 9px;
     color: #9298a8;
@@ -679,6 +686,20 @@
   }
   .auth-field {
     min-width: 0;
+  }
+  .account-discovery {
+    border: 1px solid var(--line);
+    background: var(--wash);
+    border-radius: 8px;
+    padding: 10px;
+    margin-top: 12px;
+  }
+  .account-discovery .field-help {
+    overflow-wrap: anywhere;
+  }
+  .auth-field input[readonly] {
+    background: var(--wash);
+    color: var(--muted);
   }
   .auth-field[hidden] {
     display: none;

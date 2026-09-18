@@ -68,6 +68,61 @@ test('GitHub normalizes repository URLs, deduplicates input, and uses list prece
   assert.throws(()=>load().connectors.github.reports[0].fetch(context({config:{repositories:'https://github.com.evil.invalid/owner/repo'}})),/repository URLs/);
 });
 
+test('GitHub resumes one search page at a time across serialized execution state',()=> {
+  const config={query:'topic:analytics'};
+  const fields=['full_name','stargazers_count','archived','license'];
+  const first=transport({total_count:3,items:[repository(1)]});
+  const firstChunk=load().connectors.github.reports[0].fetchChunk(context({config,fields,credentials:{token:'private-test-token'},http:first.http}),null);
+  assert.equal(first.calls.length,1);
+  assert.equal(firstChunk.rows.length,1);
+  assert.equal(firstChunk.metadata.complete,false);
+  const serialized=JSON.stringify(firstChunk.nextState);
+  assert.ok(!serialized.includes('private-test-token'));
+  const checkpoint=JSON.parse(serialized);
+  const second=transport({total_count:3,items:[repository(2),repository(3)]});
+  const finalChunk=load().connectors.github.reports[0].fetchChunk(context({config,fields,http:second.http}),checkpoint);
+  assert.equal(second.calls.length,1);
+  assert.equal(new URL(second.calls[0].url).searchParams.get('page'),'2');
+  assert.deepEqual(JSON.parse(JSON.stringify(finalChunk.rows)),[
+    {full_name:'owner/repo2',stargazers_count:0,archived:false,license:null},
+    {full_name:'owner/repo3',stargazers_count:0,archived:false,license:null}
+  ]);
+  assert.equal(finalChunk.nextState,null);
+  assert.equal(finalChunk.metadata.complete,true);
+  assert.equal(JSON.stringify(checkpoint),serialized,'A fetch must not mutate a saved checkpoint');
+});
+
+test('GitHub continuation retains search identity, count and completeness guards',()=> {
+  const config={query:'topic:analytics'};
+  const first=load().connectors.github.reports[0].fetchChunk(context({config,http:transport({total_count:2,items:[repository(1)]}).http}),null);
+  const resume=(page)=>load().connectors.github.reports[0].fetchChunk(context({config,http:transport(page).http}),JSON.parse(JSON.stringify(first.nextState)));
+  assert.throws(()=>resume({total_count:3,items:[repository(2)]}),/changed/);
+  assert.throws(()=>resume({total_count:2,items:[repository(1,'owner/renamed')]}),/duplicate/);
+  assert.throws(()=>resume({total_count:2,items:[repository(2,'OWNER/REPO1')]}),/duplicate/);
+  assert.throws(()=>resume({total_count:2,items:[]}),/before all results/);
+  assert.throws(()=>resume({total_count:2,items:[repository(2),repository(3)]}),/more repositories/);
+  assert.throws(()=>resume({total_count:2,items:[repository(2)],incomplete_results:true}),/incomplete/);
+});
+
+test('GitHub resumes repository lists by index with normalized names and complete budget checks',()=> {
+  const config={repositories:'https://github.com/owner/first.git\nOWNER/first,owner/second',query:'ignored'};
+  const first=transport(repository(1,'owner/first'));
+  const firstChunk=load().connectors.github.reports[0].fetchChunk(context({config,http:first.http}),null);
+  assert.equal(first.calls.length,1);
+  assert.equal(first.calls[0].url,'https://api.github.com/repos/owner/first');
+  assert.equal(firstChunk.metadata.complete,false);
+  const second=transport(repository(2,'owner/second'));
+  const lastChunk=load().connectors.github.reports[0].fetchChunk(context({config,http:second.http}),JSON.parse(JSON.stringify(firstChunk.nextState)));
+  assert.equal(second.calls.length,1);
+  assert.equal(second.calls[0].url,'https://api.github.com/repos/owner/second');
+  assert.equal(lastChunk.rows[0].full_name,'owner/second');
+  assert.equal(lastChunk.nextState,null);
+  assert.equal(lastChunk.metadata.complete,true);
+  const report=load().connectors.github.reports[0];
+  assert.throws(()=>report.fetchChunk(context({config,maxRows:1}),null),/row limit/);
+  assert.throws(()=>report.fetchChunk(context({config:{repositories:Array.from({length:51},(_,index)=>'owner/repo'+index).join(',')},maxRows:100}),null),/at most 50/);
+});
+
 test('PostgreSQL validates a single SELECT without rejecting quoted values or comments',()=> {
   const {scope}=load();
   assert.equal(scope.dmvPostgresSql_("SELECT 'UPDATE; DROP' AS note;"),"SELECT 'UPDATE; DROP' AS note");

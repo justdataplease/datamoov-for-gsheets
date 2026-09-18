@@ -28,11 +28,16 @@ function dmvGithubHeaders_(credentials) {
 }
 
 function dmvGithubFetch_(ctx) {
+  return dmvFetchChunks_(ctx, dmvGithubFetchChunk_);
+}
+
+function dmvGithubFetchChunk_(ctx, state) {
   var columns = dmvSelectFields_(ctx.fields, dmvGithubFields_());
   var list = String(ctx.config.repositories || '').trim();
   var query = String(ctx.config.query || '').trim();
   var headers = dmvGithubHeaders_(ctx.credentials);
   var records = [];
+  var nextState = null;
   if (list) {
     var seen = {};
     var names = list
@@ -54,64 +59,101 @@ function dmvGithubFetch_(ctx) {
       });
     if (names.length > Math.min(50, ctx.maxRows))
       throw new Error('Use at most 50 repositories and keep within the row limit.');
-    names.forEach(function (name) {
-      ctx.checkDeadline();
-      records.push(ctx.http({ url: 'https://api.github.com/repos/' + name, headers: headers }));
-    });
+    var index = state ? state.index : 0;
+    if (
+      (state && state.mode !== 'list') ||
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= names.length
+    )
+      throw new Error('GitHub repository continuation is invalid. Run the report again.');
+    ctx.checkDeadline();
+    records.push(
+      ctx.http({ url: 'https://api.github.com/repos/' + names[index], headers: headers })
+    );
+    if (index + 1 < names.length) nextState = { mode: 'list', index: index + 1 };
   } else {
     if (!query) throw new Error('Enter a GitHub search or a repository list.');
-    var page = 1,
-      total = null,
-      resultIds = Object.create(null),
-      resultNames = Object.create(null);
-    do {
-      ctx.checkDeadline();
-      var response = ctx.http({
-        url:
-          'https://api.github.com/search/repositories?q=' +
-          encodeURIComponent(query) +
-          '&sort=stars&per_page=100&page=' +
-          page,
-        headers: headers,
-      });
-      if (response.incomplete_results)
+    if (
+      state &&
+      (state.mode !== 'search' ||
+        !Number.isInteger(state.page) ||
+        state.page < 2 ||
+        !Number.isInteger(state.total) ||
+        state.total < 1 ||
+        !Number.isInteger(state.count) ||
+        state.count < 1 ||
+        state.count >= state.total ||
+        !Array.isArray(state.ids) ||
+        !Array.isArray(state.names) ||
+        state.ids.length !== state.count ||
+        state.names.length !== state.count)
+    )
+      throw new Error('GitHub search continuation is invalid. Run the report again.');
+    var page = state ? state.page : 1,
+      total = state ? state.total : null,
+      count = state ? state.count : 0,
+      resultIds = state ? state.ids.slice() : [],
+      resultNames = state ? state.names.slice() : [];
+    ctx.checkDeadline();
+    var response = ctx.http({
+      url:
+        'https://api.github.com/search/repositories?q=' +
+        encodeURIComponent(query) +
+        '&sort=stars&per_page=100&page=' +
+        page,
+      headers: headers,
+    });
+    if (response.incomplete_results)
+      throw new Error(
+        'GitHub returned incomplete search results. Narrow the search and try again.'
+      );
+    if (
+      !Array.isArray(response.items) ||
+      !Number.isInteger(response.total_count) ||
+      response.total_count < 0
+    )
+      throw new Error('GitHub returned an invalid search page.');
+    if (total === null) total = response.total_count;
+    else if (total !== response.total_count)
+      throw new Error('GitHub search changed during pagination. Run it again.');
+    if (total > Math.min(ctx.maxRows, 1000))
+      throw new Error(
+        "The search exceeds the row limit or GitHub's 1,000-result cap. Narrow the search."
+      );
+    if (!response.items.length && count < total)
+      throw new Error('GitHub search ended before all results arrived. Try again.');
+    response.items.forEach(function (item) {
+      if (
+        !item ||
+        item.id === undefined ||
+        item.id === null ||
+        typeof item.full_name !== 'string' ||
+        !item.full_name
+      )
+        throw new Error('GitHub returned a repository without a stable identity.');
+      var id = String(item.id),
+        name = item.full_name.toLowerCase();
+      if (resultIds.indexOf(id) !== -1 || resultNames.indexOf(name) !== -1)
         throw new Error(
-          'GitHub returned incomplete search results. Narrow the search and try again.'
+          'GitHub returned duplicate repositories while paging. Run the search again.'
         );
-      if (!Array.isArray(response.items) || !Number.isInteger(response.total_count))
-        throw new Error('GitHub returned an invalid search page.');
-      if (total === null) total = response.total_count;
-      else if (total !== response.total_count)
-        throw new Error('GitHub search changed during pagination. Run it again.');
-      if (total > Math.min(ctx.maxRows, 1000))
-        throw new Error(
-          "The search exceeds the row limit or GitHub's 1,000-result cap. Narrow the search."
-        );
-      if (!response.items.length && records.length < total)
-        throw new Error('GitHub search ended before all results arrived. Try again.');
-      response.items.forEach(function (item) {
-        if (
-          !item ||
-          item.id === undefined ||
-          item.id === null ||
-          typeof item.full_name !== 'string' ||
-          !item.full_name
-        )
-          throw new Error('GitHub returned a repository without a stable identity.');
-        var id = String(item.id),
-          name = item.full_name.toLowerCase();
-        if (resultIds[id] || resultNames[name])
-          throw new Error(
-            'GitHub returned duplicate repositories while paging. Run the search again.'
-          );
-        resultIds[id] = true;
-        resultNames[name] = true;
-      });
-      records = records.concat(response.items);
-      if (records.length > total)
-        throw new Error('GitHub returned more repositories than its search total. Run it again.');
-      page++;
-    } while (records.length < total);
+      resultIds.push(id);
+      resultNames.push(name);
+    });
+    records = response.items;
+    count += records.length;
+    if (count > total)
+      throw new Error('GitHub returned more repositories than its search total. Run it again.');
+    if (count < total)
+      nextState = {
+        mode: 'search',
+        page: page + 1,
+        total: total,
+        count: count,
+        ids: resultIds,
+        names: resultNames,
+      };
   }
   return {
     columns: columns,
@@ -129,8 +171,9 @@ function dmvGithubFetch_(ctx) {
       });
       return row;
     }),
+    nextState: nextState,
     metadata: {
-      complete: true,
+      complete: nextState === null,
       grain: 'Current repository snapshot',
       note: 'Open issues includes pull requests, as defined by GitHub.',
     },
@@ -181,6 +224,7 @@ dmvRegisterConnector_({
         },
       ],
       fetch: dmvGithubFetch_,
+      fetchChunk: dmvGithubFetchChunk_,
     },
   ],
 });

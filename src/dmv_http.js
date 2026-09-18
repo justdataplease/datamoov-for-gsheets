@@ -4,7 +4,7 @@ function dmvHost_(url) {
   return match[1].toLowerCase();
 }
 
-function dmvHttp_(request, hosts, deadline) {
+function dmvHttp_(request, hosts, deadline, errorMessage) {
   var host = dmvHost_(request.url);
   if (hosts.indexOf(host) === -1)
     throw new Error('The connector requested a URL outside its provider.');
@@ -47,12 +47,24 @@ function dmvHttp_(request, hosts, deadline) {
         throw new Error('The provider returned an unreadable response.');
       }
     }
-    if (code === 401 || code === 403)
+    if (code === 401 || code === 403) {
+      var guidance;
+      if (typeof errorMessage === 'function') {
+        try {
+          var errorText = response.getContentText();
+          if (errorText.length <= 100000) guidance = errorMessage(code, JSON.parse(errorText));
+        } catch (ignored) {
+          guidance = null;
+        }
+      }
+      if (typeof guidance === 'string' && guidance.length > 0 && guidance.length <= 400)
+        throw new Error(guidance);
       throw new Error(
         'Access denied by the provider (HTTP ' +
           code +
           '). Check credentials, permissions, and API access.'
       );
+    }
     if (code >= 300 && code < 400)
       throw new Error('The provider redirected the request. Check the configured account or host.');
     if ((code === 429 || code >= 500) && attempt + 1 < attempts) {
@@ -75,11 +87,104 @@ function dmvHttp_(request, hosts, deadline) {
   }
 }
 
+function dmvGoogleOAuthToken_(credentials, scopes, deadline) {
+  var names = ['clientId', 'clientSecret', 'refreshToken'];
+  var values = names.map(function (name) {
+    var value = credentials[name];
+    if (typeof value !== 'string' || !value.trim() || value.length > 12000)
+      throw new Error('Google OAuth needs a client ID, client secret, and refresh token.');
+    return value.trim();
+  });
+  var cacheKey =
+    'dmv:oauth:' +
+    Utilities.base64EncodeWebSafe(
+      Utilities.computeDigest(
+        Utilities.DigestAlgorithm.SHA_256,
+        JSON.stringify(['oauth', values[0], values[1], values[2], scopes || []])
+      )
+    ).replace(/=+$/, '');
+  var validToken = function (value) {
+    return (
+      typeof value === 'string' &&
+      value.length > 0 &&
+      value.length <= 12000 &&
+      !/[\s\u0000-\u001f\u007f]/.test(value)
+    );
+  };
+  var cache = CacheService.getUserCache();
+  var cached;
+  try {
+    cached = cache.get(cacheKey);
+  } catch (ignored) {
+    cached = null;
+  }
+  if (validToken(cached)) return cached;
+  var startedAt = Date.now();
+  var token;
+  try {
+    token = dmvHttp_(
+      {
+        url: 'https://oauth2.googleapis.com/token',
+        method: 'post',
+        contentType: 'application/x-www-form-urlencoded',
+        body:
+          'client_id=' +
+          encodeURIComponent(values[0]) +
+          '&client_secret=' +
+          encodeURIComponent(values[1]) +
+          '&refresh_token=' +
+          encodeURIComponent(values[2]) +
+          '&grant_type=refresh_token',
+      },
+      ['oauth2.googleapis.com'],
+      deadline
+    );
+  } catch (error) {
+    if (error && typeof error.message === 'string' && /time limit|rate-limited/.test(error.message))
+      throw error;
+    if (error && typeof error.message === 'string' && /HTTP 429/.test(error.message))
+      throw new Error('Google OAuth is rate-limited. Try again later.');
+    throw new Error(
+      'Google OAuth credentials could not be refreshed. Check the client ID, client secret, and refresh token; reauthorize if access expired or was revoked.'
+    );
+  }
+  if (
+    !token ||
+    typeof token !== 'object' ||
+    Array.isArray(token) ||
+    !validToken(token.access_token)
+  )
+    throw new Error(
+      'Google OAuth did not return a valid access token. Check the OAuth credentials.'
+    );
+  var elapsed = Math.max(0, (Date.now() - startedAt) / 1000);
+  var expiry =
+    typeof token.expires_in === 'number'
+      ? token.expires_in
+      : typeof token.expires_in === 'string' && /^-?\d+(?:\.\d+)?$/.test(token.expires_in)
+        ? Number(token.expires_in)
+        : NaN;
+  if (Number.isFinite(expiry) && (expiry <= 0 || expiry <= elapsed))
+    throw new Error('Google OAuth returned an expired access token. Try authorizing again.');
+  if (typeof token.expires_in === 'number' && Number.isInteger(expiry) && expiry > 0) {
+    var ttl = Math.min(3300, Math.floor(expiry - elapsed - 120));
+    if (ttl > 0) {
+      try {
+        cache.put(cacheKey, token.access_token, ttl);
+      } catch (ignored) {
+        /* Cache is optional. */
+      }
+    }
+  }
+  return token.access_token;
+}
+
 function dmvGoogleToken_(credentials, scopes, deadline) {
   var mode = credentials.authMode || 'native';
   if (mode === 'native') return ScriptApp.getOAuthToken();
   if (mode === 'token')
     return dmvText_(credentials.accessToken, 'Google access token', 12000, true);
+  if (mode === 'oauth') return dmvGoogleOAuthToken_(credentials, scopes, deadline);
   if (mode !== 'service_account') throw new Error('Choose a Google authorization method.');
   var key;
   try {
@@ -164,7 +269,7 @@ function dmvContext_(connector, connection, report, dates) {
     },
     http: function (request) {
       if (++count > 100) throw new Error('This report needs too many requests. Narrow its scope.');
-      return dmvHttp_(request, hosts, deadline);
+      return dmvHttp_(request, hosts, deadline, connector.errorMessage);
     },
     accessToken: function () {
       return dmvGoogleToken_(connection.credentials, connector.googleScopes || [], deadline);
