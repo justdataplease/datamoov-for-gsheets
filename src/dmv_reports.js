@@ -117,9 +117,7 @@ function dmvDeleteReport(id) {
     if (report.runToken && Date.now() - report.startedAt < 300000)
       throw new Error('Wait for the current refresh to finish.');
     dmvStore_().deleteProperty(dmvKey_('report', id));
-    PropertiesService.getScriptProperties().deleteProperty(
-      'dmv:output:' + report.spreadsheetId + ':' + id
-    );
+    dmvStore_().deleteProperty(dmvOutputKey_(report.spreadsheetId, id));
     dmvEnsureSchedule_();
     return { ok: true };
   });

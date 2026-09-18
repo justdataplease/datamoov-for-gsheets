@@ -38,8 +38,10 @@ function dmvList_(kind) {
     });
 }
 
+// Per-user lock: every record this app mutates belongs to the current user, and a Marketplace
+// add-on shares one script across all its users, so a script-wide lock would serialize everyone.
 function dmvLocked_(callback) {
-  var lock = LockService.getScriptLock();
+  var lock = LockService.getUserLock();
   if (!lock.tryLock(10000))
     throw new Error('Another refresh is updating this report. Try again shortly.');
   try {
@@ -53,6 +55,12 @@ function dmvSpreadsheet_() {
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   if (!spreadsheet) throw new Error('Open DataMoov from a Google spreadsheet.');
   return spreadsheet;
+}
+
+// Output receipts are private to the user who wrote the report; other people's cells stay
+// protected by the existing-data check in the writer.
+function dmvOutputKey_(spreadsheetId, reportId) {
+  return 'dmv:v1:output:' + spreadsheetId + ':' + reportId;
 }
 
 function dmvReportHere_(id) {

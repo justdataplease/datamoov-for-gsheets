@@ -1,7 +1,7 @@
 /* DataMoov's shared report contract. Provider behavior lives in connectors/. */
 var DMV_CONNECTORS;
 var DMV_LIMITS = {
-  maxRows: 5000,
+  maxRows: 20000,
   defaultRows: 1000,
   maxColumns: 80,
   maxReports: 30,

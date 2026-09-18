@@ -31,7 +31,7 @@ export function previewFixture(catalog) {
       target: { sheetName: ['Campaigns', 'Website', 'Deals'][index], startCell: 'A1' }, maxRows: 1000, schedule: index === 2 ? 'manual' : 'daily',
       status: 'success', lastRun: '2026-09-18T08:30:00.000Z', lastRowCount: [248, 86, 32][index] };
   });
-  return { catalog, connections, reports, sheetNames: ['Campaigns', 'Website', 'Deals', 'New report'], defaultTarget: { sheetName: 'New report', startCell: 'A1' }, dateTimezone: 'Europe/Athens', limits: { maxRows: 5000, defaultRows: 1000 }, branding: { name: 'DataMoov' } };
+  return { catalog, connections, reports, sheetNames: ['Campaigns', 'Website', 'Deals', 'New report'], defaultTarget: { sheetName: 'New report', startCell: 'A1' }, dateTimezone: 'Europe/Athens', limits: { maxRows: 20000, defaultRows: 1000 }, branding: { name: 'DataMoov' } };
 }
 
 // This function is stringified into the localhost preview. It has no network or

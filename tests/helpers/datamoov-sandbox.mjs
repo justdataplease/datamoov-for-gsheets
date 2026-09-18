@@ -146,7 +146,8 @@ export function createDatamoovSandbox() {
   const fakeServices = {
     Date: ClockDate,
     PropertiesService: { getUserProperties: () => user, getScriptProperties: () => script, getDocumentProperties: () => document },
-    LockService: { getScriptLock: () => ({ tryLock() { state.lockAcquires++; return state.lockAvailable; }, releaseLock() { state.lockReleases++; } }) },
+    LockService: { getUserLock: () => ({ tryLock() { state.lockAcquires++; return state.lockAvailable; }, releaseLock() { state.lockReleases++; } }),
+      getScriptLock: () => { throw new Error('Use the per-user lock; a Marketplace add-on shares one script across all users'); } },
     Utilities: {
       DigestAlgorithm: { SHA_256: 'SHA_256' }, Charset: { UTF_8: 'UTF_8' },
       computeDigest: (_algorithm, value) => [...createHash('sha256').update(String(value), 'utf8').digest()],
@@ -197,6 +198,6 @@ export function createDatamoovSandbox() {
     value: (sheet, row, column) => cell(sheet, row, column).value,
     formula: (sheet, row, column) => cell(sheet, row, column).formula,
     readReport: (id) => JSON.parse(user.getProperty(`dmv:v1:report:${id}`)),
-    readOutput: (id, spreadsheetId = book.id) => JSON.parse(script.getProperty(`dmv:output:${spreadsheetId}:${id}`) || 'null'),
+    readOutput: (id, spreadsheetId = book.id) => JSON.parse(user.getProperty(`dmv:v1:output:${spreadsheetId}:${id}`) || 'null'),
   };
 }

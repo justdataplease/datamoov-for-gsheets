@@ -24,7 +24,7 @@ Created with ♥ by [justdataplease.com](https://justdataplease.com).
 | BigQuery | SQL query | Read-only query with a dry-run schema check and a scan-size cap |
 | GitHub | Repository overview | Stars, forks, issues and activity for a search or a list of repositories |
 
-Reports default to 1,000 rows and support up to 5,000. Numbers are written as numbers, IDs as text, and dates in ISO format.
+Reports default to 1,000 rows and support up to 20,000 when the provider can deliver them inside one Apps Script run. Numbers are written as numbers, IDs as text, and dates in ISO format.
 
 ## Credentials without an OAuth server
 
@@ -37,7 +37,7 @@ Credentials do not grant access by themselves. Google Ads needs a developer toke
 1. Open the spreadsheet you want to report into and choose **Extensions → Apps Script**.
 2. Copy every file under `src/` into the project, keeping the same names. Files under `src/connectors/` become `connectors/<name>`. Replace the manifest with `src/appsscript.json` (enable **Show "appsscript.json" manifest file** in project settings).
 3. Turn on the **Google Sheets API** advanced service if the editor asks for it, then reload the spreadsheet.
-4. Choose **DataMoov → Open DataMoov**, grant the requested permissions, add a connection, and build your first report.
+4. Choose **Extensions → DataMoov → Open DataMoov**, grant the requested permissions, add a connection, and build your first report.
 
 Developers can instead push with [clasp](https://github.com/google/clasp): run `npm ci --ignore-scripts`, `npm run login`, then `DATAMOOV_DEV_SPREADSHEET_ID=<your spreadsheet id> node tools/create-dev.mjs` once and `npm run push:dev` for each release. For a production spreadsheet, record it in `data/production-project.json` with `"production": true` and run `npm run push:prod` with `DATAMOOV_CONFIRM=<scriptId>`.
 

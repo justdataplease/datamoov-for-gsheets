@@ -84,7 +84,7 @@ test('editing a connection retains blank saved secrets and replaces explicitly s
 test('validation rejects invalid config, duplicate fields, dates and limits before provider execution', () => {
   const f = fixture();
   for (const overrides of [
-    { config: {} }, { fields: ['count', 'count'] }, { maxRows: 0 }, { maxRows: 5001 },
+    { config: {} }, { fields: ['count', 'count'] }, { maxRows: 0 }, { maxRows: 20001 },
     { target: { sheetName: 'Bad/name', startCell: 'A1' } },
     { dateRange: { preset: 'custom', startDate: '2026-02-30', endDate: '2026-03-01' } },
     { dateRange: { preset: 'custom', startDate: '2026-09-03', endDate: '2026-09-01' } },
@@ -211,15 +211,20 @@ test('preview uses the same complete-result validation and never writes sheets',
   assert.equal(f.api.dmvBootstrap().reports.length, 0);
 });
 
-test('scheduled execution opens its saved spreadsheet even when another spreadsheet is active', () => {
+test('scheduled execution only refreshes reports saved in the spreadsheet that owns the trigger', () => {
   const f = fixture(), report = f.save({ schedule: 'hourly' });
   const other = f.addSpreadsheet('spreadsheet-two');
   f.setActive(other);
+  f.api.dmvRefreshScheduled();
+  assert.deepEqual(f.state.opened, [], 'an add-on trigger in another spreadsheet leaves this report alone');
+  assert.equal(f.readReport(report.id).status, 'ready');
+  f.setActive(f.book);
   f.api.dmvRefreshScheduled();
   assert.deepEqual(f.state.opened, ['spreadsheet-one']);
   assert.equal(f.value(f.book.sheets[0], 2, 1), 0);
   assert.equal(other.sheets[0].cells.size, 0);
   assert.equal(f.readReport(report.id).status, 'success');
+  f.setActive(other);
   assert.throws(() => f.api.dmvRunReport(report.id), /different spreadsheet/);
 });
 
@@ -337,13 +342,12 @@ test('relative date windows follow the spreadsheet calendar across timezone day 
   assert.equal(f.api.dmvBootstrap().dateTimezone, 'Pacific/Kiritimati');
 });
 
-test('saved connections/reports remain user-private while output protection is shared', () => {
+test('connections, reports and receipts stay user-private; other users still cannot overwrite written cells', () => {
   const first = fixture(), report = first.save();
   first.api.dmvRunReport(report.id);
   const second = createDatamoovSandbox();
   second.setActive(first.book);
   second.state.books.set(first.book.id, first.book);
-  second.api.PropertiesService.getScriptProperties = () => first.state.script;
   let serial = 0;
   second.api.Utilities.getUuid = () => `other-user-${++serial}`;
   second.api.dmvRegisterConnector_({ id: 'different', label: 'Another connector', authFields: [],
@@ -355,7 +359,7 @@ test('saved connections/reports remain user-private while output protection is s
   const connection = second.api.dmvSaveConnection({ connectorId: 'different', label: 'Second user', credentials: {} });
   const otherReport = second.api.dmvSaveReport({ connectionId: connection.id, reportType: 'records', name: 'Other report',
     target: { sheetName: 'Output', startCell: 'A1' }, maxRows: 10 });
-  assert.throws(() => second.api.dmvRunReport(otherReport.id), /overlaps another/);
+  assert.throws(() => second.api.dmvRunReport(otherReport.id), /existing data/);
   assert.equal(first.value(first.book.sheets[0], 2, 1), 0);
   assert.equal(second.state.batches.length, 0);
   assert.equal(first.api.dmvBootstrap().connections.length, 1);
@@ -442,7 +446,7 @@ test('old receipts without a digest cannot authorize overwriting existing cells'
   f.api.dmvRunReport(report.id);
   const receipt = f.readOutput(report.id);
   delete receipt.digest;
-  f.state.script.setProperty(`dmv:output:${f.book.id}:${report.id}`, JSON.stringify(receipt));
+  f.state.user.setProperty(`dmv:v1:output:${f.book.id}:${report.id}`, JSON.stringify(receipt));
   const before = [...f.book.sheets[0].cells];
   assert.throws(() => f.api.dmvRunReport(report.id), /edited or moved.*new empty/);
   assert.deepEqual([...f.book.sheets[0].cells], before);

@@ -38,12 +38,12 @@ test('complete production bundle registers eight sources and nine reports withou
   assert.equal(catalog.reduce((count, connector) => count + connector.reports.length, 0), 9);
 });
 
-test('open and install entry points create the DataMoov menu with existing application handlers', () => {
+test('open and install entry points build the Extensions add-on menu with existing application handlers', () => {
   const app = loadProduction();
   const menus = [];
   app.SpreadsheetApp = { getUi: () => ({
-    createMenu(name) {
-      const menu = { name, items: [], added: false,
+    createAddonMenu() {
+      const menu = { items: [], added: false,
         addItem(label, handler) { this.items.push({ label, handler }); return this; },
         addToUi() { this.added = true; },
       };
@@ -55,7 +55,6 @@ test('open and install entry points create the DataMoov menu with existing appli
   app.onInstall();
   assert.equal(menus.length, 2);
   for (const menu of menus) {
-    assert.equal(menu.name, 'DataMoov');
     assert.equal(menu.added, true);
     assert.deepEqual(menu.items, [
       { label: 'Open DataMoov', handler: 'showSidebar' },

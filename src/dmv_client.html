@@ -6,7 +6,7 @@
       catalog: [],
       connections: [],
       reports: [],
-      limits: { maxRows: 5000, defaultRows: 1000 },
+      limits: { maxRows: 20000, defaultRows: 1000 },
       reportId: null,
       connectionId: null,
       columns: [],
@@ -460,7 +460,7 @@
       $('reset-report').hidden = true;
       fillProviders($('report-provider'), connectorId);
       $('row-limit').value = state.limits.defaultRows || 1000;
-      $('row-limit').max = state.limits.maxRows || 5000;
+      $('row-limit').max = state.limits.maxRows || 20000;
       $('target-sheet').value = state.target?.sheetName || 'DataMoov report';
       $('target-cell').value = state.target?.startCell || 'A1';
       changeProvider();

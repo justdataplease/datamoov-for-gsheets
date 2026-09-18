@@ -1,14 +1,15 @@
-/** Production entry points for the DataMoov Sheets interface. */
-function onOpen() {
+/** Entry points. Runs as a Google Workspace Marketplace add-on or as a script bound to one spreadsheet. */
+function onOpen(e) {
+  // Add-ons open before authorization (AuthMode.NONE), so only the Extensions menu is built here.
   SpreadsheetApp.getUi()
-    .createMenu('DataMoov')
+    .createAddonMenu()
     .addItem('Open DataMoov', 'showSidebar')
     .addItem('Refresh reports', 'dmvRefreshAll')
     .addToUi();
 }
 
-function onInstall() {
-  onOpen();
+function onInstall(e) {
+  onOpen(e);
 }
 
 function showSidebar() {

@@ -15,8 +15,8 @@ function dmvOutputDigest_(matrix) {
 function dmvWriteReport_(spreadsheet, report, result) {
   var sheet = spreadsheet.getSheetByName(report.target.sheetName);
   var anchor = dmvCell_(report.target.startCell);
-  var properties = PropertiesService.getScriptProperties();
-  var key = 'dmv:output:' + report.spreadsheetId + ':' + report.id;
+  var properties = dmvStore_();
+  var key = dmvOutputKey_(report.spreadsheetId, report.id);
   var old = JSON.parse(properties.getProperty(key) || 'null');
   if (!sheet) sheet = spreadsheet.insertSheet(report.target.sheetName);
   // Read the grid size once; each SpreadsheetApp getter is a round trip.
@@ -56,7 +56,7 @@ function dmvWriteReport_(spreadsheet, report, result) {
   var all = properties.getProperties();
   Object.keys(all)
     .filter(function (other) {
-      return other.indexOf('dmv:output:' + report.spreadsheetId + ':') === 0 && other !== key;
+      return other.indexOf(dmvOutputKey_(report.spreadsheetId, '')) === 0 && other !== key;
     })
     .forEach(function (other) {
       if (dmvRectanglesOverlap_(area, JSON.parse(all[other])))
