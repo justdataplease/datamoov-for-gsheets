@@ -34,7 +34,7 @@ Credentials do not grant access by themselves. Google Ads needs a developer toke
 
 ## Install in your spreadsheet
 
-1. Open the spreadsheet you want to report into and choose **Extensions → Apps Script**.
+1. Open the spreadsheet you want to report into and choose **Extensions → Apps Script**. Name the project **DataMoov**: the project name is what appears in the Extensions menu.
 2. Copy every file under `src/` into the project, keeping the same names. Files under `src/connectors/` become `connectors/<name>`. Replace the manifest with `src/appsscript.json` (enable **Show "appsscript.json" manifest file** in project settings).
 3. Turn on the **Google Sheets API** advanced service if the editor asks for it, then reload the spreadsheet.
 4. Choose **Extensions → DataMoov → Open DataMoov**, grant the requested permissions, add a connection, and build your first report.
