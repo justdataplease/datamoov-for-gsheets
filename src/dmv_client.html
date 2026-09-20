@@ -11,8 +11,6 @@
       connectionId: null,
       accountEpoch: 0,
       accountChoices: [],
-      accountSelection: null,
-      accountPreserved: false,
       columns: [],
       activeTab: 'reports',
       loaded: false,
@@ -58,10 +56,13 @@
       $('notice').className = 'notice ' + kind;
       $('notice').setAttribute('role', kind === 'error' ? 'alert' : 'status');
       $('notice').hidden = !message;
+      if (message && kind === 'error')
+        $('notice').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
+    const TABS = ['reports', 'compose', 'chat', 'connections'];
     function tab(name) {
       state.activeTab = name;
-      for (const item of ['reports', 'compose', 'connections']) {
+      for (const item of TABS) {
         $('panel-' + item).hidden = item !== name;
         $('tab-' + item).setAttribute('aria-selected', String(item === name));
         $('tab-' + item).tabIndex = item === name ? 0 : -1;
@@ -305,6 +306,10 @@
         top.append(providerBadge(source), names);
         const content = el('div', 'card-content');
         content.append(top);
+        const identity = (source?.accountDiscovery?.credentialKeys || [])
+          .map((key) => connection.values?.[key])
+          .find(Boolean);
+        if (identity) content.append(detail(source.accountDiscovery.label, identity));
         const actions = el('div', 'card-bottom');
         actions.append(
           button('Edit', 'text-button subtle', () => editConnection(connection)),
@@ -410,8 +415,6 @@
         input.disabled = !visible;
         input.required = visible && input.dataset.required === 'true';
       }
-      const nativeNote = container.querySelector('.native-auth-note');
-      if (nativeNote) nativeNote.hidden = inputs.get('authMode')?.value !== 'native';
     }
     function readFields(container, fields, omitEmptySecrets) {
       const result = {};
@@ -429,8 +432,6 @@
     function renderAuth(connection) {
       state.accountEpoch++;
       state.accountChoices = [];
-      state.accountSelection = null;
-      state.accountPreserved = false;
       const source = provider($('connection-provider').value);
       const container = $('auth-fields');
       container.replaceChildren();
@@ -444,18 +445,41 @@
           )
         );
       }
-      if ((source?.authFields || []).some((field) => fieldKey(field) === 'authMode')) {
-        container.append(
-          el(
-            'p',
-            'native-auth-note',
-            'Uses the Google account currently signed in to Sheets. Google may ask you to grant access.'
-          )
-        );
-      }
       updateConditionalFields(container, source?.authFields || []);
-      state.accountPreserved = Boolean(connection && accountDiscoveryActive());
+      renderGuide();
       renderAccountDiscovery();
+    }
+    // "How to get these credentials": the connector's steps, plus the steps for the chosen mode.
+    function renderGuide() {
+      const guide = provider($('connection-provider').value)?.guide;
+      const panel = $('setup-guide');
+      panel.hidden = !guide;
+      if (!guide) return;
+      const mode = $('auth-fields').querySelector('[name=authMode]')?.value;
+      const modeGuide = (mode && guide.modes?.[mode]) || null;
+      const body = $('setup-guide-body');
+      body.replaceChildren();
+      if (guide.intro) body.append(el('p', 'guide-intro', guide.intro));
+      const steps = [...(modeGuide?.steps || []), ...(guide.steps || [])];
+      if (steps.length) {
+        const list = el('ol', 'guide-steps');
+        steps.forEach((step) => list.append(el('li', '', step)));
+        body.append(list);
+      }
+      const links = [...(guide.links || []), ...(modeGuide?.links || [])].filter((link) =>
+        /^https:\/\//.test(link?.url || '')
+      );
+      if (links.length) {
+        const row = el('div', 'guide-links');
+        for (const link of links) {
+          const anchor = el('a', 'chip', link.label + ' ↗');
+          anchor.href = link.url;
+          anchor.target = '_blank';
+          anchor.rel = 'noopener';
+          row.append(anchor);
+        }
+        body.append(row);
+      }
     }
     function accountDiscoveryActive() {
       const source = provider($('connection-provider').value);
@@ -469,52 +493,27 @@
           .includes(String($('auth-' + rule.key)?.value))
       );
     }
+    // Optional helper: lists the accounts the entered credentials can reach and fills the ID field.
     function renderAccountDiscovery() {
-      const source = provider($('connection-provider').value);
-      const discovery = source?.accountDiscovery;
+      const discovery = provider($('connection-provider').value)?.accountDiscovery;
       const active = accountDiscoveryActive();
       $('account-discovery').hidden = !active;
       const selector = $('discovered-account');
       selector.replaceChildren(
-        option(
-          '',
-          state.accountChoices.length ? 'Choose an account...' : 'Load available accounts first'
-        )
+        option('', state.accountChoices.length ? 'Choose an account…' : 'Find accounts first')
       );
       state.accountChoices.forEach((account, index) =>
         selector.append(option(String(index), account.label || account.id))
       );
-      selector.value = state.accountSelection === null ? '' : String(state.accountSelection);
       selector.disabled = !active || !state.accountChoices.length;
       $('discovered-account-label').textContent = discovery?.label || 'Account';
       $('discover-accounts').disabled = false;
-      $('discover-accounts').textContent = 'Connect Google - Load available accounts';
-      $('account-discovery-status').textContent = state.accountPreserved
-        ? 'Your saved account is kept. Load accounts only if you want to choose another.'
-        : state.accountSelection !== null
-          ? 'Account selected. Save this connection to continue.'
-          : '';
-      for (const key of discovery?.credentialKeys || []) {
-        const input = $('auth-' + key);
-        if (!input) continue;
-        input.readOnly = active;
-        if (active) {
-          input.closest('.auth-field').hidden =
-            !state.accountPreserved && state.accountSelection === null;
-          input.required = false;
-        }
-      }
+      $('discover-accounts').textContent = 'Find accounts';
+      $('account-discovery-status').textContent = '';
     }
-    function invalidateAccounts(clearIds) {
+    function invalidateAccounts() {
       state.accountEpoch++;
       state.accountChoices = [];
-      state.accountSelection = null;
-      state.accountPreserved = false;
-      if (clearIds)
-        for (const key of provider($('connection-provider').value)?.accountDiscovery
-          ?.credentialKeys || []) {
-          if ($('auth-' + key)) $('auth-' + key).value = '';
-        }
       renderAccountDiscovery();
     }
     async function discoverAccounts() {
@@ -523,8 +522,8 @@
       const epoch = ++state.accountEpoch;
       const node = $('discover-accounts');
       node.disabled = true;
-      node.textContent = 'Loading available accounts...';
-      $('account-discovery-status').textContent = 'Checking access with your Google account...';
+      node.textContent = 'Finding accounts…';
+      $('account-discovery-status').textContent = 'Checking access with these credentials…';
       try {
         const result = await api('dmvDiscoverAccounts', {
           ...(state.connectionId ? { id: state.connectionId } : {}),
@@ -535,11 +534,10 @@
         if (!result || result.complete !== true || !Array.isArray(result.accounts))
           throw new Error('The account list could not be loaded completely. Try again.');
         state.accountChoices = result.accounts;
-        state.accountSelection = null;
         renderAccountDiscovery();
         $('account-discovery-status').textContent = result.accounts.length
-          ? 'Choose the account to use. No account is selected automatically.'
-          : 'No accessible accounts found. Check access for the Google account signed in to Sheets, then load accounts again.';
+          ? 'Choose an account to fill in its ID above.'
+          : 'No accessible accounts found. Grant these credentials access at the provider, then try again.';
       } catch (error) {
         if (epoch !== state.accountEpoch) return;
         $('account-discovery-status').textContent =
@@ -548,7 +546,7 @@
       } finally {
         if (epoch === state.accountEpoch) {
           node.disabled = false;
-          node.textContent = 'Connect Google - Load available accounts';
+          node.textContent = 'Find accounts';
         }
       }
     }
@@ -824,6 +822,7 @@
         );
         renderReports();
         renderConnections();
+        if (window.dmvChatUi) window.dmvChatUi.bootstrap(data);
         if (!state.loaded) {
           resetReport();
           resetConnection();
@@ -844,16 +843,15 @@
       node.addEventListener('keydown', (event) => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
         event.preventDefault();
-        const names = ['reports', 'compose', 'connections'];
-        const index = names.indexOf(state.activeTab);
+        const index = TABS.indexOf(state.activeTab);
         const next =
           event.key === 'Home'
             ? 0
             : event.key === 'End'
-              ? 2
-              : (index + (event.key === 'ArrowRight' ? 1 : 2)) % 3;
-        tab(names[next]);
-        $('tab-' + names[next]).focus();
+              ? TABS.length - 1
+              : (index + (event.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length;
+        tab(TABS[next]);
+        $('tab-' + TABS[next]).focus();
       });
     });
     $('new-report').addEventListener('click', () => {
@@ -889,12 +887,12 @@
     });
     $('connection-provider').addEventListener('change', () => renderAuth());
     const authChanged = (event) => {
-      const clearIds = accountDiscoveryActive() || event.target.name === 'authMode';
-      updateConditionalFields(
-        $('auth-fields'),
-        provider($('connection-provider').value)?.authFields || []
-      );
-      invalidateAccounts(clearIds);
+      const source = provider($('connection-provider').value);
+      updateConditionalFields($('auth-fields'), source?.authFields || []);
+      if (event.target.name === 'authMode') renderGuide();
+      // Discovered choices belong to the credentials they were listed with.
+      if (!(source?.accountDiscovery?.credentialKeys || []).includes(event.target.name))
+        invalidateAccounts();
     };
     $('auth-fields').addEventListener('input', authChanged);
     $('auth-fields').addEventListener('change', authChanged);
@@ -902,24 +900,17 @@
     $('discovered-account').addEventListener('change', () => {
       const selected = $('discovered-account').value;
       const account = selected === '' ? null : state.accountChoices[Number(selected)];
-      state.accountSelection = account ? Number(selected) : null;
-      state.accountPreserved = false;
-      for (const key of provider($('connection-provider').value)?.accountDiscovery
-        ?.credentialKeys || []) {
-        if ($('auth-' + key)) $('auth-' + key).value = account?.credentials?.[key] || '';
+      if (!account) return;
+      const discovery = provider($('connection-provider').value)?.accountDiscovery;
+      for (const key of discovery?.credentialKeys || []) {
+        if ($('auth-' + key)) $('auth-' + key).value = account.credentials?.[key] || '';
       }
-      renderAccountDiscovery();
+      $('account-discovery-status').textContent =
+        (discovery?.label || 'Account') + ' filled in above. Save the connection to continue.';
     });
     $('cancel-connection').addEventListener('click', () => resetConnection());
     $('connection-form').addEventListener('submit', (event) => {
       event.preventDefault();
-      if (accountDiscoveryActive() && state.accountSelection === null && !state.accountPreserved) {
-        notice(
-          'Load available accounts and choose the account for this connection first.',
-          'error'
-        );
-        return;
-      }
       const connection = {
         ...(state.connectionId ? { id: state.connectionId } : {}),
         label: $('connection-label').value.trim(),
@@ -936,7 +927,11 @@
         renderConnections();
         refreshConnections(saved.id);
         resetConnection(saved.connectorId);
-        notice('Connection saved. Test it before running your first report.');
+        notice(
+          saved.verified
+            ? 'Connection saved and verified with the provider.'
+            : 'Connection saved. Test it before running your first report.'
+        );
       });
     });
     $('report-form').addEventListener('submit', (event) => {
@@ -987,6 +982,8 @@
       });
     });
     if (window.DATAMOOV_LOCAL_PREVIEW === true) $('preview-banner').hidden = false;
+    // The chat partial builds on these helpers; nothing else is exposed.
+    window.dmvSidebar = { api, el, button, notice, provider, state, tab };
     tab('reports');
     bootstrap();
   })();

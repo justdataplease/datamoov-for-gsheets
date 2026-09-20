@@ -256,3 +256,26 @@ test('BigQuery accepts harmless schema descriptions and default nullable mode', 
   const { ctx } = context([dryRun(), bqPage(['0'], { totalRows: '1', schema: { fields: [{ name: 'n', type: 'INTEGER', mode: 'NULLABLE', description: 'Count' }] } })], { config: bqConfig });
   assert.equal(report('bigquery', 'query').fetch(ctx).rows[0].n, 0);
 });
+test('BigQuery describes the chat datasets through the dry-run-validated query path', () => {
+  const infoFields = [{ name: 'table_name', type: 'STRING' }, { name: 'column_name', type: 'STRING' }, { name: 'data_type', type: 'STRING' }];
+  const page = { jobComplete: true, jobReference, schema: { fields: infoFields }, totalRows: '3',
+    rows: [['orders', 'id', 'INT64'], ['orders', 'total', 'NUMERIC'], ['users', 'id', 'INT64']].map((values) => ({ f: values.map((v) => ({ v })) })) };
+  const { ctx, calls } = context([dryRun(infoFields), page], { credentials: { chatDatasets: 'test-project.analytics', authMode: 'token', accessToken: 't' } });
+  const described = connectors.bigquery.describeTables(ctx);
+  assert.deepEqual(plain(described), { scope: 'datasets test-project.analytics', truncated: false, tables: [
+    { name: 'test-project.analytics.orders', columns: [{ name: 'id', type: 'INT64' }, { name: 'total', type: 'NUMERIC' }] },
+    { name: 'test-project.analytics.users', columns: [{ name: 'id', type: 'INT64' }] }] });
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].url, /projects\/test-project\/queries$/);
+  assert.equal(calls[0].body.dryRun, true);
+  assert.match(calls[0].body.query, /FROM `test-project\.analytics`\.INFORMATION_SCHEMA\.COLUMNS ORDER BY table_name, ordinal_position LIMIT 3000\n\) AS datamoov_report LIMIT 3001$/);
+  const searched = context([dryRun(infoFields), { ...page, rows: page.rows.slice(0, 2), totalRows: '2' }], { credentials: { chatDatasets: 'test-project.analytics', authMode: 'token', accessToken: 't' } });
+  assert.equal(connectors.bigquery.describeTables(searched.ctx, { search: "Ord'ers" }).tables.length, 1);
+  assert.match(searched.calls[0].body.query, /COLUMNS WHERE STRPOS\(LOWER\(table_name\), 'orders'\) > 0 ORDER BY/);
+  const missing = context([], { credentials: {} });
+  assert.throws(() => connectors.bigquery.describeTables(missing.ctx), /No datasets are set for chat/);
+  const invalid = context([], { credentials: { chatDatasets: 'analytics' } });
+  assert.throws(() => connectors.bigquery.describeTables(invalid.ctx), /project\.dataset/);
+  assert.equal(missing.calls.length + invalid.calls.length, 0);
+  assert.equal(connectors.bigquery.authFields[0].key, 'chatDatasets');
+});

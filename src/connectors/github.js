@@ -1,3 +1,5 @@
+var DMV_GITHUB_REPOS_PER_CHUNK = 10;
+
 function dmvGithubFields_() {
   return [
     { key: 'repo_url', label: 'Repository URL', type: 'text', role: 'dimension', default: true },
@@ -67,11 +69,15 @@ function dmvGithubFetchChunk_(ctx, state) {
       index >= names.length
     )
       throw new Error('GitHub repository continuation is invalid. Run the report again.');
-    ctx.checkDeadline();
-    records.push(
-      ctx.http({ url: 'https://api.github.com/repos/' + names[index], headers: headers })
-    );
-    if (index + 1 < names.length) nextState = { mode: 'list', index: index + 1 };
+    // Several small repository reads fit one chunk comfortably; the deadline check guards each.
+    var end = Math.min(names.length, index + DMV_GITHUB_REPOS_PER_CHUNK);
+    for (var position = index; position < end; position++) {
+      ctx.checkDeadline();
+      records.push(
+        ctx.http({ url: 'https://api.github.com/repos/' + names[position], headers: headers })
+      );
+    }
+    if (end < names.length) nextState = { mode: 'list', index: end };
   } else {
     if (!query) throw new Error('Enter a GitHub search or a repository list.');
     if (
@@ -187,6 +193,15 @@ dmvRegisterConnector_({
   category: 'Research',
   color: '#24292f',
   allowedHosts: ['api.github.com'],
+  guide: {
+    intro:
+      'Public repositories work without a token; a fine-grained token adds private repositories and higher limits.',
+    steps: [
+      'GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token.',
+      'Choose the repositories to read and grant Contents, Issues, Pull requests and Metadata read access.',
+    ],
+    links: [{ label: 'Personal access tokens', url: 'https://github.com/settings/tokens' }],
+  },
   authFields: [
     {
       key: 'token',

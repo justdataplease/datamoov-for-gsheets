@@ -38,6 +38,13 @@ function dmvHttp_(request, hosts, deadline, errorMessage) {
     }
     var code = response.getResponseCode();
     if (code >= 200 && code < 300) {
+      if (request.responseType === 'blob') {
+        // Compressed report downloads; the caller decodes and validates the bytes.
+        var blob = response.getBlob();
+        if (blob.getBytes().length > DMV_LIMITS.maxBytes)
+          throw new Error('The provider returned too much data. Narrow the report.');
+        return blob;
+      }
       var text = response.getContentText();
       if (text.length > DMV_LIMITS.maxBytes)
         throw new Error('The provider returned too much data. Narrow the report.');
@@ -47,22 +54,14 @@ function dmvHttp_(request, hosts, deadline, errorMessage) {
         throw new Error('The provider returned an unreadable response.');
       }
     }
+    // A connector may translate the provider's error body into actionable guidance.
+    var guidance = dmvHttpGuidance_(response, code, errorMessage);
     if (code === 401 || code === 403) {
-      var guidance;
-      if (typeof errorMessage === 'function') {
-        try {
-          var errorText = response.getContentText();
-          if (errorText.length <= 100000) guidance = errorMessage(code, JSON.parse(errorText));
-        } catch (ignored) {
-          guidance = null;
-        }
-      }
-      if (typeof guidance === 'string' && guidance.length > 0 && guidance.length <= 400)
-        throw new Error(guidance);
       throw new Error(
-        'Access denied by the provider (HTTP ' +
-          code +
-          '). Check credentials, permissions, and API access.'
+        guidance ||
+          'Access denied by the provider (HTTP ' +
+            code +
+            '). Check credentials, permissions, and API access.'
       );
     }
     if (code >= 300 && code < 400)
@@ -82,25 +81,63 @@ function dmvHttp_(request, hosts, deadline, errorMessage) {
       continue;
     }
     throw new Error(
-      'Provider request failed (HTTP ' + code + '). Check report settings and account access.'
+      guidance ||
+        'Provider request failed (HTTP ' + code + '). Check report settings and account access.'
     );
   }
 }
 
+function dmvHttpGuidance_(response, code, errorMessage) {
+  if (typeof errorMessage !== 'function') return '';
+  var guidance;
+  try {
+    var errorText = response.getContentText();
+    if (errorText.length <= 100000) guidance = errorMessage(code, JSON.parse(errorText));
+  } catch (ignored) {
+    guidance = '';
+  }
+  return typeof guidance === 'string' && guidance.length > 0 && guidance.length <= 400
+    ? guidance
+    : '';
+}
+
 function dmvGoogleOAuthToken_(credentials, scopes, deadline) {
+  return dmvOAuthRefreshToken_(
+    {
+      label: 'Google OAuth',
+      endpoint: 'https://oauth2.googleapis.com/token',
+      scopes: scopes || [],
+    },
+    credentials,
+    deadline
+  );
+}
+
+// Exchange a user-supplied refresh token at a provider's fixed token endpoint. Access tokens are
+// cached per user until shortly before expiry; the refresh token itself is never cached or logged.
+// Providers that rotate refresh tokens (Microsoft, LinkedIn) hand the replacement to onRotate.
+function dmvOAuthRefreshToken_(provider, credentials, deadline, onRotate) {
   var names = ['clientId', 'clientSecret', 'refreshToken'];
   var values = names.map(function (name) {
     var value = credentials[name];
     if (typeof value !== 'string' || !value.trim() || value.length > 12000)
-      throw new Error('Google OAuth needs a client ID, client secret, and refresh token.');
+      throw new Error(provider.label + ' needs a client ID, client secret, and refresh token.');
     return value.trim();
   });
+  var host = dmvHost_(provider.endpoint);
   var cacheKey =
     'dmv:oauth:' +
     Utilities.base64EncodeWebSafe(
       Utilities.computeDigest(
         Utilities.DigestAlgorithm.SHA_256,
-        JSON.stringify(['oauth', values[0], values[1], values[2], scopes || []])
+        JSON.stringify([
+          'oauth',
+          provider.endpoint,
+          values[0],
+          values[1],
+          values[2],
+          provider.scopes || [],
+        ])
       )
     ).replace(/=+$/, '');
   var validToken = function (value) {
@@ -120,32 +157,36 @@ function dmvGoogleOAuthToken_(credentials, scopes, deadline) {
   }
   if (validToken(cached)) return cached;
   var startedAt = Date.now();
+  var body =
+    'client_id=' +
+    encodeURIComponent(values[0]) +
+    '&client_secret=' +
+    encodeURIComponent(values[1]) +
+    '&refresh_token=' +
+    encodeURIComponent(values[2]) +
+    '&grant_type=refresh_token';
+  if (provider.scopeParameter && (provider.scopes || []).length)
+    body += '&scope=' + encodeURIComponent(provider.scopes.join(' '));
   var token;
   try {
     token = dmvHttp_(
       {
-        url: 'https://oauth2.googleapis.com/token',
+        url: provider.endpoint,
         method: 'post',
         contentType: 'application/x-www-form-urlencoded',
-        body:
-          'client_id=' +
-          encodeURIComponent(values[0]) +
-          '&client_secret=' +
-          encodeURIComponent(values[1]) +
-          '&refresh_token=' +
-          encodeURIComponent(values[2]) +
-          '&grant_type=refresh_token',
+        body: body,
       },
-      ['oauth2.googleapis.com'],
+      [host],
       deadline
     );
   } catch (error) {
     if (error && typeof error.message === 'string' && /time limit|rate-limited/.test(error.message))
       throw error;
     if (error && typeof error.message === 'string' && /HTTP 429/.test(error.message))
-      throw new Error('Google OAuth is rate-limited. Try again later.');
+      throw new Error(provider.label + ' is rate-limited. Try again later.');
     throw new Error(
-      'Google OAuth credentials could not be refreshed. Check the client ID, client secret, and refresh token; reauthorize if access expired or was revoked.'
+      provider.label +
+        ' credentials could not be refreshed. Check the client ID, client secret, and refresh token; reauthorize if access expired or was revoked.'
     );
   }
   if (
@@ -155,8 +196,14 @@ function dmvGoogleOAuthToken_(credentials, scopes, deadline) {
     !validToken(token.access_token)
   )
     throw new Error(
-      'Google OAuth did not return a valid access token. Check the OAuth credentials.'
+      provider.label + ' did not return a valid access token. Check the OAuth credentials.'
     );
+  if (
+    typeof onRotate === 'function' &&
+    validToken(token.refresh_token) &&
+    token.refresh_token !== values[2]
+  )
+    onRotate({ refreshToken: token.refresh_token });
   var elapsed = Math.max(0, (Date.now() - startedAt) / 1000);
   var expiry =
     typeof token.expires_in === 'number'
@@ -165,7 +212,7 @@ function dmvGoogleOAuthToken_(credentials, scopes, deadline) {
         ? Number(token.expires_in)
         : NaN;
   if (Number.isFinite(expiry) && (expiry <= 0 || expiry <= elapsed))
-    throw new Error('Google OAuth returned an expired access token. Try authorizing again.');
+    throw new Error(provider.label + ' returned an expired access token. Try authorizing again.');
   if (typeof token.expires_in === 'number' && Number.isInteger(expiry) && expiry > 0) {
     var ttl = Math.min(3300, Math.floor(expiry - elapsed - 120));
     if (ttl > 0) {
@@ -179,13 +226,17 @@ function dmvGoogleOAuthToken_(credentials, scopes, deadline) {
   return token.access_token;
 }
 
+// The add-on holds no Google API scopes of its own; every Google token comes from the user's own
+// service-account key, OAuth client, or pasted access token.
 function dmvGoogleToken_(credentials, scopes, deadline) {
-  var mode = credentials.authMode || 'native';
-  if (mode === 'native') return ScriptApp.getOAuthToken();
+  var mode = credentials.authMode;
   if (mode === 'token')
     return dmvText_(credentials.accessToken, 'Google access token', 12000, true);
   if (mode === 'oauth') return dmvGoogleOAuthToken_(credentials, scopes, deadline);
-  if (mode !== 'service_account') throw new Error('Choose a Google authorization method.');
+  if (mode !== 'service_account')
+    throw new Error(
+      'Edit this connection and choose a Google authorization method: service account key, OAuth client credentials, or access token.'
+    );
   var key;
   try {
     key = JSON.parse(credentials.serviceAccountJson || '');
@@ -248,8 +299,10 @@ function dmvGoogleToken_(credentials, scopes, deadline) {
   return token.access_token;
 }
 
-function dmvContext_(connector, connection, report, dates) {
-  var deadline = Date.now() + 240000;
+// A saved connection may receive replacement secrets from a provider (rotated refresh tokens).
+// The revision stays the same: only the secret changed, not the account the connection points at.
+function dmvContext_(connector, connection, report, dates, deadline) {
+  deadline = deadline || Date.now() + 240000;
   var hosts =
     typeof connector.allowedHosts === 'function'
       ? connector.allowedHosts(connection.credentials)
@@ -273,6 +326,12 @@ function dmvContext_(connector, connection, report, dates) {
     },
     accessToken: function () {
       return dmvGoogleToken_(connection.credentials, connector.googleScopes || [], deadline);
+    },
+    rotateCredentials: function (patch) {
+      Object.keys(patch).forEach(function (key) {
+        connection.credentials[key] = patch[key];
+      });
+      if (connection.id) dmvRotateCredentials_(connection, patch);
     },
   };
 }

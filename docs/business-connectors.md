@@ -34,12 +34,14 @@ See [ticket metrics](https://developer.zendesk.com/api-reference/ticketing/ticke
 
 ## BigQuery
 
-Use **Google account** (native authorization, the default), **OAuth client
-credentials**, an access token, or service-account JSON.
+Use a **service account key** (the default), **OAuth client credentials**, or
+an access token; the add-on has no BigQuery permission of its own.
 The principal needs BigQuery Job User on the query project and Data Viewer on
 the queried datasets. The connector requests the `bigquery.readonly` OAuth
-scope, which the [queries endpoint](https://docs.cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query)
-supports separately from IAM permissions.
+scope for its own tokens, which the [queries endpoint](https://docs.cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query)
+supports separately from IAM permissions. **Datasets for chat** (optional,
+comma-separated `project.dataset`) tells the chat which datasets it may
+explore with `describe_database`; reports are not limited by it.
 
 For **OAuth client credentials**, open the **Connection** dialog and enter your
 client ID, client secret and an already-authorized refresh token issued for that

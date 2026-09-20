@@ -16,7 +16,7 @@ Continuation provides more fetch time, not unlimited report size. These delibera
 
 | Limit | Behavior |
 | --- | --- |
-| Work per execution | At most 10 chunks, with a 45-second soft stop checked between chunks. A chunk is a complete provider page and cannot be split mid-request. |
+| Work per execution | At most 10 chunks, with a 45-second soft stop checked between chunks. A chunk is a complete provider page and cannot be split mid-request. A GitHub repository list reads up to 10 repositories per chunk, each behind the deadline check. |
 | Request deadline | The existing 240-second context deadline remains, with a 10-second safety margin in deadline checks. A slow page can exceed the 45-second target; continuation cannot extend a single blocking provider call. |
 | Work per report | At most 100 chunks across all executions. |
 | Snapshot lifetime | 24 hours from the first fetch, checked when resuming. Resuming does not extend this lifetime. |

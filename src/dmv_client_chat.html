@@ -1,0 +1,244 @@
+<script>
+  (function () {
+    'use strict';
+    const $ = (id) => document.getElementById(id);
+    const { api, el, button, notice, provider, state } = window.dmvSidebar;
+    // generation changes on every reset; a reply from an older generation is dropped.
+    const chat = { ai: null, transcript: [], busy: false, settingsOpen: false, generation: 0 };
+
+    function providerInfo(id) {
+      return (chat.ai?.providers || []).find((item) => item.id === id);
+    }
+    function renderSettings() {
+      const configured = Boolean(chat.ai?.configured);
+      const select = $('ai-provider');
+      const previous = select.value;
+      select.replaceChildren();
+      for (const item of chat.ai?.providers || []) {
+        const option = el('option', '', item.label);
+        option.value = item.id;
+        select.append(option);
+      }
+      select.value = configured ? chat.ai.provider : previous || select.value;
+      updateProviderFields(configured ? chat.ai.model : '');
+      $('ai-key').value = '';
+      $('ai-key').placeholder = configured ? 'Saved — leave blank to keep' : '';
+      $('ai-key').required = !configured;
+      $('ai-instructions').value = configured ? chat.ai.instructions || '' : '';
+      $('ai-settings-title').textContent = configured
+        ? 'AI provider settings'
+        : 'Set up your AI provider';
+      $('ai-settings-close').hidden = !configured;
+      $('ai-remove').hidden = !configured;
+      $('ai-test').hidden = !configured;
+    }
+    function updateProviderFields(model) {
+      const info = providerInfo($('ai-provider').value);
+      const help = $('ai-key-help');
+      help.replaceChildren(info?.keyHelp || '');
+      if (/^https:\/\//.test(info?.keyUrl || '')) {
+        const link = el('a', '', 'Create a key ↗');
+        link.href = info.keyUrl;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        help.append(' ', link);
+      }
+      const current = $('ai-model').value.trim();
+      const isDefault = (chat.ai?.providers || []).some((item) => item.defaultModel === current);
+      if (model !== undefined && model !== '') $('ai-model').value = model;
+      else if (!current || isDefault) $('ai-model').value = info?.defaultModel || '';
+    }
+    function render() {
+      const configured = Boolean(chat.ai?.configured);
+      const showSettings = !configured || chat.settingsOpen;
+      $('ai-settings').hidden = !showSettings;
+      $('chat-ready').hidden = !configured;
+      $('chat-settings-toggle').hidden = !configured;
+      $('chat-new').hidden = !configured || !chat.transcript.length;
+      if (configured)
+        $('ai-status').textContent =
+          'Using ' +
+          chat.ai.providerLabel +
+          ' · ' +
+          chat.ai.model +
+          '. Your key never leaves your Google account.';
+      renderSuggestions();
+    }
+    function renderSuggestions() {
+      const row = $('chat-suggestions');
+      row.replaceChildren();
+      if (chat.transcript.length) return;
+      const ideas = [];
+      const connections = state.connections.slice(0, 2);
+      for (const connection of connections) {
+        const source = provider(connection.connectorId);
+        const report = source?.reports?.[0];
+        if (!report) continue;
+        ideas.push(
+          report.dateRange
+            ? source.label +
+                ' ' +
+                report.label.toLowerCase() +
+                ' for the last 30 days, in a new tab'
+            : 'Run the ' +
+                source.label +
+                ' ' +
+                report.label.toLowerCase() +
+                ' report into a new tab'
+        );
+      }
+      if (connections.length) ideas.push('Which campaign had the highest spend last month?');
+      ideas.push(
+        connections.length ? 'Chart daily clicks for the last 14 days' : 'What can you do?'
+      );
+      for (const idea of ideas.slice(0, 3)) row.append(button(idea, 'chip', () => send(idea)));
+    }
+    function addMessage(role, text, extra = {}) {
+      const node = el('div', 'chat-message ' + role + (extra.error ? ' error' : ''));
+      node.append(el('div', 'chat-text', text));
+      if (extra.events?.length) {
+        const list = el('ul', 'chat-events');
+        for (const event of extra.events) {
+          const item = el('li', event.kind === 'error' ? 'error' : '', event.text);
+          list.append(item);
+        }
+        node.append(list);
+      }
+      if (extra.options?.length) {
+        const row = el('div', 'chip-row');
+        for (const option of extra.options)
+          row.append(button(option, 'chip', () => send('Use ' + option + '.')));
+        node.append(row);
+      }
+      $('chat-messages').append(node);
+      node.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      return node;
+    }
+    async function send(text) {
+      text = String(text || '').trim();
+      if (!text || chat.busy || !chat.ai?.configured) return;
+      const generation = chat.generation;
+      setBusy(true);
+      $('chat-input').value = '';
+      $('chat-suggestions').replaceChildren();
+      addMessage('user', text);
+      try {
+        const reply = await api('dmvChat', { text, transcript: chat.transcript });
+        if (generation !== chat.generation) return;
+        chat.transcript.push(...(reply.transcriptAppend || []));
+        addMessage('assistant', reply.text || '', {
+          events: reply.events,
+          options: reply.options,
+          error: Boolean(reply.failed),
+        });
+      } catch (error) {
+        if (generation !== chat.generation) return;
+        addMessage('assistant', error.message || 'The question could not be answered.', {
+          error: true,
+        });
+      } finally {
+        if (generation === chat.generation) {
+          setBusy(false);
+          $('chat-input').focus();
+        }
+      }
+    }
+    // While a turn runs, the conversation and the provider cannot be reset from under it.
+    function setBusy(busy) {
+      chat.busy = busy;
+      $('chat-send').disabled = busy;
+      $('chat-input').disabled = busy;
+      $('chat-working').hidden = !busy;
+      $('chat-new').disabled = busy;
+      $('ai-remove').disabled = busy;
+      $('chat-new').hidden = !chat.transcript.length && !busy;
+    }
+    function resetConversation() {
+      chat.generation++;
+      chat.transcript = [];
+      $('chat-messages').replaceChildren();
+      setBusy(false);
+    }
+    $('ai-provider').addEventListener('change', () => updateProviderFields());
+    $('ai-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (!$('ai-form').reportValidity()) return;
+      const input = {
+        provider: $('ai-provider').value,
+        apiKey: $('ai-key').value,
+        model: $('ai-model').value.trim(),
+        instructions: $('ai-instructions').value.trim(),
+      };
+      const fieldset = $('ai-fields');
+      fieldset.disabled = true;
+      api('dmvSaveAiSettings', input)
+        .then((saved) => {
+          chat.ai = saved;
+          chat.settingsOpen = false;
+          renderSettings();
+          render();
+          notice('AI provider saved. Use Test to check the key, then ask a question.');
+        })
+        .catch((error) => notice(error.message, 'error'))
+        .finally(() => {
+          fieldset.disabled = false;
+        });
+    });
+    $('ai-test').addEventListener('click', (event) => {
+      const node = event.currentTarget;
+      node.disabled = true;
+      node.textContent = 'Testing…';
+      api('dmvTestAi')
+        .then((result) => notice(result.message || 'The AI provider replied.'))
+        .catch((error) => notice(error.message, 'error'))
+        .finally(() => {
+          node.disabled = false;
+          node.textContent = 'Test';
+        });
+    });
+    $('ai-remove').addEventListener('click', () => {
+      if (!window.confirm('Remove the saved AI provider and key? Chat will need a key again.'))
+        return;
+      api('dmvDeleteAiSettings')
+        .then((summary) => {
+          chat.ai = summary;
+          resetConversation();
+          renderSettings();
+          render();
+          notice('AI provider removed.');
+        })
+        .catch((error) => notice(error.message, 'error'));
+    });
+    $('ai-settings-close').addEventListener('click', () => {
+      chat.settingsOpen = false;
+      render();
+    });
+    $('chat-settings-toggle').addEventListener('click', () => {
+      chat.settingsOpen = !chat.settingsOpen;
+      if (chat.settingsOpen) renderSettings();
+      render();
+    });
+    $('chat-new').addEventListener('click', () => {
+      if (chat.busy) return;
+      resetConversation();
+      render();
+    });
+    $('chat-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      send($('chat-input').value);
+    });
+    $('chat-input').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        send($('chat-input').value);
+      }
+    });
+    window.dmvChatUi = {
+      bootstrap(data) {
+        chat.ai = data.ai || { configured: false, providers: [] };
+        renderSettings();
+        render();
+      },
+    };
+  })();
+</script>

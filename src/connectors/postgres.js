@@ -54,6 +54,86 @@ function dmvPostgresConnection_(credentials) {
   }
 }
 
+// Up to 10 plain schema names the chat may explore; reports still take any SQL the role allows.
+function dmvPostgresSchemas_(credentials) {
+  var names = String(credentials.chatSchemas || 'public')
+    .split(',')
+    .map(function (name) {
+      return name.trim();
+    })
+    .filter(Boolean);
+  if (
+    !names.length ||
+    names.length > 10 ||
+    names.some(function (name) {
+      return !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(name);
+    })
+  )
+    throw new Error('Schemas for chat must be up to 10 plain schema names separated by commas.');
+  return names;
+}
+
+function dmvPostgresClose_(result, statement, connection) {
+  [result, statement].forEach(function (resource) {
+    if (resource) {
+      try {
+        resource.close();
+      } catch (ignored) {}
+    }
+  });
+  if (connection) {
+    try {
+      connection.rollback();
+    } catch (ignored) {}
+    try {
+      connection.close();
+    } catch (ignored) {}
+  }
+}
+
+var DMV_POSTGRES_DESCRIBE_LIMIT = 3000;
+
+// Tables and columns of the chat schemas, read from information_schema through the same bounded
+// read-only query path as reports. An optional table-name search is applied in SQL, before the cap.
+function dmvPostgresTables_(ctx, options) {
+  var schemas = dmvPostgresSchemas_(ctx.credentials);
+  var search = dmvTableSearch_((options || {}).search);
+  var sql =
+    'SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns WHERE table_schema IN (' +
+    schemas
+      .map(function (name) {
+        return "'" + name + "'";
+      })
+      .join(', ') +
+    ')' +
+    (search ? " AND strpos(lower(table_name), '" + search + "') > 0" : '') +
+    ' ORDER BY table_schema, table_name, ordinal_position LIMIT ' +
+    DMV_POSTGRES_DESCRIBE_LIMIT;
+  var result;
+  try {
+    result = dmvPostgresQuery_(
+      Object.assign({}, ctx, {
+        config: { query: sql },
+        fields: [],
+        maxRows: DMV_POSTGRES_DESCRIBE_LIMIT,
+      }),
+      false
+    );
+  } catch (error) {
+    if (/^Could not open/.test(String((error && error.message) || ''))) throw error;
+    throw new Error(
+      'PostgreSQL could not list the tables. Check that the role may read information_schema for these schemas.'
+    );
+  }
+  return {
+    scope: 'schemas ' + schemas.join(', '),
+    tables: dmvGroupTables_(result.rows, function (row) {
+      return row.table_schema + '.' + row.table_name;
+    }),
+    truncated: result.rows.length >= DMV_POSTGRES_DESCRIBE_LIMIT,
+  };
+}
+
 function dmvPostgresFields_(metadata) {
   var fields = [],
     seen = {};
@@ -133,24 +213,7 @@ function dmvPostgresQuery_(ctx, discoverOnly) {
       'PostgreSQL query failed. Check SELECT syntax, column access, and the 30-second query limit.'
     );
   } finally {
-    if (result) {
-      try {
-        result.close();
-      } catch (ignored) {}
-    }
-    if (statement) {
-      try {
-        statement.close();
-      } catch (ignored) {}
-    }
-    if (connection) {
-      try {
-        connection.rollback();
-      } catch (ignored) {}
-      try {
-        connection.close();
-      } catch (ignored) {}
-    }
+    dmvPostgresClose_(result, statement, connection);
   }
 }
 
@@ -160,6 +223,20 @@ dmvRegisterConnector_({
   description: 'A focused, read-only SQL report from your database.',
   category: 'Databases',
   color: '#336791',
+  guide: {
+    intro: 'Use a dedicated read-only role; the database must be reachable from Google over TLS.',
+    steps: [
+      "CREATE ROLE datamoov_ro LOGIN PASSWORD '...'; GRANT CONNECT ON DATABASE app TO datamoov_ro; GRANT USAGE ON SCHEMA public TO datamoov_ro; GRANT SELECT ON ALL TABLES IN SCHEMA public TO datamoov_ro;",
+      'Allow inbound connections from the Apps Script IP ranges and require SSL with a certificate from a trusted CA.',
+      'Enter the public host name, port, database name and the role credentials.',
+    ],
+    links: [
+      {
+        label: 'Apps Script JDBC and IP ranges',
+        url: 'https://developers.google.com/apps-script/guides/jdbc',
+      },
+    ],
+  },
   authFields: [
     { key: 'host', label: 'Database host', type: 'text', required: true },
     { key: 'port', label: 'Port', type: 'number', default: 5432, required: true },
@@ -172,7 +249,15 @@ dmvRegisterConnector_({
       required: true,
       help: 'Use a dedicated read-only role. Allow Apps Script IP ranges and a trusted TLS certificate.',
     },
+    {
+      key: 'chatSchemas',
+      label: 'Schemas for chat',
+      type: 'text',
+      default: 'public',
+      help: 'Comma-separated schemas the chat may explore, for example public, analytics. Reports are not limited by this.',
+    },
   ],
+  describeTables: dmvPostgresTables_,
   test: function (ctx) {
     var connection = dmvPostgresConnection_(ctx.credentials);
     try {

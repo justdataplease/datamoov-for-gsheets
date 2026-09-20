@@ -45,6 +45,8 @@ function dmvCatalog_() {
           authFields: definition.authFields || [],
           accountDiscovery: definition.accountDiscovery || null,
           supportsAccountDiscovery: typeof definition.discoverAccounts === 'function',
+          guide: definition.guide || null,
+          describesTables: typeof definition.describeTables === 'function',
           reports: definition.reports.map(function (report) {
             return {
               id: report.id,
@@ -90,6 +92,8 @@ function dmvFieldsInput_(definitions, values) {
     var value = Object.prototype.hasOwnProperty.call(values, field.key)
       ? values[field.key]
       : field.default;
+    // Objects and arrays are never valid field values; treat them as missing.
+    if (value !== null && typeof value === 'object') value = undefined;
     if (value !== undefined && value !== null) result[field.key] = value;
   });
   (definitions || []).forEach(function (field) {
@@ -129,11 +133,34 @@ function dmvDateRange_(range, today) {
   var end = new Date(day.getTime() - 86400000);
   var start;
   switch (range.preset || 'last30') {
+    case 'yesterday':
+      start = end;
+      break;
     case 'last7':
       start = new Date(end.getTime() - 6 * 86400000);
       break;
+    case 'last14':
+      start = new Date(end.getTime() - 13 * 86400000);
+      break;
     case 'last30':
       start = new Date(end.getTime() - 29 * 86400000);
+      break;
+    case 'last90':
+      start = new Date(end.getTime() - 89 * 86400000);
+      break;
+    case 'lastWeek':
+      // The most recent complete Monday-to-Sunday week: back to this week's Monday, then the
+      // Sunday before it and the six days before that.
+      end = new Date(day.getTime() - (((day.getUTCDay() + 6) % 7) + 1) * 86400000);
+      start = new Date(end.getTime() - 6 * 86400000);
+      break;
+    case 'thisYear':
+      start = new Date(Date.UTC(day.getUTCFullYear(), 0, 1, 12));
+      end = day;
+      break;
+    case 'lastYear':
+      start = new Date(Date.UTC(day.getUTCFullYear() - 1, 0, 1, 12));
+      end = new Date(Date.UTC(day.getUTCFullYear() - 1, 11, 31, 12));
       break;
     case 'thisMonth':
       start = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), 1, 12));

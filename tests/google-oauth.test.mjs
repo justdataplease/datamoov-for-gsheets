@@ -148,11 +148,30 @@ test('OAuth preserves deadline and rate-limit guidance without credential fallba
   assert.equal(rate.nativeCalls(), 0);
 });
 
-test('native and pasted access-token modes retain their existing behavior', () => {
+test('pasted access tokens are used as-is and the add-on never falls back to its own Google identity', () => {
   const f = fixture();
-  assert.equal(f.token({}), 'native-fixture');
   assert.equal(f.token({ authMode: 'token', accessToken: 'manual-fixture' }), 'manual-fixture');
   assert.equal(f.requests.length, 0);
-  assert.equal(f.nativeCalls(), 1);
-  assert.throws(() => f.token({ authMode: 'unsupported' }), /authorization method/);
+  for (const credentials of [{}, { authMode: 'native' }, { authMode: 'unsupported' }])
+    assert.throws(() => f.token(credentials), /authorization method/);
+  assert.equal(f.nativeCalls(), 0);
+});
+
+test('a rotated refresh token is handed to onRotate once; unchanged or invalid ones are ignored', () => {
+  const f = fixture([
+    { body: { access_token: 'first', expires_in: 3600, refresh_token: 'rotated-refresh' } },
+    { body: { access_token: 'second', expires_in: 3600, refresh_token: 'refresh-fixture' } },
+    { body: { access_token: 'third', expires_in: 3600, refresh_token: 'bad token\n' } },
+  ]);
+  const rotations = [];
+  const provider = { label: 'Rotating OAuth', endpoint: 'https://login.example/token' };
+  const exchange = (values) => f.context.dmvOAuthRefreshToken_(provider, values, f.now() + 240000, (patch) => rotations.push(JSON.parse(JSON.stringify(patch))));
+  assert.equal(exchange({ ...credentials }), 'first');
+  assert.deepEqual(rotations, [{ refreshToken: 'rotated-refresh' }]);
+  // Different clients bypass the access-token cache; the reply repeats or mangles the refresh token.
+  assert.equal(exchange({ ...credentials, clientId: 'client-two' }), 'second');
+  assert.equal(exchange({ ...credentials, clientId: 'client-three' }), 'third');
+  assert.equal(rotations.length, 1, 'same or malformed refresh tokens are not rotated');
+  assert.equal(exchange({ ...credentials }), 'first', 'the first exchange is still cached; no network call');
+  assert.equal(f.requests.length, 3);
 });

@@ -268,6 +268,20 @@ dmvRegisterConnector_({
       throw new Error('Enter only your Zendesk subdomain.');
     return [subdomain + '.zendesk.com'];
   },
+  guide: {
+    intro: 'Zendesk API tokens pair with an agent email address.',
+    steps: [
+      'Admin Center → Apps and integrations → APIs → Zendesk API → enable Token access.',
+      'Add API token → copy it; it is shown only once.',
+      'Use the email of an agent who can view tickets and your subdomain (acme from acme.zendesk.com).',
+    ],
+    links: [
+      {
+        label: 'API token help',
+        url: 'https://support.zendesk.com/hc/en-us/articles/4408889192858',
+      },
+    ],
+  },
   authFields: [
     {
       key: 'subdomain',

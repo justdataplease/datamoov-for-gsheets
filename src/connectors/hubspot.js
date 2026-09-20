@@ -156,6 +156,15 @@ dmvRegisterConnector_({
   category: 'CRM',
   color: '#ff7a59',
   allowedHosts: ['api.hubapi.com'],
+  guide: {
+    intro: 'A HubSpot private app token gives read access without an OAuth flow.',
+    steps: [
+      'HubSpot → Settings → Integrations → Private apps → Create a private app.',
+      'Scopes: tick crm.objects.deals.read and crm.schemas.deals.read, then create the app.',
+      'Copy the access token shown once; paste it here.',
+    ],
+    links: [{ label: 'Private apps', url: 'https://developers.hubspot.com/docs/api/private-apps' }],
+  },
   authFields: [
     {
       key: 'accessToken',

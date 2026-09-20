@@ -1,9 +1,47 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { createHash } from 'node:crypto';
-import { gzipSync, gunzipSync } from 'node:zlib';
+import { gzipSync, gunzipSync, inflateRawSync } from 'node:zlib';
 
 export const plain = (value) => JSON.parse(JSON.stringify(value));
+
+// RFC 4180 CSV as Utilities.parseCsv returns it: an array of rows of strings.
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (quoted) {
+      if (char === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (char === '"') quoted = false;
+      else field += char;
+    } else if (char === '"') quoted = true;
+    else if (char === ',') { row.push(field); field = ''; }
+    else if (char === '\n' || char === '\r') {
+      if (char === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); rows.push(row); row = []; field = '';
+    } else field += char;
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+// Minimal ZIP reader (stored or deflated entries) standing in for Utilities.unzip.
+function unzip(buffer) {
+  const blobs = [];
+  let offset = 0;
+  while (offset + 30 <= buffer.length && buffer.readUInt32LE(offset) === 0x04034b50) {
+    const method = buffer.readUInt16LE(offset + 8), compressed = buffer.readUInt32LE(offset + 18);
+    const nameLength = buffer.readUInt16LE(offset + 26), extraLength = buffer.readUInt16LE(offset + 28);
+    const name = buffer.toString('utf8', offset + 30, offset + 30 + nameLength);
+    const start = offset + 30 + nameLength + extraLength;
+    const data = buffer.subarray(start, start + compressed);
+    const bytes = method === 8 ? inflateRawSync(data) : data;
+    blobs.push({ getName: () => name, getDataAsString: () => bytes.toString('utf8'), getBytes: () => [...bytes] });
+    offset = start + compressed;
+  }
+  return blobs;
+}
 
 function properties(initial = {}) {
   const data = new Map(Object.entries(initial));
@@ -21,10 +59,19 @@ export function createDatamoovSandbox() {
   let serial = 0, sheetSerial = 10;
   let activeSpreadsheet = null;
   const user = properties(), script = properties(), document = properties();
+  const cacheData = new Map();
+  const cache = {
+    data: cacheData,
+    get: (key) => cacheData.has(key) ? cacheData.get(key) : null,
+    put(key, value) { cacheData.set(key, String(value)); },
+    putAll(values) { for (const [key, value] of Object.entries(values)) cacheData.set(key, String(value)); },
+    getAll(keys) { return Object.fromEntries(keys.filter((key) => cacheData.has(key)).map((key) => [key, cacheData.get(key)])); },
+    remove(key) { cacheData.delete(key); },
+  };
   const state = {
-    user, script, document, books: new Map(), opened: [], batches: [], legacyWrites: [], clears: [],
+    user, script, document, cache, books: new Map(), opened: [], batches: [], legacyWrites: [], clears: [],
     flushes: 0, lockAcquires: 0, lockReleases: 0, lockAvailable: true, triggers: [],
-    createdTriggers: [], deletedTriggers: [], http: [], responses: [], sleeps: [],
+    createdTriggers: [], deletedTriggers: [], http: [], responses: [], sleeps: [], charts: [], gets: [],
     failBatch: false, failTrigger: false, failProperty: null,
   };
   class ClockDate extends Date {
@@ -41,6 +88,8 @@ export function createDatamoovSandbox() {
       getValues: () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => cell(sheet, row + r, column + c).value)),
       getFormulas: () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => cell(sheet, row + r, column + c).formula)),
       getSheet: () => sheet,
+      getNumRows: () => rows,
+      getNumColumns: () => columns,
       getCell: (r, c) => range(sheet, row + r - 1, column + c - 1),
       getA1Notation() {
         let number = column, label = '';
@@ -68,6 +117,14 @@ export function createDatamoovSandbox() {
       getName: () => name, getSheetId: () => sheet.id,
       getMaxRows: () => sheet.maxRows, getMaxColumns: () => sheet.maxColumns,
       getRange: (...args) => range(sheet, ...args),
+      getDataRange() {
+        let lastRow = 0, lastColumn = 0;
+        for (const key of sheet.cells.keys()) {
+          const [r, c] = key.split(':').map(Number);
+          lastRow = Math.max(lastRow, r); lastColumn = Math.max(lastColumn, c);
+        }
+        return range(sheet, 1, 1, Math.max(1, lastRow), Math.max(1, lastColumn));
+      },
       insertRowsAfter(_after, count) { sheet.maxRows += count; },
       insertColumnsAfter(_after, count) { sheet.maxColumns += count; },
       setFrozenRows() {},
@@ -139,10 +196,15 @@ export function createDatamoovSandbox() {
         const props = request.updateSheetProperties.properties, sheet = findSheet(props.sheetId);
         if (props.gridProperties?.rowCount) sheet.maxRows = props.gridProperties.rowCount;
         if (props.gridProperties?.columnCount) sheet.maxColumns = props.gridProperties.columnCount;
+      } else if (request.addChart) {
+        const chart = request.addChart.chart;
+        findSheet(chart.position.overlayPosition.anchorCell.sheetId);
+        for (const source of JSON.stringify(chart.spec).matchAll(/"sheetId":(\d+)/g)) findSheet(Number(source[1]));
+        state.charts.push({ spreadsheetId, chartId: state.charts.length + 1, ...plain(chart) });
       } else throw new Error(`Unsupported batch request: ${Object.keys(request)}`);
     }
     book.sheets.forEach((sheet) => { sheet.cells = staged.get(sheet.id); });
-    return { spreadsheetId, replies: (body.requests || []).map(() => ({})) };
+    return { spreadsheetId, replies: (body.requests || []).map((request) => request.addChart ? { addChart: { chart: { chartId: state.charts.length } } } : ({})) };
   }
   const fakeServices = {
     Date: ClockDate,
@@ -159,7 +221,10 @@ export function createDatamoovSandbox() {
       ungzip: (blob) => ({ getDataAsString: () => gunzipSync(Buffer.from(blob.getBytes())).toString('utf8') }),
       base64Decode: (value) => [...Buffer.from(value, 'base64')],
       formatDate: (date, timezone) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date),
+      parseCsv: (text) => parseCsv(text),
+      unzip: (blob) => unzip(Buffer.from(blob.getBytes())),
       base64Encode: (value) => Buffer.from(value).toString('base64'),
+      base64EncodeWebSafe: (value) => Buffer.from(value).toString('base64url'),
       sleep: (milliseconds) => { state.sleeps.push(milliseconds); now += milliseconds; },
     },
     SpreadsheetApp: {
@@ -167,7 +232,15 @@ export function createDatamoovSandbox() {
       openById(id) { state.opened.push(id); const book = state.books.get(id); if (!book) throw new Error('Spreadsheet not found'); return book; },
       flush() { state.flushes++; },
     },
-    Sheets: { Spreadsheets: { batchUpdate: applyBatch } },
+    Sheets: { Spreadsheets: {
+      batchUpdate: applyBatch,
+      get(spreadsheetId, options) {
+        state.gets.push({ spreadsheetId, options: plain(options || {}) });
+        const book = state.books.get(spreadsheetId);
+        if (!book) throw new Error('Unknown spreadsheet');
+        return { sheets: book.sheets.map((sheet) => ({ properties: { sheetId: sheet.id, gridProperties: { rowCount: sheet.maxRows, columnCount: sheet.maxColumns } } })) };
+      },
+    } },
     ScriptApp: {
       getOAuthToken: () => 'fake-native-google-token',
       getProjectTriggers: () => state.triggers.slice(),
@@ -180,18 +253,19 @@ export function createDatamoovSandbox() {
         return builder;
       },
     },
-    CacheService: { getUserCache: () => ({ get: () => null, put() {} }) },
+    CacheService: { getUserCache: () => cache },
     UrlFetchApp: { fetch(url, options) {
       state.http.push({ url, options: plain(options) });
       if (!state.responses.length) throw new Error('Network access is unavailable in offline tests');
       const reply = state.responses.shift();
       if (reply instanceof Error) throw reply;
       return { getResponseCode: () => reply.code ?? 200, getContentText: () => typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body ?? {}),
-        getAllHeaders: () => reply.headers || {} };
+        getAllHeaders: () => reply.headers || {},
+        getBlob: () => ({ getBytes: () => [...(reply.bytes || Buffer.from(typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body ?? {})))] }) };
     } },
   };
   const context = vm.createContext(fakeServices, { codeGeneration: { strings: false, wasm: false } });
-  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_connections.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js', 'dmv_continuation.js']) {
+  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_connections.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js', 'dmv_continuation.js', 'dmv_ai.js', 'dmv_chat_tools.js', 'dmv_chat.js']) {
     new vm.Script(readFileSync(new URL(`../../src/${filename}`, import.meta.url), 'utf8'), { filename }).runInContext(context, { timeout: 1000 });
   }
   const book = addSpreadsheet();

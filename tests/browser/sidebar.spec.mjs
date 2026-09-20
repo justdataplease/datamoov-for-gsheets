@@ -20,6 +20,9 @@ async function rpc(page, method, ...args) {
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
+  // Security software on the host injects a password-manager balloon over password fields in the
+  // real Chrome build; it is not part of the sidebar and must not intercept clicks.
+  await page.addStyleTag({ content: '.b_KlBalloonClass { display: none !important; }' });
   await expect(page.locator('.report-card')).toHaveCount(3);
   await expect(page.locator('#boot-state')).toBeHidden();
 });
@@ -154,36 +157,93 @@ test('a saved paused report without previous output stays not run until continua
   await expect(card).not.toContainText('Not run yet');
 });
 
-test('Google authorization fields follow mode and saved secrets stay blank on edit', async ({ page }) => {
+test('chat needs an AI provider, then answers with activity lines, option chips and a new-chat reset', async ({ page }) => {
+  await page.locator('#tab-chat').click();
+  await expect(page.locator('#ai-settings')).toBeVisible();
+  await expect(page.locator('#chat-ready')).toBeHidden();
+  await expect(page.locator('#ai-settings-title')).toHaveText('Set up your AI provider');
+  await expect(page.locator('#ai-model')).toHaveValue('claude-opus-5');
+  await page.locator('#ai-provider').selectOption('gemini');
+  await expect(page.locator('#ai-model')).toHaveValue('gemini-3.8-flash');
+  await expect(page.locator('#ai-key-help')).toContainText('aistudio');
+  await page.locator('#ai-save').click();
+  await expect(page.locator('#ai-key')).toBeFocused();
+  await page.locator('#ai-key').fill('offline-preview-key');
+  await page.locator('#ai-save').click();
+  await expect(page.locator('#notice')).toContainText('AI provider saved');
+  await expect(page.locator('#ai-settings')).toBeHidden();
+  await expect(page.locator('#chat-ready')).toBeVisible();
+  await expect(page.locator('#ai-status')).toContainText('Google Gemini · gemini-3.8-flash');
+  await expect(page.locator('#chat-suggestions .chip')).toHaveCount(3);
+  await noOverflow(page);
+  await page.screenshot({ path: 'data/screenshots/chat-ready.png', fullPage: true });
+  await page.locator('#chat-input').fill('Which account?');
+  await page.locator('#chat-send').click();
+  await expect(page.locator('.chat-message.user')).toHaveText('Which account?');
+  await expect(page.locator('.chat-message.assistant .chip')).toHaveCount(2);
+  await page.locator('.chat-message.assistant .chip').first().click();
+  await expect(page.locator('.chat-message.user').nth(1)).toHaveText('Use Google Ads.');
+  await expect(page.locator('.chat-message.assistant').nth(1)).toContainText('Brand search spent EUR 4,120.50');
+  await expect(page.locator('.chat-message.assistant').nth(1).locator('.chat-events li')).toHaveCount(3);
+  await expect(page.locator('#chat-send')).toBeEnabled();
+  await noOverflow(page);
+  await page.screenshot({ path: 'data/screenshots/chat-answer.png', fullPage: true });
+  await page.locator('#chat-settings-toggle').click();
+  await expect(page.locator('#ai-settings')).toBeVisible();
+  await expect(page.locator('#ai-key')).toHaveAttribute('placeholder', /leave blank to keep/);
+  await page.locator('#ai-test').click();
+  await expect(page.locator('#notice')).toContainText('replied: OK');
+  await page.locator('#ai-settings-close').click();
+  await expect(page.locator('#ai-settings')).toBeHidden();
+  await page.locator('#chat-new').click();
+  await expect(page.locator('.chat-message')).toHaveCount(0);
+  await expect(page.locator('#chat-suggestions .chip')).toHaveCount(3);
+  await expect(page.locator('#chat-new')).toBeHidden();
+  const bootstrap = await rpc(page, 'dmvBootstrap');
+  expect(JSON.stringify(bootstrap)).not.toContain('offline-preview-key');
+});
+
+test('Google authorization defaults to a service account key, shows a setup guide per mode, and keeps saved secrets blank on edit', async ({ page }) => {
   await page.locator('#tab-connections').click();
   await page.locator('#connection-provider').selectOption('google_ads');
-  await expect(page.locator('#auth-authMode')).toHaveValue('native');
+  await expect(page.locator('#auth-authMode')).toHaveValue('service_account');
+  await expect(page.locator('#auth-serviceAccountJson')).toBeVisible();
   await expect(page.locator('#auth-accessToken')).toBeHidden();
-  await expect(page.locator('#auth-serviceAccountJson')).toBeHidden();
   for (const key of ['clientId','clientSecret','refreshToken']) await expect(page.locator('#auth-'+key)).toBeHidden();
+  await expect(page.locator('#auth-fields')).not.toContainText('Google account');
+  await expect(page.locator('#setup-guide')).toBeVisible();
+  await page.locator('#setup-guide summary').click();
+  await expect(page.locator('#setup-guide-body')).toContainText('Service accounts');
+  await expect(page.locator('#setup-guide-body')).toContainText('Access and security');
+  await expect(page.locator('#setup-guide-body a.chip').first()).toHaveAttribute('target', '_blank');
   await page.locator('#auth-authMode').selectOption('oauth');
   for (const key of ['clientId','clientSecret','refreshToken']) await expect(page.locator('#auth-'+key)).toBeVisible();
-  await expect(page.locator('#account-discovery')).toBeHidden();
+  await expect(page.locator('#setup-guide-body')).toContainText('refresh token');
+  await expect(page.locator('#account-discovery')).toBeVisible();
   await expect(page.locator('#auth-customerId')).toBeEditable();
   await expect(page.locator('#auth-loginCustomerId')).toBeEditable();
-  await expect(page.locator('#auth-accessToken')).toBeHidden();
   await expect(page.locator('#auth-serviceAccountJson')).toBeHidden();
   await page.locator('#auth-authMode').selectOption('token');
   await expect(page.locator('#auth-accessToken')).toBeVisible();
   await expect(page.locator('#auth-serviceAccountJson')).toBeHidden();
-  await page.locator('#auth-authMode').selectOption('service_account');
-  await expect(page.locator('#auth-accessToken')).toBeHidden();
-  await expect(page.locator('#auth-serviceAccountJson')).toBeVisible();
-  for (const key of ['clientId','clientSecret','refreshToken']) await expect(page.locator('#auth-'+key)).toBeHidden();
+  await noOverflow(page);
+  await page.locator('#connection-provider').selectOption('hubspot');
+  await expect(page.locator('#setup-guide-body')).toContainText('Private apps');
+  await expect(page.locator('#account-discovery')).toBeHidden();
+  await page.locator('#connection-provider').selectOption('postgres');
+  await expect(page.locator('#auth-chatSchemas')).toHaveValue('public');
   const connection = page.locator('.connection-card').filter({ hasText: 'Google Ads' }).first();
   await connection.getByRole('button', { name: 'Edit', exact: true }).click();
-  await expect(page.locator('#auth-developerToken')).toHaveValue('');
-  await expect(page.locator('#auth-developerToken')).toHaveAttribute('placeholder', /leave blank to keep/);
+  await expect(page.locator('#auth-authMode')).toHaveValue('service_account');
+  for (const key of ['serviceAccountJson', 'developerToken']) {
+    await expect(page.locator('#auth-' + key)).toHaveValue('');
+    await expect(page.locator('#auth-' + key)).toHaveAttribute('placeholder', /leave blank to keep/);
+  }
   await page.locator('#connection-label').fill('Marketing account renamed');
   await page.locator('#save-connection').click();
-  await expect(page.locator('#notice')).toContainText('Connection saved');
+  await expect(page.locator('#notice')).toContainText('Connection saved and verified');
   const saved = (await rpc(page, 'dmvBootstrap')).connections.find(item => item.label === 'Marketing account renamed');
-  expect(saved.configuredFields).toContain('developerToken');
+  expect(saved.configuredFields).toEqual(expect.arrayContaining(['developerToken', 'serviceAccountJson']));
   expect(saved.values).not.toHaveProperty('developerToken');
   expect(saved.values).not.toHaveProperty('serviceAccountJson');
   await page.locator('.connection-card').filter({ hasText: 'Marketing account renamed' }).getByRole('button', { name: 'Edit', exact: true }).click();
@@ -273,28 +333,28 @@ test('field discovery selects only declared defaults and retains unmarked-schema
   await expect(page.locator('#column-list input:checked')).toHaveCount(2);
 });
 
-test('native Google discovery requires an explicit account choice before saving', async ({ page }) => {
+test('Find accounts fills the ID from the entered credentials and saving never requires it', async ({ page }) => {
   await page.locator('#tab-connections').click();
   await page.locator('#connection-provider').selectOption('ga4');
   await page.locator('#connection-label').fill('Selected Google property');
-  await expect(page.locator('#auth-propertyId')).toBeHidden();
-  await page.locator('#save-connection').click();
-  await expect(page.locator('#notice')).toContainText('choose the account');
+  await expect(page.locator('#auth-propertyId')).toBeEditable();
+  await page.locator('#auth-serviceAccountJson').fill('{"type":"service_account","client_email":"robot@example.iam.gserviceaccount.com","private_key":"offline"}');
   await page.locator('#discover-accounts').click();
   await expect(page.locator('#discovered-account option')).toHaveCount(3);
   await expect(page.locator('#discovered-account')).toHaveValue('');
-  await expect(page.locator('#auth-propertyId')).toBeHidden();
+  await expect(page.locator('#account-discovery-status')).toContainText('Choose an account');
   await page.locator('#discovered-account').selectOption('1');
   await expect(page.locator('#auth-propertyId')).toHaveValue('900000002');
-  await expect(page.locator('#auth-propertyId')).toHaveAttribute('readonly', '');
+  await expect(page.locator('#account-discovery-status')).toContainText('filled in above');
   await noOverflow(page);
   await page.locator('#save-connection').click();
   await expect(page.locator('#notice')).toContainText('Connection saved');
   const saved=(await rpc(page,'dmvBootstrap')).connections.find(item=>item.label==='Selected Google property');
   expect(saved.values.propertyId).toBe('900000002');
+  await expect(page.locator('.connection-card').filter({ hasText: 'Selected Google property' })).toContainText('900000002');
 });
 
-test('native account choices clear when credentials change and manual auth keeps editable IDs', async ({ page }) => {
+test('discovered choices reset when credentials change while typed IDs stay editable in every mode', async ({ page }) => {
   await page.locator('#tab-connections').click();
   await page.locator('#connection-provider').selectOption('google_ads');
   await page.locator('#auth-developerToken').fill('offline-developer-token');
@@ -304,19 +364,19 @@ test('native account choices clear when credentials change and manual auth keeps
   await expect(page.locator('#auth-customerId')).toHaveValue('900000001');
   await page.locator('#auth-developerToken').fill('different-developer-token');
   await expect(page.locator('#discovered-account')).toBeDisabled();
-  await expect(page.locator('#auth-customerId')).toHaveValue('');
+  await expect(page.locator('#auth-customerId')).toHaveValue('900000001');
   await page.locator('#auth-authMode').selectOption('token');
-  await expect(page.locator('#account-discovery')).toBeHidden();
+  await expect(page.locator('#account-discovery')).toBeVisible();
   await expect(page.locator('#auth-customerId')).toBeEditable();
   await page.locator('#auth-customerId').fill('5555555555');
   await page.locator('#auth-accessToken').fill('offline-token');
   await expect(page.locator('#auth-customerId')).toHaveValue('5555555555');
-  await page.locator('#auth-authMode').selectOption('native');
-  await expect(page.locator('#auth-customerId')).toHaveValue('');
-  await expect(page.locator('#auth-customerId')).toBeHidden();
+  await page.locator('#auth-authMode').selectOption('service_account');
+  await expect(page.locator('#auth-customerId')).toHaveValue('5555555555');
+  await expect(page.locator('#discovered-account')).toBeDisabled();
 });
 
-test('native discovery handles empty accounts, errors and stale provider responses', async ({ page }) => {
+test('discovery handles empty accounts, errors and stale provider responses', async ({ page }) => {
   await page.locator('#tab-connections').click();
   await page.locator('#connection-provider').selectOption('ga4');
   await page.evaluate(()=>{window.DATAMOOV_PREVIEW_ACCOUNTS=[];});
@@ -383,27 +443,64 @@ test('OAuth client credentials require a grant, retain a failed draft, and keep 
   expect(JSON.stringify(renamed)).not.toContain('offline-refresh-token');
 });
 
-test('OAuth mode keeps manual IDs separate from native selection and clears credentials on provider change', async ({ page }) => {
+test('a discovered ID survives switching modes, and a provider change clears credentials', async ({ page }) => {
   await page.locator('#tab-connections').click();
   await page.locator('#connection-provider').selectOption('ga4');
   await page.locator('#discover-accounts').click();
   await expect(page.locator('#discovered-account option')).toHaveCount(3);
   await page.locator('#discovered-account').selectOption('0');
   await page.locator('#auth-authMode').selectOption('oauth');
-  await expect(page.locator('#auth-propertyId')).toHaveValue('');
+  await expect(page.locator('#auth-propertyId')).toHaveValue('900000001');
   await expect(page.locator('#auth-propertyId')).toBeEditable();
-  await page.locator('#auth-propertyId').fill('654321');
   await page.locator('#auth-clientId').fill('offline-client');
   await page.locator('#auth-clientSecret').fill('offline-secret');
   await page.locator('#auth-refreshToken').fill('offline-refresh');
-  await expect(page.locator('#auth-propertyId')).toHaveValue('654321');
-  await page.locator('#auth-authMode').selectOption('native');
-  await expect(page.locator('#auth-propertyId')).toHaveValue('');
-  await expect(page.locator('#discovered-account')).toBeDisabled();
+  await page.locator('#auth-authMode').selectOption('service_account');
+  await expect(page.locator('#auth-propertyId')).toHaveValue('900000001');
   for (const key of ['clientId','clientSecret','refreshToken']) await expect(page.locator('#auth-'+key)).toBeDisabled();
   await page.locator('#connection-provider').selectOption('bigquery');
+  await expect(page.locator('#auth-chatDatasets')).toBeVisible();
   await page.locator('#auth-authMode').selectOption('oauth');
   for (const key of ['clientId','clientSecret','refreshToken']) await expect(page.locator('#auth-'+key)).toHaveValue('');
   await expect(page.locator('#account-discovery')).toBeHidden();
+  await noOverflow(page);
+});
+
+test('a pending turn blocks New chat and provider removal until its answer lands', async ({ page }) => {
+  await page.locator('#tab-chat').click();
+  await page.locator('#ai-key').fill('offline-preview-key');
+  await page.locator('#ai-save').click();
+  await expect(page.locator('#chat-ready')).toBeVisible();
+  await page.locator('#chat-input').fill('Spend by campaign');
+  await page.locator('#chat-send').click();
+  await expect(page.locator('.chat-message.assistant')).toHaveCount(1);
+  await page.evaluate(() => { window.DATAMOOV_PREVIEW_DELAY_MS = 1500; });
+  await page.locator('#chat-input').fill('And clicks?');
+  await page.locator('#chat-send').click();
+  await expect(page.locator('#chat-working')).toBeVisible();
+  await expect(page.locator('#chat-new')).toBeDisabled();
+  await page.locator('#chat-settings-toggle').click();
+  await expect(page.locator('#ai-remove')).toBeDisabled();
+  await page.locator('#ai-settings-close').click();
+  await expect(page.locator('.chat-message.assistant')).toHaveCount(2, { timeout: 5000 });
+  await expect(page.locator('#chat-working')).toBeHidden();
+  await expect(page.locator('#chat-new')).toBeEnabled();
+  await page.locator('#chat-new').click();
+  await expect(page.locator('.chat-message')).toHaveCount(0);
+  await expect(page.locator('#chat-suggestions .chip')).toHaveCount(3);
+});
+
+test('AI settings keep standing instructions and link to where each key is created', async ({ page }) => {
+  await page.locator('#tab-chat').click();
+  await expect(page.locator('#ai-key-help a')).toHaveAttribute('href', /console\.anthropic\.com/);
+  await page.locator('#ai-provider').selectOption('gemini');
+  await expect(page.locator('#ai-key-help a')).toHaveAttribute('href', /aistudio\.google\.com/);
+  await page.locator('#ai-key').fill('offline-preview-key');
+  await page.locator('#ai-instructions').fill('Spend is in EUR. Brand campaigns start with BR_.');
+  await page.locator('#ai-save').click();
+  await expect(page.locator('#chat-ready')).toBeVisible();
+  await page.locator('#chat-settings-toggle').click();
+  await expect(page.locator('#ai-instructions')).toHaveValue('Spend is in EUR. Brand campaigns start with BR_.');
+  expect((await rpc(page, 'dmvAiSettings')).instructions).toContain('EUR');
   await noOverflow(page);
 });

@@ -12,6 +12,8 @@ function fixture(connectorId, credentials, input) {
       .runInContext(f.api, { timeout: 1000 });
   }
   f.api.DMV_CONTINUATION.chunksPerExecution = 1;
+  // Saving a connection checks it with the provider; these tests script only the report pages.
+  delete f.api.DMV_CONNECTORS[connectorId].test;
   const connection = f.api.dmvSaveConnection({ connectorId, label: 'Provider account', credentials });
   const report = f.api.dmvSaveReport({ connectionId: connection.id, name: 'Provider report',
     maxRows: 10, target: { sheetName: 'Output', startCell: 'A1' }, ...input });

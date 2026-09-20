@@ -38,12 +38,14 @@ test('marketing declarations expose small reports and Google authorization choic
   const {connectors} = load();
   assert.deepEqual(Object.keys(connectors).sort(), ['facebook_ads','ga4','google_ads']);
   for (const id of Object.keys(connectors)) {
-    assert.equal(connectors[id].reports.length,1);
+    assert.equal(connectors[id].reports.length, id === 'google_ads' ? 2 : 1);
     assert.ok(connectors[id].allowedHosts.length);
-    assert.ok(connectors[id].reports[0].fields.filter(f=>f.default).length <= 10);
+    for (const report of connectors[id].reports) assert.ok(report.fields.filter(f=>f.default).length <= 13);
   }
   for(const id of ['google_ads','ga4']) {
-    assert.equal(connectors[id].authFields.find(f=>f.key==='authMode').default,'native');
+    assert.equal(connectors[id].authFields.find(f=>f.key==='authMode').default,'service_account');
+    assert.ok(!connectors[id].authFields.find(f=>f.key==='authMode').options.some(o=>o.value==='native'));
+    assert.ok(connectors[id].guide.modes.service_account.steps.length >= 3);
     assert.ok(connectors[id].googleScopes.length);
   }
 });

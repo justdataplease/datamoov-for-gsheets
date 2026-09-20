@@ -71,9 +71,9 @@ test('HTTP refuses long rate-limit waits, exhausted deadlines and malformed resp
   assert.throws(() => bad.fetch({url:'https://provider.example/data'}), /unreadable/);
 });
 
-test('native and manually supplied Google tokens require no custom OAuth screen', () => {
+test('Google tokens come only from the connection; there is no add-on identity fallback', () => {
   const t = transport();
-  assert.equal(t.context.dmvGoogleToken_({},['scope'],Date.now()+100000),'native-google-token');
+  assert.throws(() => t.context.dmvGoogleToken_({},['scope'],Date.now()+100000),/authorization method/);
   assert.equal(t.context.dmvGoogleToken_({authMode:'token',accessToken:'manual-token'},['scope'],Date.now()+100000),'manual-token');
   assert.equal(t.requests.length,0);
   assert.throws(() => t.context.dmvGoogleToken_({authMode:'token'},[],Date.now()+100000),/required/);

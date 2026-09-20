@@ -102,6 +102,66 @@ function dmvBigQueryDiscover_(ctx) {
   return dmvBigQueryDryRun_(ctx).fields.map(dmvBigQueryField_);
 }
 
+// Up to 10 project.dataset names the chat may explore.
+function dmvBigQueryDatasets_(credentials) {
+  var names = String(credentials.chatDatasets || '')
+    .split(',')
+    .map(function (name) {
+      return name.trim();
+    })
+    .filter(Boolean);
+  if (!names.length)
+    throw new Error(
+      'No datasets are set for chat on this BigQuery connection. Ask the user for a project.dataset to explore (they can save it on the connection as "Datasets for chat"), then query its INFORMATION_SCHEMA.COLUMNS with config.projectId set to that project.'
+    );
+  if (
+    names.length > 10 ||
+    names.some(function (name) {
+      return !/^[a-z][a-z0-9-]{4,28}[a-z0-9]\.[A-Za-z0-9_]{1,1024}$/.test(name);
+    })
+  )
+    throw new Error(
+      'Datasets for chat must be up to 10 project.dataset names separated by commas.'
+    );
+  return names;
+}
+
+var DMV_BIGQUERY_DESCRIBE_LIMIT = 3000;
+
+// Tables and columns of the chat datasets, read through the same dry-run-validated query path.
+// An optional table-name search is applied in SQL, before the per-dataset cap.
+function dmvBigQueryTables_(ctx, options) {
+  var datasets = dmvBigQueryDatasets_(ctx.credentials);
+  var search = dmvTableSearch_((options || {}).search);
+  var tables = [],
+    truncated = false;
+  datasets.forEach(function (dataset) {
+    var result = dmvBigQueryFetch_(
+      Object.assign({}, ctx, {
+        config: {
+          projectId: dataset.split('.')[0],
+          sql:
+            'SELECT table_name, column_name, data_type FROM `' +
+            dataset +
+            '`.INFORMATION_SCHEMA.COLUMNS' +
+            (search ? " WHERE STRPOS(LOWER(table_name), '" + search + "') > 0" : '') +
+            ' ORDER BY table_name, ordinal_position LIMIT ' +
+            DMV_BIGQUERY_DESCRIBE_LIMIT,
+        },
+        fields: [],
+        maxRows: DMV_BIGQUERY_DESCRIBE_LIMIT,
+      })
+    );
+    if (result.rows.length >= DMV_BIGQUERY_DESCRIBE_LIMIT) truncated = true;
+    tables = tables.concat(
+      dmvGroupTables_(result.rows, function (row) {
+        return dataset + '.' + String(row.table_name);
+      })
+    );
+  });
+  return { scope: 'datasets ' + datasets.join(', '), tables: tables, truncated: truncated };
+}
+
 function dmvBigQueryValue_(field, value) {
   if (value == null) return '';
   if (field.mode === 'REPEATED') {
@@ -266,9 +326,32 @@ dmvRegisterConnector_({
   color: '#4285f4',
   allowedHosts: ['bigquery.googleapis.com'],
   googleScopes: ['https://www.googleapis.com/auth/bigquery.readonly'],
-  authFields: dmvGoogleAuthFields_(
-    'Grant BigQuery Job User on the query project and read access to the datasets.'
+  authFields: [
+    {
+      key: 'chatDatasets',
+      label: 'Datasets for chat',
+      type: 'text',
+      help: 'Comma-separated project.dataset names the chat may explore, for example my-project.analytics. Reports are not limited by this.',
+    },
+  ].concat(
+    dmvGoogleAuthFields_(
+      'Grant BigQuery Job User on the query project and read access to the datasets.'
+    )
   ),
+  describeTables: dmvBigQueryTables_,
+  guide: dmvGoogleGuide_({
+    apis: 'the BigQuery API',
+    access: 'the query project and its datasets',
+    scope: 'https://www.googleapis.com/auth/bigquery.readonly',
+    grant:
+      'IAM & Admin → IAM → grant the service account BigQuery Job User on the query project and BigQuery Data Viewer on the datasets it reads.',
+    links: [
+      {
+        label: 'BigQuery access control',
+        url: 'https://cloud.google.com/bigquery/docs/access-control',
+      },
+    ],
+  }),
   reports: [
     {
       id: 'query',

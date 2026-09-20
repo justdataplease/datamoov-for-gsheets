@@ -20,6 +20,7 @@ function dmvBootstrap() {
       return sheet.getName();
     }),
     limits: DMV_LIMITS,
+    ai: dmvAiSummary_(dmvAiRead_()),
     defaultTarget: {
       sheetName: targetIsEmpty ? active.getSheet().getName() : fallbackName,
       startCell: targetIsEmpty ? active.getCell(1, 1).getA1Notation() : 'A1',
@@ -28,7 +29,9 @@ function dmvBootstrap() {
   };
 }
 
-function dmvValidateReport_(input, spreadsheet) {
+// The data half of a report: connection, report type, fields, configuration, dates and row limit.
+// Saved reports and chat queries validate through this same function.
+function dmvValidateQuery_(input, spreadsheet) {
   input = input || {};
   var connection = dmvRead_('connection', input.connectionId);
   var connector = dmvConnector_(connection.connectorId);
@@ -54,9 +57,33 @@ function dmvValidateReport_(input, spreadsheet) {
       dateRange,
       Utilities.formatDate(new Date(), spreadsheet.getSpreadsheetTimeZone(), 'yyyy-MM-dd')
     );
-  var sheetName = dmvText_((input.target || {}).sheetName, 'Output tab', 100, true);
+  return {
+    connectorId: connector.id,
+    connectionId: connection.id,
+    reportType: definition.id,
+    fields: fields,
+    config: config,
+    dateRange: dateRange,
+    maxRows: dmvInteger_(
+      input.maxRows === undefined ? DMV_LIMITS.defaultRows : input.maxRows,
+      1,
+      DMV_LIMITS.maxRows,
+      'Row limit'
+    ),
+  };
+}
+
+function dmvSheetName_(value) {
+  var sheetName = dmvText_(value, 'Output tab', 100, true);
   if (/[\[\]*?:\\/]/.test(sheetName))
     throw new Error('The output tab name contains unsupported characters.');
+  return sheetName;
+}
+
+function dmvValidateReport_(input, spreadsheet) {
+  input = input || {};
+  var query = dmvValidateQuery_(input, spreadsheet);
+  var sheetName = dmvSheetName_((input.target || {}).sheetName);
   var cell = dmvCell_((input.target || {}).startCell || 'A1');
   var schedule = input.schedule || 'manual';
   if (['manual', 'hourly', 'daily', 'weekly'].indexOf(schedule) < 0)
@@ -65,19 +92,14 @@ function dmvValidateReport_(input, spreadsheet) {
     id: input.id || dmvId_(),
     spreadsheetId: spreadsheet.getId(),
     name: dmvText_(input.name, 'Report name', 80, true),
-    connectorId: connector.id,
-    connectionId: connection.id,
-    reportType: definition.id,
-    fields: fields,
-    config: config,
-    dateRange: dateRange,
+    connectorId: query.connectorId,
+    connectionId: query.connectionId,
+    reportType: query.reportType,
+    fields: query.fields,
+    config: query.config,
+    dateRange: query.dateRange,
     target: { sheetName: sheetName, startCell: cell.a1 },
-    maxRows: dmvInteger_(
-      input.maxRows === undefined ? DMV_LIMITS.defaultRows : input.maxRows,
-      1,
-      DMV_LIMITS.maxRows,
-      'Row limit'
-    ),
+    maxRows: query.maxRows,
     schedule: schedule,
   };
 }
@@ -153,14 +175,14 @@ function dmvReportDates_(definition, report, spreadsheet) {
     : {};
 }
 
-function dmvFetchReport_(report, spreadsheet) {
+function dmvFetchReport_(report, spreadsheet, deadline) {
   var connection = dmvRead_('connection', report.connectionId);
   var connector = dmvConnector_(connection.connectorId);
   var definition = dmvDefinition_(connector, report.reportType);
   var dates = dmvReportDates_(definition, report, spreadsheet);
   try {
     return dmvNormalizeResult_(
-      definition.fetch(dmvContext_(connector, connection, report, dates)),
+      definition.fetch(dmvContext_(connector, connection, report, dates, deadline)),
       report.maxRows
     );
   } catch (error) {

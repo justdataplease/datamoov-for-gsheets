@@ -18,7 +18,7 @@ function showSidebar() {
 }
 
 function include(filename) {
-  if (['dmv_styles', 'dmv_client'].indexOf(filename) < 0) {
+  if (['dmv_styles', 'dmv_client', 'dmv_client_chat'].indexOf(filename) < 0) {
     throw new Error('Unknown DataMoov template.');
   }
   return HtmlService.createHtmlOutputFromFile(filename).getContent();

@@ -76,17 +76,18 @@ test('referenced account identity and active-run locks are preserved', () => {
   assert.equal(f.api.dmvRead_('connection', saved.id).credentials.account, 'one');
 });
 
-test('GA4 discovers all Admin pages with read-only native credentials and rejects repeated cursors', () => {
+test('GA4 discovers all Admin pages with the connection credentials and rejects repeated cursors', () => {
   const f = provider('ga4');
   f.state.responses.push({ body: { accountSummaries: [{ displayName: 'Account', propertySummaries: [{ property: 'properties/123', displayName: 'First' }] }], nextPageToken: 'next' } },
     { body: { accountSummaries: [{ propertySummaries: [{ property: 'properties/456', displayName: 'Second' }] }] } });
-  const result = f.api.dmvDiscoverAccounts({ connectorId: 'ga4', credentials: { authMode: 'native' } });
+  const result = f.api.dmvDiscoverAccounts({ connectorId: 'ga4', credentials: { authMode: 'token', accessToken: 'g-offline-token' } });
   assert.equal(result.complete, true);
   assert.deepEqual(plain(result.accounts.map(a => a.credentials)), [{ propertyId: '123' }, { propertyId: '456' }]);
   assert.match(f.state.http[1].url, /analyticsadmin\.googleapis\.com.*pageToken=next/);
-  assert.equal(f.state.http[0].options.headers.Authorization, 'Bearer fake-native-google-token');
+  assert.equal(f.state.http[0].options.headers.Authorization, 'Bearer g-offline-token');
   f.state.responses.push({ body: { nextPageToken: 'same' } }, { body: { nextPageToken: 'same' } });
-  assert.throws(() => f.api.dmvDiscoverAccounts({ connectorId: 'ga4', credentials: {} }), /repeated/);
+  assert.throws(() => f.api.dmvDiscoverAccounts({ connectorId: 'ga4', credentials: { authMode: 'token', accessToken: 'g-offline-token' } }), /repeated/);
+  assert.throws(() => f.api.dmvDiscoverAccounts({ connectorId: 'ga4', credentials: {} }), /Service account JSON is required/);
 });
 
 test('Ads enumerates manager clients with pagination, drops inherited login, and prefers direct access', () => {
@@ -96,7 +97,7 @@ test('Ads enumerates manager clients with pagination, drops inherited login, and
   f.state.responses.push({ body: { resourceNames: ['customers/' + manager, 'customers/' + client] } },
     { body: { results: [row(client, 'Client')], nextPageToken: 'page-two' } },
     { body: { results: [row(second, 'Second')] } }, { body: { results: [row(client, 'Direct')] } });
-  const result = f.api.dmvDiscoverAccounts({ connectorId: 'google_ads', credentials: { authMode: 'native', developerToken: 'private-fixture-token', loginCustomerId: '9999999999' } });
+  const result = f.api.dmvDiscoverAccounts({ connectorId: 'google_ads', credentials: { authMode: 'token', accessToken: 'g-offline-token', developerToken: 'private-fixture-token', loginCustomerId: '9999999999' } });
   assert.equal(f.state.http[0].options.headers['login-customer-id'], undefined);
   assert.equal(f.state.http[1].options.headers['login-customer-id'], manager);
   assert.equal(JSON.parse(f.state.http[2].options.payload).pageToken, 'page-two');
@@ -107,10 +108,10 @@ test('Ads enumerates manager clients with pagination, drops inherited login, and
 test('discovery fails atomically on provider errors, malformed resources and account limits', () => {
   const ga4 = provider('ga4');
   ga4.state.responses.push({ code: 403, body: { error: { message: 'secret' } } });
-  assert.throws(() => ga4.api.dmvDiscoverAccounts({ connectorId: 'ga4', credentials: {} }), /HTTP 403/);
+  assert.throws(() => ga4.api.dmvDiscoverAccounts({ connectorId: 'ga4', credentials: { authMode: 'token', accessToken: 'g-offline-token' } }), /HTTP 403/);
   const ads = provider('google_ads');
   ads.state.responses.push({ body: { resourceNames: ['https://foreign.example/accounts/1'] } });
-  assert.throws(() => ads.api.dmvDiscoverAccounts({ connectorId: 'google_ads', credentials: { developerToken: 'private-fixture-token' } }), /invalid accessible/);
+  assert.throws(() => ads.api.dmvDiscoverAccounts({ connectorId: 'google_ads', credentials: { authMode: 'token', accessToken: 'g-offline-token', developerToken: 'private-fixture-token' } }), /invalid accessible/);
   assert.equal(ads.state.http.length, 1);
   const f = arbitrary();
   f.connector.discoverAccounts = () => Array.from({ length: 1001 }, () => ({}));

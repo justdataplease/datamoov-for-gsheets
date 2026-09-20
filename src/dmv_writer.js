@@ -12,18 +12,42 @@ function dmvOutputDigest_(matrix) {
     .join('');
 }
 
+// Grid sizes of every tab, keyed by sheet id, from one metadata-only Sheets API request.
+function dmvGridSizes_(spreadsheetId) {
+  var response = Sheets.Spreadsheets.get(spreadsheetId, {
+    fields: 'sheets.properties(sheetId,gridProperties(rowCount,columnCount))',
+  });
+  var grids = {};
+  ((response && response.sheets) || []).forEach(function (item) {
+    var properties = item.properties || {},
+      grid = properties.gridProperties || {};
+    if (properties.sheetId === undefined) return;
+    grids[properties.sheetId] = {
+      rows: Number(grid.rowCount) || 0,
+      columns: Number(grid.columnCount) || 0,
+    };
+  });
+  return grids;
+}
+
 function dmvWriteReport_(spreadsheet, report, result) {
   var sheet = spreadsheet.getSheetByName(report.target.sheetName);
   var anchor = dmvCell_(report.target.startCell);
   var properties = dmvStore_();
   var key = dmvOutputKey_(report.spreadsheetId, report.id);
   var old = JSON.parse(properties.getProperty(key) || 'null');
-  if (!sheet) sheet = spreadsheet.insertSheet(report.target.sheetName);
-  // Read the grid size once; each SpreadsheetApp getter is a round trip.
-  var maxRows = sheet.getMaxRows(),
-    maxColumns = sheet.getMaxColumns();
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(report.target.sheetName);
+    SpreadsheetApp.flush();
+  }
+  // One Sheets API read gives every tab's grid size; per-tab SpreadsheetApp getters are round trips.
+  var sheetId = sheet.getSheetId();
+  var grids = dmvGridSizes_(spreadsheet.getId());
+  if (!grids[sheetId]) throw new Error('The output tab could not be read. Try again.');
+  var maxRows = grids[sheetId].rows,
+    maxColumns = grids[sheetId].columns;
   var area = {
-    sheetId: sheet.getSheetId(),
+    sheetId: sheetId,
     row: anchor.row,
     column: anchor.column,
     rows: result.matrix.length,
@@ -66,8 +90,8 @@ function dmvWriteReport_(spreadsheet, report, result) {
     });
   var lastRow = area.row + area.rows - 1;
   var lastColumn = area.column + area.columns - 1;
-  var totalCells = spreadsheet.getSheets().reduce(function (sum, item) {
-    return sum + item.getMaxRows() * item.getMaxColumns();
+  var totalCells = Object.keys(grids).reduce(function (sum, id) {
+    return sum + grids[id].rows * grids[id].columns;
   }, 0);
   var neededCells =
     Math.max(lastRow, maxRows) * Math.max(lastColumn, maxColumns) - maxRows * maxColumns;
@@ -124,6 +148,7 @@ function dmvWriteReport_(spreadsheet, report, result) {
     };
   });
   area.digest = dmvOutputDigest_(result.matrix);
+  area.writtenAt = Date.now();
   requests.push({
     updateCells: {
       range: range(area.row, area.column, area.rows, area.columns),

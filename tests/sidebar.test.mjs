@@ -17,13 +17,29 @@ function previewBridge() {
 
 test('rendered sidebar scripts compile and all static DOM references exist', async () => {
   assert.equal(html.includes('<?'), false, 'all server includes are resolved');
-  assert.equal(scripts.length, 2, 'one isolated preview bridge and one browser client');
+  assert.equal(scripts.length, 3, 'one isolated preview bridge and two browser client partials');
   scripts.forEach(source => new vm.Script(source));
   const ids = new Set(Array.from(html.matchAll(/\bid="([^"]+)"/g), match => match[1]));
-  const client = await readFile(new URL('../src/dmv_client.html', import.meta.url), 'utf8');
-  for (const match of client.matchAll(/\$\('([^']+)'\)/g)) assert.ok(ids.has(match[1]), 'Missing element: ' + match[1]);
-  assert.equal(/\.innerHTML\s*=/.test(client), false, 'untrusted data is rendered using textContent');
-  assert.equal(/setInterval\s*\(/.test(client), false, 'sidebar must not accumulate polling timers');
+  for (const partial of ['dmv_client', 'dmv_client_chat']) {
+    const client = await readFile(new URL('../src/' + partial + '.html', import.meta.url), 'utf8');
+    for (const match of client.matchAll(/\$\('([^']+)'\)/g)) assert.ok(ids.has(match[1]), 'Missing element: ' + match[1]);
+    assert.equal(/\.innerHTML\s*=/.test(client), false, 'untrusted data is rendered using textContent');
+    assert.equal(/setInterval\s*\(/.test(client), false, 'sidebar must not accumulate polling timers');
+  }
+});
+
+test('preview chat answers, asks with options and needs a saved provider first', async () => {
+  const { rpc } = previewBridge();
+  await assert.rejects(rpc('dmvChat', { text: 'hi' }), /Add an AI provider/);
+  const saved = await rpc('dmvSaveAiSettings', { provider: 'anthropic', apiKey: 'offline-key', model: '' });
+  assert.equal(saved.configured, true);
+  assert.equal(saved.model, 'claude-opus-5');
+  assert.ok(!JSON.stringify(await rpc('dmvBootstrap')).includes('offline-key'));
+  const asked = await rpc('dmvChat', { text: 'Which account?', transcript: [] });
+  assert.deepEqual([...asked.options], ['Google Ads', 'Facebook Ads']);
+  const answered = await rpc('dmvChat', { text: 'Spend by campaign with a chart', transcript: asked.transcriptAppend });
+  assert.equal(answered.events.length, 4);
+  assert.equal(answered.transcriptAppend[1].actions.length, 4);
 });
 
 test('preview reads the registered catalog without calling Google services or publishing credentials', async () => {

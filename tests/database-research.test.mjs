@@ -106,16 +106,24 @@ test('GitHub continuation retains search identity, count and completeness guards
 
 test('GitHub resumes repository lists by index with normalized names and complete budget checks',()=> {
   const config={repositories:'https://github.com/owner/first.git\nOWNER/first,owner/second',query:'ignored'};
-  const first=transport(repository(1,'owner/first'));
-  const firstChunk=load().connectors.github.reports[0].fetchChunk(context({config,http:first.http}),null);
-  assert.equal(first.calls.length,1);
-  assert.equal(first.calls[0].url,'https://api.github.com/repos/owner/first');
+  const both=transport(repository(1,'owner/first'),repository(2,'owner/second'));
+  const single=load().connectors.github.reports[0].fetchChunk(context({config,http:both.http}),null);
+  assert.deepEqual(both.calls.map(call=>call.url),['https://api.github.com/repos/owner/first','https://api.github.com/repos/owner/second']);
+  assert.equal(single.rows.length,2);
+  assert.equal(single.nextState,null);
+  assert.equal(single.metadata.complete,true);
+  // Twelve repositories take two chunks of at most ten reads each.
+  const many={repositories:Array.from({length:12},(_,index)=>'owner/repo'+index).join(','),query:'ignored'};
+  const first=transport(...Array.from({length:10},(_,index)=>repository(index,'owner/repo'+index)));
+  const firstChunk=load().connectors.github.reports[0].fetchChunk(context({config:many,http:first.http,maxRows:100}),null);
+  assert.equal(first.calls.length,10);
+  assert.equal(first.calls[9].url,'https://api.github.com/repos/owner/repo9');
   assert.equal(firstChunk.metadata.complete,false);
-  const second=transport(repository(2,'owner/second'));
-  const lastChunk=load().connectors.github.reports[0].fetchChunk(context({config,http:second.http}),JSON.parse(JSON.stringify(firstChunk.nextState)));
-  assert.equal(second.calls.length,1);
-  assert.equal(second.calls[0].url,'https://api.github.com/repos/owner/second');
-  assert.equal(lastChunk.rows[0].full_name,'owner/second');
+  assert.deepEqual(JSON.parse(JSON.stringify(firstChunk.nextState)),{mode:'list',index:10});
+  const second=transport(repository(10,'owner/repo10'),repository(11,'owner/repo11'));
+  const lastChunk=load().connectors.github.reports[0].fetchChunk(context({config:many,http:second.http,maxRows:100}),JSON.parse(JSON.stringify(firstChunk.nextState)));
+  assert.equal(second.calls.length,2);
+  assert.equal(lastChunk.rows[1].full_name,'owner/repo11');
   assert.equal(lastChunk.nextState,null);
   assert.equal(lastChunk.metadata.complete,true);
   const report=load().connectors.github.reports[0];
@@ -133,9 +141,8 @@ test('PostgreSQL validates a single SELECT without rejecting quoted values or co
   }
 });
 
-function jdbcFixture({rows=[['9007199254740993','0','f','1.234567890123456789',null]],failure=null}={}) {
+function jdbcFixture({rows=[['9007199254740993','0','f','1.234567890123456789',null]],failure=null,columns=[['id','int8'],['count','int4'],['enabled','bool'],['amount','numeric'],['missing','text']]}={}) {
   const events=[];
-  const columns=[['id','int8'],['count','int4'],['enabled','bool'],['amount','numeric'],['missing','text']];
   let index=-1,wasNull=false;
   const metadata={getColumnCount:()=>columns.length,getColumnLabel:i=>columns[i-1][0],getColumnTypeName:i=>columns[i-1][1]};
   const result={getMetaData:()=>metadata,next:()=>++index<rows.length,
@@ -208,4 +215,30 @@ test('PostgreSQL shared SQL guard preserves hash operators and rejects concealed
     'SELECT (1'
   ]) assert.throws(()=>scope.dmvPostgresSql_(sql),/one SQL statement|not supported|Close SQL/);
   assert.throws(()=>scope.dmvPostgresSql_('SELECT '+ 'x'.repeat(6000)),/6,000/);
+});
+
+const infoColumns=[['table_schema','text'],['table_name','text'],['column_name','text'],['data_type','text']];
+test('PostgreSQL describes the chat schemas from information_schema through the bounded read-only query path',()=> {
+  const {Jdbc,events}=jdbcFixture({columns:infoColumns,rows:[['public','orders','id','integer'],['public','orders','total','numeric'],['sales','leads','id','integer']]});
+  const {connectors}=load({Jdbc});
+  const credentials={host:'db.example.com',database:'analytics',username:'reader',password:'offline-pass',chatSchemas:'public, sales'};
+  const described=connectors.postgres.describeTables(pgContext({credentials}));
+  assert.deepEqual(JSON.parse(JSON.stringify(described)),{scope:'schemas public, sales',truncated:false,tables:[
+    {name:'public.orders',columns:[{name:'id',type:'integer'},{name:'total',type:'numeric'}]},
+    {name:'sales.leads',columns:[{name:'id',type:'integer'}]}]});
+  const prepared=events.find(e=>e[0]==='prepare')[1];
+  assert.match(prepared,/^SELECT \* FROM \(SELECT table_schema, table_name, column_name, data_type FROM information_schema\.columns WHERE table_schema IN \('public', 'sales'\) ORDER BY table_schema, table_name, ordinal_position LIMIT 3000\) AS datamoov_report LIMIT 3001$/);
+  assert.deepEqual(events.find(e=>e[0]==='setup.execute'),['setup.execute','SET TRANSACTION READ ONLY']);
+  assert.deepEqual(events.slice(-4).map(e=>e[0]),['result.close','statement.close','rollback','connection.close']);
+  // A search narrows the listing in SQL, before the cap, with unsafe characters dropped.
+  const searched=jdbcFixture({columns:infoColumns,rows:[['public','orders','id','integer']]});
+  load({Jdbc:searched.Jdbc}).connectors.postgres.describeTables(pgContext({credentials}),{search:"Or'd; DROP"});
+  assert.match(searched.events.find(e=>e[0]==='prepare')[1],/AND strpos\(lower\(table_name\), 'ord drop'\) > 0 ORDER BY/);
+  // Hitting the column cap is reported instead of silently dropping tables.
+  const capped=jdbcFixture({columns:infoColumns,rows:Array.from({length:3000},(_,i)=>['public','t'+i,'c','text'])});
+  assert.equal(load({Jdbc:capped.Jdbc}).connectors.postgres.describeTables(pgContext({credentials})).truncated,true);
+  assert.equal(connectors.postgres.authFields.find(f=>f.key==='chatSchemas').default,'public');
+  const closed=load({Jdbc:{getConnection(){throw new Error('Unexpected database access');}}});
+  for(const chatSchemas of ['public; drop','a,b,c,d,e,f,g,h,i,j,k',"pub'lic"])
+    assert.throws(()=>closed.connectors.postgres.describeTables(pgContext({credentials:{host:'db.example.com',database:'analytics',username:'reader',password:'offline-pass',chatSchemas}})),/plain schema names/);
 });

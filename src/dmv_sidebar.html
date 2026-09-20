@@ -45,6 +45,16 @@
         <button
           type="button"
           role="tab"
+          id="tab-chat"
+          aria-controls="panel-chat"
+          aria-selected="false"
+          data-tab="chat"
+        >
+          Chat
+        </button>
+        <button
+          type="button"
+          role="tab"
           id="tab-connections"
           aria-controls="panel-connections"
           aria-selected="false"
@@ -121,10 +131,16 @@
               <div id="date-section">
                 <label for="date-preset">Date range</label
                 ><select id="date-preset">
+                  <option value="yesterday">Yesterday</option>
                   <option value="last7">Last 7 days</option>
+                  <option value="last14">Last 14 days</option>
                   <option value="last30" selected>Last 30 days</option>
+                  <option value="last90">Last 90 days</option>
+                  <option value="lastWeek">Last week (Mon–Sun)</option>
                   <option value="thisMonth">This month</option>
                   <option value="lastMonth">Last month</option>
+                  <option value="thisYear">This year</option>
+                  <option value="lastYear">Last year</option>
                   <option value="custom">Custom dates</option>
                 </select>
                 <div id="custom-dates" class="two-columns" hidden>
@@ -234,6 +250,101 @@
             </p>
           </section>
         </section>
+        <section id="panel-chat" role="tabpanel" aria-labelledby="tab-chat" hidden>
+          <div class="section-heading">
+            <div>
+              <h1>Chat with your data</h1>
+              <p>Ask a question. Get the numbers, the table and the chart.</p>
+            </div>
+            <div class="heading-actions">
+              <button type="button" class="text-button subtle" id="chat-new" hidden>
+                New chat
+              </button>
+              <button
+                type="button"
+                class="icon-button"
+                id="chat-settings-toggle"
+                aria-label="AI provider settings"
+                title="AI provider settings"
+                hidden
+              >
+                &#9881;
+              </button>
+            </div>
+          </div>
+          <section id="ai-settings" class="ai-settings" aria-label="AI provider settings">
+            <div class="field-heading">
+              <h2 id="ai-settings-title">Set up your AI provider</h2>
+              <button type="button" id="ai-settings-close" class="text-button" hidden>Close</button>
+            </div>
+            <form id="ai-form">
+              <fieldset id="ai-fields">
+                <label for="ai-provider">AI provider</label
+                ><select id="ai-provider"></select>
+                <label for="ai-key">API key</label
+                ><input
+                  id="ai-key"
+                  type="password"
+                  autocomplete="new-password"
+                  spellcheck="false"
+                />
+                <p id="ai-key-help" class="field-help"></p>
+                <label for="ai-model">Model</label
+                ><input id="ai-model" type="text" maxlength="80" spellcheck="false" />
+                <p class="field-help">
+                  Any model this provider serves. Faster models answer sooner; the default is a
+                  strong one.
+                </p>
+                <label for="ai-instructions">Instructions for the assistant (optional)</label
+                ><textarea
+                  id="ai-instructions"
+                  rows="4"
+                  maxlength="4000"
+                  placeholder="e.g. We sell furniture in Greece; spend is in EUR. Campaigns named BR_ are brand. Put analysis in the 'Analysis' tab."
+                ></textarea>
+                <p class="field-help">
+                  Standing context sent with every question: your business, naming conventions,
+                  preferred tabs or chart styles.
+                </p>
+                <p class="inline-note">
+                  Column names, row samples and aggregates from the reports you run in chat are sent
+                  to this provider. Credentials and full result sets are not. Usage is billed to
+                  your own API key, which stays in your Google account.
+                </p>
+                <div class="action-row">
+                  <button type="button" id="ai-test" class="button secondary">Test</button
+                  ><button type="submit" id="ai-save" class="button primary">Save</button>
+                </div>
+                <button type="button" id="ai-remove" class="text-button danger" hidden>
+                  Remove AI provider
+                </button>
+              </fieldset>
+            </form>
+          </section>
+          <div id="chat-ready" hidden>
+            <p id="ai-status" class="field-help"></p>
+            <div id="chat-suggestions" class="chip-row" aria-label="Suggestions"></div>
+            <div id="chat-messages" class="chat-messages" role="log" aria-live="polite"></div>
+            <p id="chat-working" class="boot-state" hidden>
+              <span class="spinner" aria-hidden="true"></span>Working with your data&hellip; this
+              can take a minute.
+            </p>
+            <form id="chat-form" class="chat-composer">
+              <label for="chat-input" class="visually-hidden">Your question</label
+              ><textarea
+                id="chat-input"
+                rows="2"
+                maxlength="4000"
+                placeholder="e.g. Spend by campaign last month, in a new tab with a chart"
+              ></textarea
+              ><button type="submit" id="chat-send" class="button primary">Ask</button>
+            </form>
+            <p class="field-help">
+              The chat runs your saved connections, writes only into empty cells and never changes
+              your accounts.
+            </p>
+          </div>
+        </section>
         <section id="panel-connections" role="tabpanel" aria-labelledby="tab-connections" hidden>
           <div class="section-heading">
             <div>
@@ -262,17 +373,21 @@
                   placeholder="e.g. Marketing account"
                 />
                 <div id="auth-fields"></div>
+                <details id="setup-guide" class="setup-guide" hidden>
+                  <summary>How to get these credentials</summary>
+                  <div id="setup-guide-body"></div>
+                </details>
                 <div id="account-discovery" class="account-discovery" hidden>
                   <p class="field-help">
-                    Use the Google account currently signed in to Sheets. Grant access if Google
-                    asks, then choose an account below.
+                    Not sure of the ID? Enter the credentials above and let DataMoov list the
+                    accounts they can reach.
                   </p>
                   <button type="button" id="discover-accounts" class="button secondary full">
-                    Connect Google - Load available accounts
+                    Find accounts
                   </button>
                   <label for="discovered-account" id="discovered-account-label">Account</label>
                   <select id="discovered-account" disabled>
-                    <option value="">Load available accounts first</option>
+                    <option value="">Find accounts first</option>
                   </select>
                   <p
                     id="account-discovery-status"
@@ -282,7 +397,8 @@
                   ></p>
                 </div>
                 <p class="field-help">
-                  Credentials are saved for your account. Saved secrets are never displayed.
+                  Credentials are saved privately to your Google account and checked with the
+                  provider when you save. Saved secrets are never displayed again.
                 </p>
                 <button type="submit" id="save-connection" class="button primary full">
                   Save connection
@@ -303,5 +419,6 @@
       </footer>
     </div>
     <?!= include('dmv_client'); ?>
+    <?!= include('dmv_client_chat'); ?>
   </body>
 </html>

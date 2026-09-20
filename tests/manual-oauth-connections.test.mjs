@@ -23,11 +23,7 @@ function fixture(withTest = true) {
       { key: 'account', label: 'Account', type: 'text', required: true },
       ...sandbox.api.dmvGoogleAuthFields_(),
     ],
-    accountDiscovery: {
-      label: 'Account',
-      credentialKeys: ['account'],
-      showWhen: { key: 'authMode', value: 'native' },
-    },
+    accountDiscovery: { label: 'Account', credentialKeys: ['account'] },
   };
   if (withTest) connector.test = (context) => checked.push(plain(context.credentials));
   sandbox.api.dmvRegisterConnector_(connector);
@@ -166,17 +162,57 @@ test('manual OAuth keeps referenced account identity and active-run locks intact
   assert.equal(f.state.batches.length, 0);
 });
 
-test('existing native mode remains the default and can switch to OAuth only after an access check', () => {
+test('service account is the default mode, a missing key fails before any check, and switching modes rechecks', () => {
   const f = fixture();
+  assert.throws(
+    () => f.api.dmvSaveConnection({ connectorId: 'orchard', label: 'Key', credentials: { account: '1234567890' } }),
+    /Service account JSON is required/
+  );
+  assert.equal(f.checked.length, 0);
+  const key = JSON.stringify({ type: 'service_account', client_email: 'robot@example.iam.gserviceaccount.com', private_key: 'offline-key' });
   const saved = f.api.dmvSaveConnection({
     connectorId: 'orchard',
-    label: 'Native',
-    credentials: { account: '1234567890' },
+    label: 'Key',
+    credentials: { account: '1234567890', serviceAccountJson: key },
   });
-  assert.equal(saved.values.authMode, 'native');
+  assert.equal(saved.values.authMode, 'service_account');
+  assert.equal(saved.values.serviceAccountJson, undefined);
+  assert.ok(saved.configuredFields.includes('serviceAccountJson'));
+  assert.equal(saved.verified, true);
   assert.equal(f.checked.length, 1);
   const own = f.api.dmvSaveConnection({ ...f.input(), id: saved.id });
   assert.equal(own.values.authMode, 'oauth');
   assert.equal(f.checked.length, 2);
   assert.equal(f.checked[1].account, saved.values.account);
+  assert.equal(f.api.dmvSaveConnection({ ...f.input(), id: saved.id, label: 'Renamed' }).verified, false);
+});
+
+test('a connector can rotate a saved secret during a run; the revision stays and stale rotations are dropped', () => {
+  const f = createDatamoovSandbox();
+  let rotateTo = 'rotated-during-check';
+  f.api.dmvRegisterConnector_({
+    id: 'rotating', label: 'Rotating', reports: [{ id: 'r', label: 'R', fields: [{ key: 'n', label: 'N', type: 'number' }], dateRange: false,
+      fetch(ctx) { ctx.rotateCredentials({ refreshToken: rotateTo, account: 'must-not-change', bogus: 'ignored' }); return { columns: this.fields, rows: [{ n: 1 }], metadata: { complete: true } }; } }],
+    allowedHosts: [],
+    authFields: [{ key: 'account', label: 'Account', type: 'text', required: true },
+      { key: 'refreshToken', label: 'Refresh token', type: 'password', secret: true, required: true }],
+    test(ctx) { ctx.rotateCredentials({ refreshToken: rotateTo }); },
+  });
+  const saved = f.api.dmvSaveConnection({ connectorId: 'rotating', label: 'Rotating account', credentials: { account: 'one', refreshToken: 'initial' } });
+  assert.equal(f.api.dmvRead_('connection', saved.id).credentials.refreshToken, 'rotated-during-check', 'the check rotated the token before it was stored');
+  assert.equal(f.api.dmvRead_('connection', saved.id).revision, 1);
+  const report = f.api.dmvSaveReport({ connectionId: saved.id, name: 'Rotate', reportType: 'r', fields: ['n'], config: {}, maxRows: 10,
+    target: { sheetName: 'Output', startCell: 'A1' }, schedule: 'manual' });
+  rotateTo = 'rotated-during-run';
+  assert.equal(f.api.dmvRunReport(report.id).ok, true);
+  const stored = f.api.dmvRead_('connection', saved.id);
+  assert.equal(stored.credentials.refreshToken, 'rotated-during-run');
+  assert.equal(stored.credentials.account, 'one', 'only secret fields rotate');
+  assert.equal(stored.credentials.bogus, undefined);
+  assert.equal(stored.revision, 1, 'a rotation is not an edit');
+  // A rotation from a stale in-memory connection (edited meanwhile) is ignored.
+  const stale = { id: saved.id, revision: 0, credentials: { account: 'one', refreshToken: 'x' } };
+  f.api.dmvRotateCredentials_(stale, { refreshToken: 'from-stale-run' });
+  assert.equal(f.api.dmvRead_('connection', saved.id).credentials.refreshToken, 'rotated-during-run');
+  assert.ok(!JSON.stringify(f.api.dmvBootstrap()).includes('rotated-during-run'));
 });

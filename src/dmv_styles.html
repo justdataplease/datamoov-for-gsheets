@@ -676,13 +676,68 @@
     font-weight: 650;
     letter-spacing: 0.2px;
   }
-  .native-auth-note {
-    border-left: 2px solid #aca4ef;
-    padding-left: 10px;
+  .setup-guide {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--wash);
+    padding: 0 12px;
     margin-top: 12px;
+    font-size: 11px;
+    line-height: 1.6;
+  }
+  .setup-guide summary {
+    cursor: pointer;
+    padding: 10px 0;
+    font-weight: 650;
+    color: var(--primary);
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .setup-guide summary::-webkit-details-marker {
+    display: none;
+  }
+  .setup-guide summary::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform 0.15s;
+  }
+  .setup-guide[open] summary::before {
+    transform: rotate(45deg);
+  }
+  .setup-guide[open] summary {
+    border-bottom: 1px solid var(--line);
+  }
+  .guide-intro {
+    margin: 10px 0 6px;
+    color: var(--ink);
+  }
+  .guide-steps {
+    margin: 0 0 10px;
+    padding-left: 18px;
     color: var(--muted);
-    font-size: 10px;
-    line-height: 1.7;
+  }
+  .guide-steps li {
+    margin: 4px 0;
+    overflow-wrap: anywhere;
+  }
+  .guide-steps li::marker {
+    color: var(--primary);
+    font-weight: 650;
+  }
+  .guide-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-bottom: 12px;
+  }
+  .guide-links a.chip {
+    text-decoration: none;
   }
   .auth-field {
     min-width: 0;
@@ -712,6 +767,122 @@
   }
   .connection-card:hover {
     border-color: #d8d6ee;
+  }
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .heading-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .ai-settings {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 4px 14px 14px;
+    margin-bottom: 18px;
+    background: #fcfcff;
+  }
+  .ai-settings .field-heading {
+    margin-top: 12px;
+  }
+  .chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 10px 0 12px;
+  }
+  .chip {
+    border: 1px solid #dfdbff;
+    background: #f4f2ff;
+    color: var(--primary);
+    border-radius: 14px;
+    padding: 5px 10px;
+    font-size: 10px;
+    font-weight: 600;
+    text-align: left;
+    line-height: 1.4;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .chip:hover {
+    background: #eae7ff;
+  }
+  .chat-messages {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .chat-message {
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 11px;
+    line-height: 1.6;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .chat-message.user {
+    background: var(--primary);
+    color: #fff;
+    margin-left: 28px;
+    border-bottom-right-radius: 3px;
+  }
+  .chat-message.assistant {
+    background: var(--wash);
+    border: 1px solid var(--line);
+    margin-right: 18px;
+    border-bottom-left-radius: 3px;
+  }
+  .chat-message.error {
+    background: #fff1f0;
+    border-color: #f4d7d7;
+    color: #a93840;
+  }
+  .chat-text {
+    white-space: pre-wrap;
+  }
+  .chat-events {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 8px 0 0;
+    border-top: 1px solid #e9ebf2;
+    font-size: 10px;
+    color: var(--muted);
+  }
+  .chat-events li {
+    display: flex;
+    gap: 6px;
+    line-height: 1.6;
+  }
+  .chat-events li::before {
+    content: '\2713';
+    color: var(--success);
+    flex-shrink: 0;
+  }
+  .chat-events li.error::before {
+    content: '\2716';
+    color: var(--danger);
+  }
+  .chat-message .chip-row {
+    margin: 10px 0 0;
+  }
+  .chat-composer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: end;
+  }
+  .chat-composer textarea {
+    min-height: 58px;
+  }
+  .chat-composer .button {
+    min-height: 40px;
   }
   @media (min-width: 380px) {
     main {

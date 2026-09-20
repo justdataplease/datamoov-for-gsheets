@@ -30,6 +30,39 @@ function dmvGoogleAdsFields_() {
   });
 }
 
+// YouTube ads are Google Ads video campaigns; this report keeps the same daily campaign grain.
+function dmvGoogleAdsVideoFields_() {
+  var f = dmvField_;
+  return [
+    f('segments.date', 'Date', 'date', true),
+    f('customer.id', 'Account ID', 'text', true),
+    f('customer.currency_code', 'Currency', 'text', true),
+    f('campaign.id', 'Campaign ID', 'text', true),
+    f('campaign.name', 'Campaign', 'text', true),
+    f('metrics.cost_micros', 'Spend', 'currency', true, { micros: true }),
+    f('metrics.impressions', 'Impressions', 'number', true),
+    f('metrics.video_views', 'Video views', 'number', true),
+    f('metrics.video_view_rate', 'View rate', 'percent', true),
+    f('metrics.average_cpv', 'Average CPV', 'currency', true, { micros: true }),
+    f('metrics.clicks', 'Clicks', 'number', true),
+    f('metrics.conversions', 'Conversions', 'number', true),
+    f('metrics.conversions_value', 'Conversion value', 'currency', true),
+    f('metrics.video_quartile_p25_rate', 'Watched 25%', 'percent', false),
+    f('metrics.video_quartile_p50_rate', 'Watched 50%', 'percent', false),
+    f('metrics.video_quartile_p75_rate', 'Watched 75%', 'percent', false),
+    f('metrics.video_quartile_p100_rate', 'Watched 100%', 'percent', false),
+    f('campaign.status', 'Campaign status', 'text', false),
+    f('campaign.advertising_channel_sub_type', 'Campaign subtype', 'text', false),
+    f('customer.descriptive_name', 'Account', 'text', false),
+    f('customer.time_zone', 'Account time zone', 'text', false),
+    f('metrics.ctr', 'CTR', 'percent', false),
+    f('metrics.average_cpm', 'Average CPM', 'currency', false, { micros: true }),
+  ].map(function (field) {
+    field.role = field.key.indexOf('metrics.') === 0 ? 'metric' : 'dimension';
+    return field;
+  });
+}
+
 function dmvGoogleAdsConnection_(ctx) {
   var c = ctx.credentials || {};
   var id = String(c.customerId || '')
@@ -78,9 +111,9 @@ function dmvGoogleAdsPages_(ctx, connection, path, query, limit) {
   return rows;
 }
 
-function dmvGoogleAdsDiscover_(ctx) {
-  var connection = dmvGoogleAdsConnection_(ctx),
-    available = dmvGoogleAdsFields_();
+function dmvGoogleAdsDiscover_(ctx, available) {
+  var connection = dmvGoogleAdsConnection_(ctx);
+  available = available || dmvGoogleAdsFields_();
   var names = available
     .map(function (f) {
       return "'" + f.key + "'";
@@ -115,7 +148,20 @@ function dmvGoogleAdsValue_(row, field) {
 }
 
 function dmvGoogleAdsFetch_(ctx) {
-  var columns = dmvSelectFields_(ctx.fields, dmvGoogleAdsFields_());
+  return dmvGoogleAdsCampaignFetch_(ctx, dmvGoogleAdsFields_(), '', 'Daily campaign');
+}
+
+function dmvGoogleAdsVideoFetch_(ctx) {
+  return dmvGoogleAdsCampaignFetch_(
+    ctx,
+    dmvGoogleAdsVideoFields_(),
+    " AND campaign.advertising_channel_type = 'VIDEO'",
+    'Daily video campaign'
+  );
+}
+
+function dmvGoogleAdsCampaignFetch_(ctx, available, extraWhere, grain) {
+  var columns = dmvSelectFields_(ctx.fields, available);
   var connection = dmvGoogleAdsConnection_(ctx);
   var names = columns.map(function (f) {
     return f.key;
@@ -138,7 +184,9 @@ function dmvGoogleAdsFetch_(ctx) {
     ctx.startDate +
     "' AND '" +
     ctx.endDate +
-    "' ORDER BY segments.date,campaign.id";
+    "'" +
+    extraWhere +
+    ' ORDER BY segments.date,campaign.id';
   var raw = dmvGoogleAdsPages_(
     ctx,
     connection,
@@ -162,7 +210,7 @@ function dmvGoogleAdsFetch_(ctx) {
       currency: raw.length && raw[0].customer ? raw[0].customer.currencyCode || '' : '',
       timeZone: raw.length && raw[0].customer ? raw[0].customer.timeZone || '' : '',
       attribution: 'Google Ads conversion-action attribution; interaction-date reporting.',
-      grain: 'Daily campaign',
+      grain: grain,
       complete: true,
     },
   };
@@ -254,7 +302,7 @@ function dmvGoogleAdsErrorMessage_(code, body) {
   if (has('CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION'))
     return 'The Google Cloud project used for this Google sign-in has Google Ads Test access only. Open Google Ads API Overview in that project and apply for Explorer access to use production accounts.';
   if (has('USER_PERMISSION_DENIED'))
-    return 'This Google account cannot access the selected Google Ads account. Use Find accounts to choose an accessible account, or grant access to this Google account.';
+    return 'These credentials cannot access the selected Google Ads account. Use Find accounts to choose an accessible account, or grant the credential access in Google Ads.';
   return '';
 }
 
@@ -270,8 +318,20 @@ dmvRegisterConnector_({
   accountDiscovery: {
     label: 'Google Ads account',
     credentialKeys: ['customerId', 'loginCustomerId'],
-    showWhen: { key: 'authMode', value: 'native' },
   },
+  guide: dmvGoogleGuide_({
+    apis: 'the Google Ads API',
+    access: 'the Google Ads account',
+    scope: 'https://www.googleapis.com/auth/adwords',
+    grant:
+      'Google Ads → Admin → Access and security → invite the service account email (client_email) with Read only access. Production accounts also need Explorer access approved under API Center in that Cloud project.',
+    links: [
+      {
+        label: 'Google Ads API access',
+        url: 'https://developers.google.com/google-ads/api/docs/get-started/introduction',
+      },
+    ],
+  }),
   discoverAccounts: dmvGoogleAdsDiscoverAccounts_,
   googleScopes: ['https://www.googleapis.com/auth/adwords'],
   authFields: [
@@ -306,6 +366,19 @@ dmvRegisterConnector_({
       dateRange: true,
       fetch: dmvGoogleAdsFetch_,
       discoverFields: dmvGoogleAdsDiscover_,
+    },
+    {
+      id: 'youtube_campaign_daily',
+      label: 'YouTube video campaigns',
+      description:
+        'Daily performance of video (YouTube) campaigns: views, view rate, cost per view, quartile completion, spend and conversions.',
+      fields: dmvGoogleAdsVideoFields_(),
+      configFields: [],
+      dateRange: true,
+      fetch: dmvGoogleAdsVideoFetch_,
+      discoverFields: function (ctx) {
+        return dmvGoogleAdsDiscover_(ctx, dmvGoogleAdsVideoFields_());
+      },
     },
   ],
 });

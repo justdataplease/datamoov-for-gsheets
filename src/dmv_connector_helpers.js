@@ -1,19 +1,30 @@
 /* Small provider-neutral helpers shared by every connector. No Google services at load time. */
 
-// Credential fields for Google APIs: native account, own OAuth client, token, or service account.
+// Credential fields for Google APIs. The add-on never asks for Google API scopes of its own:
+// the user brings a service-account key (default), an OAuth client with a refresh token, or a token.
 function dmvGoogleAuthFields_(serviceAccountHelp) {
   return [
     {
       key: 'authMode',
       label: 'Google authorization',
       type: 'select',
-      default: 'native',
+      default: 'service_account',
       options: [
-        { value: 'native', label: 'Google account' },
+        { value: 'service_account', label: 'Service account key (JSON)' },
         { value: 'oauth', label: 'OAuth client credentials' },
         { value: 'token', label: 'Access token' },
-        { value: 'service_account', label: 'Service account' },
       ],
+    },
+    {
+      key: 'serviceAccountJson',
+      label: 'Service account JSON',
+      type: 'textarea',
+      secret: true,
+      required: true,
+      showWhen: { key: 'authMode', value: 'service_account' },
+      help:
+        serviceAccountHelp ||
+        'Paste the whole JSON key file. Grant this service account access to the source account or property.',
     },
     {
       key: 'clientId',
@@ -44,29 +55,90 @@ function dmvGoogleAuthFields_(serviceAccountHelp) {
       key: 'accessToken',
       label: 'Access token',
       type: 'password',
-      required: false,
+      required: true,
       showWhen: { key: 'authMode', value: 'token' },
-      help: 'Paste an access token. Replace it when it expires.',
-    },
-    {
-      key: 'serviceAccountJson',
-      label: 'Service account JSON',
-      type: 'textarea',
-      secret: true,
-      required: false,
-      showWhen: { key: 'authMode', value: 'service_account' },
-      help:
-        serviceAccountHelp ||
-        'Grant this service account access to the source account or property.',
+      help: 'Paste an access token. It expires within an hour, so this suits one-off previews.',
     },
   ];
+}
+
+// Setup guide for a Google source: shared Cloud Console steps plus the product-specific grant.
+// product: { apis, access, grant, scope, links: [{label, url}] }
+function dmvGoogleGuide_(product) {
+  return {
+    intro:
+      'Create the credential in Google Cloud Console, enable ' +
+      product.apis +
+      ' in that project, then give the credential access to ' +
+      product.access +
+      '.',
+    modes: {
+      service_account: {
+        steps: [
+          'Google Cloud Console → IAM & Admin → Service accounts → Create service account.',
+          'Open the account → Keys → Add key → JSON. Download the file and paste its whole contents above.',
+          'APIs & Services → Library: enable ' + product.apis + '.',
+          product.grant,
+        ],
+      },
+      oauth: {
+        steps: [
+          'Google Cloud Console → APIs & Services → Credentials → Create OAuth client (Web or Desktop).',
+          'APIs & Services → Library: enable ' + product.apis + '.',
+          'Authorize that client once for ' +
+            product.scope +
+            ' with offline access (the OAuth 2.0 Playground works with your own client) and copy the refresh token.',
+          'The Google account that authorized must have access to ' + product.access + '.',
+        ],
+      },
+      token: {
+        steps: [
+          'Paste an access token issued for ' +
+            product.scope +
+            ' (for example from the OAuth 2.0 Playground). It expires within an hour.',
+        ],
+      },
+    },
+    links: [
+      {
+        label: 'Service accounts',
+        url: 'https://console.cloud.google.com/iam-admin/serviceaccounts',
+      },
+      { label: 'OAuth clients', url: 'https://console.cloud.google.com/apis/credentials' },
+      { label: 'OAuth 2.0 Playground', url: 'https://developers.google.com/oauthplayground/' },
+    ].concat(product.links || []),
+  };
+}
+
+// A table-name search term safe to embed in an information_schema query: lower-case, no quotes.
+function dmvTableSearch_(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_ .-]/g, '')
+    .slice(0, 80);
+}
+
+// Group information_schema rows into {name, columns} tables, keeping column order.
+function dmvGroupTables_(rows, nameOf) {
+  var tables = [],
+    byName = Object.create(null);
+  rows.forEach(function (row) {
+    var name = nameOf(row);
+    if (!byName[name]) {
+      byName[name] = { name: name, columns: [] };
+      tables.push(byName[name]);
+    }
+    byName[name].columns.push({ name: String(row.column_name), type: String(row.data_type) });
+  });
+  return tables;
 }
 
 // Bearer token for Google APIs from the context; other providers read their own credentials.
 function dmvBearer_(ctx) {
   var token =
     typeof ctx.accessToken === 'function' ? ctx.accessToken() : (ctx.credentials || {}).accessToken;
-  if (!token) throw new Error('Connect a Google account, access token, or service account first.');
+  if (!token) throw new Error('Add a service account key, OAuth client, or access token first.');
   return token;
 }
 

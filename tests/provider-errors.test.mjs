@@ -37,21 +37,22 @@ test('Google Ads fixed messages distinguish project approval and account authori
     f.state.responses.push({ code: 403, body: { error: { message: 'PRIVATE_SECRET', details: [{ errors: [{
       errorCode: { authorizationError: code }, message: 'PRIVATE_SECRET', trigger: 'PRIVATE_SECRET',
     }] }] } } });
-    assert.throws(() => f.api.dmvDiscoverAccounts({ connectorId: 'google_ads', credentials: { authMode: 'native' } }),
+    assert.throws(() => f.api.dmvDiscoverAccounts({ connectorId: 'google_ads', credentials: { authMode: 'token', accessToken: 'g-offline-token' } }),
       error => expected.test(error.message) && !error.message.includes('PRIVATE_SECRET'));
   }
 });
 
-test('native Ads discovery, save verification and subsequent test work without legacy developer token', () => {
+test('Ads discovery, save verification and subsequent test work without legacy developer token', () => {
   const f = ads();
   const id = '1234567890';
   f.state.responses.push({ body: { resourceNames: ['customers/' + id] } }, { body: { results: [{ customerClient: {
     id, descriptiveName: 'Native account', manager: false, status: 'ENABLED',
   } }] } });
-  const discovered = f.api.dmvDiscoverAccounts({ connectorId: 'google_ads', credentials: { authMode: 'native' } });
+  const discovered = f.api.dmvDiscoverAccounts({ connectorId: 'google_ads', credentials: { authMode: 'token', accessToken: 'g-offline-token' } });
   assert.equal(discovered.accounts[0].credentials.customerId, id);
   f.state.responses.push({ body: { results: [{ customer: { id } }] } });
-  const saved = f.api.dmvSaveConnection({ connectorId: 'google_ads', label: 'Native account', credentials: { authMode: 'native', customerId: id } });
+  const saved = f.api.dmvSaveConnection({ connectorId: 'google_ads', label: 'Token account', credentials: { authMode: 'token', accessToken: 'g-offline-token', customerId: id } });
+  assert.equal(saved.verified, true);
   f.state.responses.push({ body: { results: [{ customer: { id } }] } });
   assert.equal(f.api.dmvTestConnection(saved.id).ok, true);
   assert.ok(f.state.http.every(call => !Object.hasOwn(call.options.headers, 'developer-token')));

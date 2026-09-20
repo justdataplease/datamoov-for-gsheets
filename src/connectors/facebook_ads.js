@@ -173,6 +173,22 @@ dmvRegisterConnector_({
   color: '#0866ff',
   test: dmvFacebookAdsTest_,
   allowedHosts: ['graph.facebook.com'],
+  guide: {
+    intro: 'A system user token from Meta Business Suite keeps working without a browser login.',
+    steps: [
+      'Meta Business Suite → Settings → Users → System users → Add (Admin or Employee role).',
+      'Assign assets: give the system user the ad account with View performance.',
+      'Generate token → choose the app → tick ads_read → set expiry to Never → copy the token.',
+      'The ad account ID is the number under Accounts → Ad accounts, with or without act_.',
+    ],
+    links: [
+      { label: 'System users', url: 'https://business.facebook.com/settings/system-users' },
+      {
+        label: 'Marketing API tokens',
+        url: 'https://developers.facebook.com/docs/marketing-api/overview/authorization',
+      },
+    ],
+  },
   authFields: [
     {
       key: 'adAccountId',

@@ -15,9 +15,13 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | src/dmv_http.js | Bounded HTTPS requests, retries and Google access tokens |
 | src/dmv_sql.js | Shared conservative read-only SQL validation |
 | src/dmv_connector_helpers.js | Provider-neutral helpers: Google credential fields, field selection, discovery check, number/text coercion, page budget, UTC date window, chunk validation/merging and complete-fetch wrapper |
+| src/dmv_ai.js | AI provider settings (key private per user) and the Anthropic, OpenAI and Gemini adapters over the shared transport |
+| src/dmv_chat.js | One chat turn: system prompt from the live catalog, tool schemas, bounded tool loop, transcript replay, budget-exhausted final answer |
+| src/dmv_chat_tools.js | Chat tools: run_report, discover_fields, summarize, write_to_sheet, read_sheet, create_chart, ask_user; per-turn results with a one-hour private cache |
 | src/connectors/ | One self-contained declaration and adapter per provider |
 | src/dmv_sidebar.html | Sidebar structure |
 | src/dmv_client.html | Browser state, form rendering and server calls |
+| src/dmv_client_chat.html | Chat panel: AI settings card, messages, activity lines, option chips |
 | src/dmv_styles.html | Sidebar styles |
 | src/appsscript.json | Google scopes, runtime and Sheets service |
 | tests/ | Real implementation exercised with offline services and provider fixtures |
@@ -28,6 +32,8 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 Apps Script server files share a global namespace. The dmv prefix identifies the app's functions; names ending in an underscore are internal helpers. Node imports belong only in tools and tests.
 
 The runtime resolves and validates the date range before calling fetch, and the context exposes checkDeadline() for connectors to enforce the shared deadline. Continuations retain the initially resolved dates across executions. Connectors call dmvSelectFields_ to resolve the user's selection against their declared or discovered descriptors, so every source shares one selection rule and one error vocabulary.
+
+The chat path reuses the report path: `dmvValidateQuery_` validates a model-supplied query exactly like a saved report, `dmvFetchReport_` fetches it, `dmvWriteReport_` writes it. The model only sees summaries; `dmv_chat_tools.js` owns the summarization rules. See [chat](chat.md).
 
 The report path validates settings, fetches all selected data, normalizes the complete result into a typed matrix, verifies the destination, then writes in one Sheets batch. A report with fetchChunk may stage validated pages in private UserProperties and pause between executions; the full result must still pass the same final normalization and writer. The same matrix supplies size checks and the output fingerprint. Provider code owns API semantics; shared code detects the optional function and never switches on a source name. See [chunk continuation](chunk-continuation.md) for checkpoint limits and recovery behavior.
 

@@ -119,43 +119,22 @@ function dmvSaveConnection(input) {
       throw new Error('Wait for the current refresh to finish before editing this connection.');
     if (!previous && dmvList_('connection').length >= DMV_LIMITS.maxConnections)
       throw new Error('Keep at most ' + DMV_LIMITS.maxConnections + ' connections in this app.');
-    var credentials = dmvConnectionCredentials_(connector, input, previous);
-    credentials = dmvFieldsInput_(connector.authFields, credentials);
-    if (connector.googleScopes) {
-      var mode = credentials.authMode || 'native';
-      if (mode === 'token' && !credentials.accessToken)
-        throw new Error('Paste a Google access token.');
-      if (mode === 'oauth') {
-        ['clientId', 'clientSecret', 'refreshToken'].forEach(function (key) {
-          var label = {
-            clientId: 'OAuth client ID',
-            clientSecret: 'OAuth client secret',
-            refreshToken: 'OAuth refresh token',
-          }[key];
-          if (typeof credentials[key] !== 'string') throw new Error(label + ' is required.');
-          credentials[key] = dmvText_(
-            credentials[key],
-            label,
-            key === 'clientId' ? 500 : 12000,
-            true
-          );
-        });
-      }
-      if (mode === 'service_account') {
-        var account;
-        try {
-          account = JSON.parse(credentials.serviceAccountJson || '');
-        } catch (error) {
-          throw new Error('Paste valid service-account JSON.');
-        }
-        if (account.type !== 'service_account' || !account.private_key || !account.client_email)
-          throw new Error('The service-account key is incomplete.');
-      }
-    }
-    var selectionKeys = dmvAccountSelectionKeys_(connector);
+    var credentials = dmvFieldsInput_(
+      connector.authFields,
+      dmvConnectionCredentials_(connector, input, previous)
+    );
+    (connector.authFields || []).forEach(function (field) {
+      if (String(credentials[field.key] || '').length > 12000)
+        throw new Error(field.label + ' is too long.');
+    });
+    var changed =
+      !previous ||
+      (connector.authFields || []).some(function (field) {
+        return credentials[field.key] !== previous.credentials[field.key];
+      });
     var selectionChanged =
       previous &&
-      selectionKeys.some(function (key) {
+      dmvAccountSelectionKeys_(connector).some(function (key) {
         return String(previous.credentials[key] || '') !== String(credentials[key] || '');
       });
     if (
@@ -165,25 +144,10 @@ function dmvSaveConnection(input) {
       })
     )
       throw new Error('Create a new connection to change the account used by saved reports.');
-    var verifyNativeSelection =
-      connector.accountDiscovery &&
-      dmvVisible_(connector.accountDiscovery, credentials) &&
-      (!previous ||
-        selectionChanged ||
-        !dmvVisible_(connector.accountDiscovery, previous.credentials));
-    var verifyOwnOAuth =
-      connector.googleScopes &&
-      credentials.authMode === 'oauth' &&
-      (!previous ||
-        (connector.authFields || []).some(function (field) {
-          return (
-            dmvVisible_(field, credentials) &&
-            credentials[field.key] !== previous.credentials[field.key]
-          );
-        }));
-    if (verifyNativeSelection || verifyOwnOAuth) {
-      if (verifyNativeSelection && typeof connector.test !== 'function')
-        throw new Error('Account verification is unavailable.');
+    // New or changed credentials are checked with the provider before they are saved, so a bad
+    // key fails here instead of at the first scheduled refresh. Label-only edits skip the check.
+    var verified = changed && (typeof connector.test === 'function' || !!connector.googleScopes);
+    if (verified) {
       try {
         var context = dmvContext_(
           connector,
@@ -205,8 +169,33 @@ function dmvSaveConnection(input) {
       revision: previous ? (previous.revision || 0) + 1 : 1,
     };
     dmvSave_('connection', connection);
-    return dmvConnectionSummary_(connection);
+    var summary = dmvConnectionSummary_(connection);
+    summary.verified = verified;
+    return summary;
   });
+}
+
+// Persist a provider-issued replacement secret (a rotated refresh token) into the saved
+// connection. Skipped when the user edited the connection meanwhile; only secret fields change.
+function dmvRotateCredentials_(connection, patch) {
+  var raw = dmvStore_().getProperty(dmvKey_('connection', connection.id));
+  if (!raw) return;
+  var saved = JSON.parse(raw);
+  if ((saved.revision || 0) !== (connection.revision || 0)) return;
+  var secrets = (dmvConnector_(saved.connectorId).authFields || [])
+    .filter(function (field) {
+      return field.secret || field.type === 'password';
+    })
+    .map(function (field) {
+      return field.key;
+    });
+  var changed = false;
+  Object.keys(patch).forEach(function (key) {
+    if (secrets.indexOf(key) < 0 || typeof patch[key] !== 'string') return;
+    saved.credentials[key] = patch[key];
+    changed = true;
+  });
+  if (changed) dmvSave_('connection', saved);
 }
 
 function dmvDeleteConnection(id) {

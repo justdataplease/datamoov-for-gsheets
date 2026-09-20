@@ -7,7 +7,7 @@ function dmvGa4Fields_() {
     f('sessionMedium', 'Session medium', 'text', true, { role: 'dimension' }),
     f('sessionCampaignName', 'Session campaign', 'text', true, { role: 'dimension' }),
     f('sessions', 'Sessions', 'number', true, { role: 'metric' }),
-    f('activeUsers', 'Active users', 'number', true, { role: 'metric' }),
+    f('activeUsers', 'Active users', 'number', true, { role: 'metric', additive: false }),
     f('screenPageViews', 'Page views', 'number', true, { role: 'metric' }),
     f('keyEvents', 'Key events', 'number', true, { role: 'metric' }),
     f('totalRevenue', 'Total revenue', 'currency', true, { role: 'metric' }),
@@ -52,7 +52,13 @@ function dmvGa4Metadata_(ctx, connection) {
           item.uiName || item.apiName,
           type,
           defaults.indexOf(item.apiName) >= 0,
-          { role: role, help: item.description || '', custom: !!item.customDefinition }
+          {
+            role: role,
+            help: item.description || '',
+            custom: !!item.customDefinition,
+            // User counts are deduplicated per row and cannot be added across dates or dimensions.
+            additive: !(role === 'metric' && /users$/i.test(item.apiName)),
+          }
         )
       );
     });
@@ -378,8 +384,20 @@ dmvRegisterConnector_({
   accountDiscovery: {
     label: 'Google Analytics property',
     credentialKeys: ['propertyId'],
-    showWhen: { key: 'authMode', value: 'native' },
   },
+  guide: dmvGoogleGuide_({
+    apis: 'the Google Analytics Data API and Google Analytics Admin API',
+    access: 'the GA4 property',
+    scope: 'https://www.googleapis.com/auth/analytics.readonly',
+    grant:
+      'Google Analytics → Admin → Property access management → add the service account email (client_email) as Viewer.',
+    links: [
+      {
+        label: 'GA4 property access',
+        url: 'https://support.google.com/analytics/answer/9305587',
+      },
+    ],
+  }),
   discoverAccounts: dmvGa4DiscoverAccounts_,
   googleScopes: ['https://www.googleapis.com/auth/analytics.readonly'],
   authFields: [
