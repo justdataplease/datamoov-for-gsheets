@@ -543,7 +543,8 @@ var dmvAiGemini_ = {
             return {
               name: tool.name,
               description: tool.description,
-              parameters: tool.input_schema,
+              // JSON Schema keywords such as additionalProperties are not proto Schema fields.
+              parametersJsonSchema: tool.input_schema,
             };
           }),
         },

@@ -65,8 +65,8 @@ function dmvValidateDashboard_(input, spreadsheet) {
       'Source row limit'
     );
     var id = source.id === undefined ? 'source' + (index + 1) : source.id;
-    if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(id) || ids[id])
-      throw new Error('Use distinct ordinary source IDs.');
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(id) || ids[id])
+      throw new Error('Use distinct source IDs of 1 to 80 letters, digits, underscores or dashes.');
     ids[id] = true;
     var label = dmvText_(source.label, 'Source label', 80, true);
     if (labels[label]) throw new Error('Use distinct dashboard source labels.');

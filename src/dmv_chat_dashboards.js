@@ -16,7 +16,9 @@ function dmvChatDashboardTools_(session, baseTools) {
   summary.required = [];
   query.properties.id = {
     type: 'string',
-    description: 'A stable local source key, such as ads or facebook.',
+    pattern: '^[a-zA-Z0-9_-]{1,80}$',
+    maxLength: 80,
+    description: 'A distinct stable local source key using letters, digits, underscores or dashes.',
   };
   query.properties.label = {
     type: 'string',
