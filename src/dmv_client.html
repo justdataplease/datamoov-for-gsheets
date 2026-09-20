@@ -666,6 +666,125 @@
       };
     }
     // ---- Settings: saved credentials ----
+    let credentialImportRunning = false;
+    function renderCredentialImport(result) {
+      const region = $('credential-import-result');
+      const failed = ['credentials', 'connections'].flatMap((kind) =>
+        (result[kind] || []).filter((item) => item.status === 'failed')
+      );
+      region.replaceChildren();
+      region.className = 'notice credential-import-result' + (failed.length ? ' error' : '');
+      region.append(
+        el(
+          'p',
+          '',
+          failed.length ? 'Import finished with items that need attention.' : 'Import complete.'
+        )
+      );
+      for (const [kind, label] of [
+        ['credentials', 'Credentials'],
+        ['connections', 'Connections'],
+      ]) {
+        const items = result[kind] || [];
+        const count = (status) => items.filter((item) => item.status === status).length;
+        region.append(
+          el(
+            'p',
+            '',
+            label +
+              ': ' +
+              count('saved') +
+              ' added, ' +
+              count('existing') +
+              ' already saved, ' +
+              count('failed') +
+              ' failed.'
+          )
+        );
+      }
+      if (failed.length) {
+        const list = el('ul');
+        for (const item of failed)
+          list.append(
+            el(
+              'li',
+              '',
+              (item.label || 'Import item') +
+                ': ' +
+                (item.message || 'Could not import this item. Check its credentials and try again.')
+            )
+          );
+        region.append(list);
+      }
+      region.hidden = false;
+    }
+    async function importCredentials() {
+      const input = $('credential-import-file');
+      let file = input.files?.[0];
+      input.value = '';
+      if (!file || credentialImportRunning) return;
+      credentialImportRunning = true;
+      input.disabled = true;
+      await busy($('import-credentials'), 'Importing\u2026', async () => {
+        const region = $('credential-import-result');
+        let contents = '',
+          bundle = null;
+        region.className = 'notice info credential-import-result';
+        region.textContent = 'Importing credentials and checking connections\u2026';
+        region.hidden = false;
+        region.setAttribute('aria-busy', 'true');
+        try {
+          if (file.size > 250000) throw new Error('Choose a credentials file smaller than 250 KB.');
+          try {
+            contents = await file.text();
+          } catch {
+            throw new Error('Could not read the selected file. Choose it again.');
+          }
+          file = null;
+          if (contents.length > 250000)
+            throw new Error('Choose a credentials file smaller than 250 KB.');
+          try {
+            bundle = JSON.parse(contents);
+          } catch {
+            throw new Error('Choose a valid DataMoov credentials JSON file.');
+          }
+          contents = '';
+          if (
+            !bundle ||
+            typeof bundle !== 'object' ||
+            Array.isArray(bundle) ||
+            bundle.version !== 1 ||
+            !Array.isArray(bundle.credentials) ||
+            !Array.isArray(bundle.connections)
+          )
+            throw new Error('Choose a valid DataMoov credentials file with version 1.');
+          let result;
+          try {
+            result = await api('dmvImportCredentials', bundle);
+          } catch {
+            throw new Error('Import could not finish. Check the credentials file and try again.');
+          }
+          bundle = null;
+          if (!result || !Array.isArray(result.credentials) || !Array.isArray(result.connections))
+            throw new Error(
+              'The import response could not be read. Refresh Settings before trying again.'
+            );
+          renderCredentialImport(result);
+          await bootstrap();
+        } catch (error) {
+          region.className = 'notice error credential-import-result';
+          region.textContent = error.message;
+        } finally {
+          file = null;
+          contents = '';
+          bundle = null;
+          input.value = '';
+          region.removeAttribute('aria-busy');
+        }
+      });
+      input.disabled = false;
+      credentialImportRunning = false;
+    }
     function renderCredentials() {
       const list = $('credentials-list');
       list.replaceChildren();
@@ -1183,6 +1302,7 @@
           refreshConnections();
           refreshCredentialChoices();
         }
+        if (!credentialImportRunning) $('import-credentials').disabled = false;
         notice('');
       } catch (error) {
         notice(error.message || 'Could not open the workspace.', 'error');
@@ -1277,6 +1397,8 @@
       })
     );
     // ---- Settings tab handlers ----
+    $('import-credentials').addEventListener('click', () => $('credential-import-file').click());
+    $('credential-import-file').addEventListener('change', importCredentials);
     $('credential-family').addEventListener('change', () => renderCredentialFields());
     $('credential-fields').addEventListener('change', (event) => {
       updateConditionalFields(

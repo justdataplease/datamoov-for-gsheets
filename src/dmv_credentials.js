@@ -203,7 +203,10 @@ function dmvVerifyCredentialConnections_(family, values, previous, connections, 
   return verified;
 }
 
-function dmvSaveCredential(input) {
+function dmvSaveCredential(input, deadline) {
+  deadline = Number.isFinite(deadline)
+    ? Math.min(deadline, Date.now() + 240000)
+    : Date.now() + 240000;
   return dmvLocked_(function () {
     input = input || {};
     var family = dmvCredentialFamily_(input.family);
@@ -250,7 +253,7 @@ function dmvSaveCredential(input) {
     // verify their account access before the edited credential replaces the last working one.
     var verified = false;
     if (changed) {
-      var deadline = Date.now() + 240000;
+      if (Date.now() > deadline - 10000) throw new Error('Credential save reached its time limit.');
       if (family.google && values.authMode !== 'token') {
         try {
           dmvGoogleToken_(values, family.scopes, deadline);

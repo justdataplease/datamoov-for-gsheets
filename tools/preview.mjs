@@ -281,6 +281,77 @@ function installPreview(initial) {
       };
     },
     showWindow: () => ({ ok: true }),
+    dmvImportCredentials(bundle) {
+      if (window.DATAMOOV_PREVIEW_IMPORT_RESULT) return copy(window.DATAMOOV_PREVIEW_IMPORT_RESULT);
+      if (
+        !bundle ||
+        bundle.version !== 1 ||
+        !Array.isArray(bundle.credentials) ||
+        !Array.isArray(bundle.connections)
+      )
+        throw new Error('Choose a valid DataMoov credentials file.');
+      const result = { credentials: [], connections: [] },
+        refs = new Map();
+      for (const item of bundle.credentials) {
+        try {
+          const existing = data.credentials.find(
+            (value) => value.family === item.family && value.label === item.label
+          );
+          const saved = existing || handlers.dmvSaveCredential(item);
+          refs.set(item.ref, saved.id);
+          result.credentials.push({
+            ref: item.ref,
+            label: item.label,
+            status: existing ? 'existing' : 'saved',
+            id: saved.id,
+          });
+        } catch {
+          result.credentials.push({
+            ref: item.ref,
+            label: item.label,
+            status: 'failed',
+            message: 'Could not import this credential. Check its settings and try again.',
+          });
+        }
+      }
+      for (const item of bundle.connections) {
+        try {
+          const credentialId = refs.get(item.credentialRef);
+          if (!credentialId) throw new Error('Credential unavailable');
+          const existing = data.connections.find(
+            (value) =>
+              value.connectorId === item.connectorId &&
+              value.credentialId === credentialId &&
+              value.label === item.label
+          );
+          const saved = existing || handlers.dmvSaveConnection({ ...item, credentialId });
+          result.connections.push({
+            label: item.label,
+            status: existing ? 'existing' : 'saved',
+            id: saved.id,
+          });
+        } catch {
+          result.connections.push({
+            label: item.label,
+            status: 'failed',
+            message:
+              'Could not verify this connection. Check access with the provider and try again.',
+          });
+        }
+      }
+      result.summary = Object.fromEntries(
+        ['credentials', 'connections'].map((kind) => [
+          kind,
+          Object.fromEntries(
+            ['saved', 'existing', 'failed'].map((status) => [
+              status,
+              result[kind].filter((item) => item.status === status).length,
+            ])
+          ),
+        ])
+      );
+      return result;
+    },
     dmvSaveCredential(input) {
       if (!input.label) throw new Error('Enter a credential name.');
       const fam = data.credentialFamilies.find((item) => item.id === input.family);

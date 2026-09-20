@@ -145,7 +145,10 @@ function dmvDiscoverAccounts(input) {
   }
 }
 
-function dmvSaveConnection(input) {
+function dmvSaveConnection(input, deadline) {
+  deadline = Number.isFinite(deadline)
+    ? Math.min(deadline, Date.now() + 240000)
+    : Date.now() + 240000;
   return dmvLocked_(function () {
     input = input || {};
     var connector = dmvConnector_(input.connectorId);
@@ -206,6 +209,7 @@ function dmvSaveConnection(input) {
     // key fails here instead of at the first scheduled refresh. Label-only edits skip the check.
     var verified = changed && (typeof connector.test === 'function' || !!connector.googleScopes);
     if (verified) {
+      if (Date.now() > deadline - 10000) throw new Error('Connection save reached its time limit.');
       try {
         // Rotated secrets from the check land on the credential record, or (embedded) on the
         // very object stored below.
@@ -219,7 +223,8 @@ function dmvSaveConnection(input) {
               }
             : { credentials: credentials },
           { config: {}, fields: [], maxRows: 1 },
-          {}
+          {},
+          deadline
         );
         if (typeof connector.test === 'function') connector.test(context);
         else context.accessToken();

@@ -517,6 +517,32 @@
                 </svg>
               </button>
             </div>
+            <button
+              type="button"
+              id="import-credentials"
+              class="button secondary full"
+              aria-describedby="credential-import-help"
+              disabled
+            >
+              Import from file
+            </button>
+            <input
+              type="file"
+              id="credential-import-file"
+              accept=".json,application/json"
+              aria-label="Choose a DataMoov credentials file"
+              hidden
+            />
+            <p id="credential-import-help" class="field-help">
+              Import a local DataMoov credentials file into your private Google account settings.
+            </p>
+            <div
+              id="credential-import-result"
+              class="notice credential-import-result"
+              role="status"
+              aria-live="polite"
+              hidden
+            ></div>
             <div id="credentials-list" class="card-list"></div>
             <div id="credential-editor" class="connection-editor" hidden>
               <div class="field-heading">
