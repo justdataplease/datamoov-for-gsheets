@@ -11,6 +11,7 @@ function dmvBootstrap() {
   while (spreadsheet.getSheetByName(fallbackName)) fallbackName = 'DataMoov report ' + suffix++;
   return {
     branding: { name: 'DataMoov', version: '1.0 beta' },
+    welcome: dmvWelcomeOffer_(spreadsheet),
     catalog: dmvCatalog_(),
     connections: dmvConnections_().map(dmvConnectionSummary_),
     credentials: dmvCredentialSummaries_(),

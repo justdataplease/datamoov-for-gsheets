@@ -179,6 +179,8 @@ export function previewFixture(catalog, aiProviders = [], families = []) {
     reports,
     dashboards: [],
     sheetNames: ['Campaigns', 'Website', 'Deals', 'New report'],
+    // The preview workspace is an established one; DATAMOOV_PREVIEW_WELCOME offers the page.
+    welcome: { offer: false, sheetName: 'Start here' },
     defaultTarget: { sheetName: 'New report', startCell: 'A1' },
     dateTimezone: 'Europe/Athens',
     limits: { maxRows: 20000, defaultRows: 1000 },
@@ -229,7 +231,15 @@ function installPreview(initial) {
     return 'Sample ' + (index + 1);
   }
   const handlers = {
-    dmvBootstrap: () => copy(data),
+    dmvBootstrap: () => ({
+      ...copy(data),
+      welcome: { offer: Boolean(window.DATAMOOV_PREVIEW_WELCOME), sheetName: 'Start here' },
+    }),
+    dmvCreateWelcome() {
+      if (!window.DATAMOOV_PREVIEW_WELCOME) return null;
+      window.DATAMOOV_PREVIEW_WELCOME = false;
+      return { sheetName: 'Start here', url: 'https://example.invalid/start-here' };
+    },
     dmvDiscoverAccounts(input) {
       window.DATAMOOV_PREVIEW_LAST_ACCOUNT_REQUEST = copy(input);
       if (Array.isArray(window.DATAMOOV_PREVIEW_ACCOUNTS))

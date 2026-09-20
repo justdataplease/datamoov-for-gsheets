@@ -109,12 +109,13 @@ export function createDatamoovSandbox() {
         return result;
       },
     };
-    for (const method of ['setFontWeight', 'setBackground', 'setFontColor', 'setNumberFormat', 'setWrap', 'setVerticalAlignment']) result[method] = () => result;
+    for (const method of ['setFontWeight', 'setBackground', 'setFontColor', 'setNumberFormat', 'setWrap', 'setVerticalAlignment', 'setFontSize']) result[method] = () => result;
     return result;
   }
   function makeSheet(name, maxRows = 100, maxColumns = 26, id = ++sheetSerial) {
     const sheet = {
       id, name, maxRows, maxColumns, hidden: false, frozenRows: 0, cells: new Map(),
+      columnWidths: new Map(), hiddenGridlines: false, tabColor: null,
       getName: () => sheet.name, getSheetId: () => sheet.id,
       isSheetHidden: () => sheet.hidden,
       showSheet() { sheet.hidden = false; return sheet; },
@@ -139,6 +140,9 @@ export function createDatamoovSandbox() {
       insertRowsAfter(_after, count) { sheet.maxRows += count; },
       insertColumnsAfter(_after, count) { sheet.maxColumns += count; },
       setFrozenRows(count) { sheet.frozenRows = count; return sheet; },
+      setColumnWidth(column, width) { sheet.columnWidths.set(column, width); return sheet; },
+      setHiddenGridlines(hidden) { sheet.hiddenGridlines = hidden; return sheet; },
+      setTabColor(color) { sheet.tabColor = color; return sheet; },
     };
     return sheet;
   }
@@ -395,7 +399,7 @@ export function createDatamoovSandbox() {
     } },
   };
   const context = vm.createContext(fakeServices, { codeGeneration: { strings: false, wasm: false } });
-  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_credentials.js', 'dmv_connections.js', 'dmv_credential_import.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js', 'dmv_continuation.js', 'dmv_ai.js', 'dmv_chat_tools.js', 'dmv_chat_sheets.js', 'dmv_chat_pivots.js', 'dmv_dashboards.js', 'dmv_chat_dashboards.js', 'dmv_chat.js']) {
+  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_welcome.js', 'dmv_credentials.js', 'dmv_connections.js', 'dmv_credential_import.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js', 'dmv_continuation.js', 'dmv_ai.js', 'dmv_chat_tools.js', 'dmv_chat_sheets.js', 'dmv_chat_pivots.js', 'dmv_dashboards.js', 'dmv_chat_dashboards.js', 'dmv_chat.js']) {
     new vm.Script(readFileSync(new URL(`../../src/${filename}`, import.meta.url), 'utf8'), { filename }).runInContext(context, { timeout: 1000 });
   }
   const book = addSpreadsheet();

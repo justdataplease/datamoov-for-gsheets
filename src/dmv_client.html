@@ -1629,6 +1629,17 @@
       $('data-preview').hidden = false;
       $('data-preview').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
+    // A first open lands on a page explaining what DataMoov does. It is written after the
+    // workspace is usable, and a failure here never disturbs the sidebar.
+    async function offerWelcome() {
+      try {
+        const page = await api('dmvCreateWelcome');
+        if (page?.sheetName)
+          notice('Added a “' + page.sheetName + '” tab with the steps to get going.');
+      } catch (ignored) {
+        // The sidebar works perfectly well without the page.
+      }
+    }
     async function bootstrap() {
       resetDashboards();
       $('boot-state').hidden = false;
@@ -1671,6 +1682,7 @@
         }
         if (!credentialImportRunning) $('import-credentials').disabled = false;
         notice('');
+        if (data.welcome?.offer) offerWelcome();
       } catch (error) {
         notice(error.message || 'Could not open the workspace.', 'error');
         $('retry-bootstrap').hidden = false;

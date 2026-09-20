@@ -25,6 +25,7 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | src/dmv_dashboards.js | Private dashboard plans (datasets and tiles), fresh dataset execution, the dashboard page layout, native charts and the atomic multi-tab refresh |
 | src/dmv_chat_dashboards.js | Chat adapters for saving, listing and running the dashboard runtime |
 | src/connectors/ | One self-contained declaration and adapter per provider |
+| src/dmv_welcome.js | The one-time "Start here" page: what DataMoov does and the order to do it in |
 | src/dmv_sidebar.html | Sidebar structure |
 | src/dmv_client.html | Browser state, forms, connection form with its chat instructions, saved dashboard cards and server calls |
 | src/dmv_client_chat.html | Chat panel: AI and general settings, safe Markdown and output links, live activity, default-on completed actions and option chips |
