@@ -260,6 +260,19 @@ dmvRegisterConnector_({
   description: 'Support tickets, custom fields, replies, and resolution times.',
   category: 'Support',
   color: '#03363d',
+  icon: {
+    viewBox: '0 0 250 250',
+    shapes: [
+      {
+        d: 'm137.407 49.592-82.73-23.5-21.568 76.936L8 191.231l82.73 23.177L113.907 132l23.5-82.409Z',
+        fill: '#78a300',
+      },
+      {
+        d: 'm160.263 214.408 82.73-23.177-23.499-82.409L137.086 132l23.177 82.408Z',
+        fill: '#00363d',
+      },
+    ],
+  },
   allowedHosts: function (credentials) {
     var subdomain = String(credentials.subdomain || '')
       .trim()

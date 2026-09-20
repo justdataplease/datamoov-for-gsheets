@@ -261,6 +261,16 @@
     font-weight: 750;
     flex-shrink: 0;
   }
+  /* A brand mark carries its own colour, so its tile stays neutral and only hints at an edge. */
+  .provider-badge.has-icon {
+    background: #fff;
+    border: 1px solid var(--line);
+  }
+  .provider-badge svg {
+    width: 18px;
+    height: 18px;
+    display: block;
+  }
   .card-title {
     font-size: 12px;
     font-weight: 650;
@@ -507,6 +517,34 @@
     min-height: 85px;
     resize: vertical;
     line-height: 1.6;
+  }
+  .select-with-badge {
+    position: relative;
+  }
+  .select-with-badge select {
+    padding-left: 31px;
+  }
+  .field-badge {
+    position: absolute;
+    left: 9px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    display: grid;
+    place-items: center;
+    font-size: 8px;
+    font-weight: 750;
+    color: var(--primary);
+    pointer-events: none;
+  }
+  .field-badge svg {
+    width: 16px;
+    height: 16px;
+    display: block;
+  }
+  fieldset:disabled .field-badge {
+    opacity: 0.55;
   }
   select {
     padding-right: 5px;

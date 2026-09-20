@@ -379,6 +379,19 @@ dmvRegisterConnector_({
   description: 'Traffic, engagement and key events with property-specific field discovery.',
   category: 'Marketing',
   color: '#e37400',
+  icon: {
+    viewBox: '0 0 250 250',
+    shapes: [
+      {
+        d: 'M163.287 50.691v147.055c0 16.454 11.334 25.623 23.357 25.623 11.123 0 23.357-7.798 23.357-25.623V51.806c0-15.085-11.122-24.51-23.357-24.51-12.234 0-23.357 10.394-23.357 23.395Z',
+        fill: '#f9ab00',
+      },
+      {
+        d: 'M102.111 125.333v72.413c0 16.454 11.334 25.623 23.357 25.623 11.123 0 23.357-7.798 23.357-25.623v-71.299c0-15.085-11.122-24.509-23.357-24.509-12.234 0-23.357 10.394-23.357 23.395Zm-37.815 98.036c12.9 0 23.357-10.474 23.357-23.395s-10.457-23.395-23.357-23.395c-12.9 0-23.357 10.474-23.357 23.395s10.458 23.395 23.357 23.395Z',
+        fill: '#e37400',
+      },
+    ],
+  },
   test: dmvGa4Discover_,
   allowedHosts: ['analyticsdata.googleapis.com', 'analyticsadmin.googleapis.com'],
   accountDiscovery: {

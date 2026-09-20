@@ -152,8 +152,11 @@
                 <span>1</span>
                 <h2>Choose your data</h2>
               </div>
-              <label for="report-provider">Data source</label
-              ><select id="report-provider" required></select>
+              <label for="report-provider">Data source</label>
+              <div class="select-with-badge">
+                <span class="field-badge" id="report-provider-badge" aria-hidden="true"></span
+                ><select id="report-provider" required></select>
+              </div>
               <label for="report-connection">Your connection</label
               ><select id="report-connection" required></select>
               <div id="connection-empty" class="inline-note" hidden>
@@ -410,8 +413,11 @@
           </div>
           <form id="connection-form">
             <fieldset id="connection-fields" disabled>
-              <label for="connection-provider">Data source</label
-              ><select id="connection-provider" required></select>
+              <label for="connection-provider">Data source</label>
+              <div class="select-with-badge">
+                <span class="field-badge" id="connection-provider-badge" aria-hidden="true"></span
+                ><select id="connection-provider" required></select>
+              </div>
               <label for="connection-label">Connection name</label
               ><input
                 id="connection-label"

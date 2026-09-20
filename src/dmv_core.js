@@ -36,6 +36,33 @@ function dmvDefinition_(connector, reportType) {
   return report;
 }
 
+// A source icon is a short list of filled paths. Only geometry and colour cross the
+// boundary, so the browser can build the mark with createElementNS and never parses markup.
+function dmvIcon_(icon) {
+  if (!icon || !Array.isArray(icon.shapes)) return null;
+  var viewBox = String(icon.viewBox || '0 0 24 24').trim();
+  // Official artwork keeps its own coordinate system, so the mark is never re-plotted by hand.
+  if (!/^-?[0-9.]+ -?[0-9.]+ [0-9.]+ [0-9.]+$/.test(viewBox)) return null;
+  var shapes = icon.shapes
+    .filter(function (shape) {
+      return (
+        shape &&
+        typeof shape.d === 'string' &&
+        shape.d.length <= 8000 &&
+        /^[MmLlHhVvCcSsQqTtAaZz0-9eE ,.+-]+$/.test(shape.d) &&
+        /^#[0-9a-fA-F]{6}$/.test(String(shape.fill || ''))
+      );
+    })
+    .map(function (shape) {
+      var path = { d: shape.d, fill: String(shape.fill).toLowerCase() };
+      if (shape.rule === 'evenodd') path.rule = 'evenodd';
+      var opacity = Number(shape.opacity);
+      if (Number.isFinite(opacity) && opacity > 0 && opacity < 1) path.opacity = opacity;
+      return path;
+    });
+  return shapes.length ? { viewBox: viewBox, shapes: shapes } : null;
+}
+
 function dmvCatalog_() {
   return Object.keys(DMV_CONNECTORS || {})
     .map(function (id) {
@@ -47,6 +74,7 @@ function dmvCatalog_() {
           description: definition.description,
           category: definition.category,
           color: definition.color,
+          icon: dmvIcon_(definition.icon),
           authFields: definition.authFields || [],
           accountDiscovery: definition.accountDiscovery || null,
           supportsAccountDiscovery: typeof definition.discoverAccounts === 'function',

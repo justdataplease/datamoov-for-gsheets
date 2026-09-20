@@ -48,6 +48,54 @@ test('complete production bundle registers twelve offered sources and fifty-two 
   assert.deepEqual(JSON.parse(JSON.stringify(catalog.filter((connector) => connector.describesTables).map((connector) => connector.id))), ['bigquery', 'postgres', 'snowflake']);
 });
 
+test('every offered source ships an official brand mark the browser can rebuild safely', () => {
+  const app = loadProduction();
+  const pathCommands = /^[MmLlHhVvCcSsQqTtAaZz0-9eE ,.+-]+$/;
+  for (const connector of app.dmvCatalog_()) {
+    const icon = connector.icon;
+    assert.ok(icon, connector.id + ' declares an icon');
+    assert.match(icon.viewBox, /^-?[0-9.]+ -?[0-9.]+ [0-9.]+ [0-9.]+$/, connector.id + ' viewBox');
+    assert.ok(icon.shapes.length, connector.id + ' has at least one path');
+    for (const shape of icon.shapes) {
+      // Only geometry and colour cross the boundary: no markup, no url(), no remote reference.
+      assert.match(shape.d, pathCommands, connector.id + ' path data is geometry only');
+      assert.match(shape.fill, /^#[0-9a-f]{6}$/, connector.id + ' fill is a plain hex colour');
+      assert.deepEqual(
+        Object.keys(shape).filter(key => !['d', 'fill', 'rule', 'opacity'].includes(key)),
+        [], connector.id + ' carries no extra icon attributes');
+      if ('rule' in shape) assert.equal(shape.rule, 'evenodd');
+      if ('opacity' in shape) assert.ok(shape.opacity > 0 && shape.opacity < 1);
+    }
+  }
+});
+
+test('the icon validator drops anything that is not a filled path', () => {
+  const app = loadProduction();
+  // dmvIcon_ builds its record inside the application realm, so compare the JSON it produces.
+  const built = icon => JSON.parse(JSON.stringify(app.dmvIcon_(icon) ?? null));
+  const valid = { viewBox: '0 0 250 250', shapes: [{ d: 'M0 0h24v24H0z', fill: '#FF7A59' }] };
+  assert.deepEqual(built(valid),
+    { viewBox: '0 0 250 250', shapes: [{ d: 'M0 0h24v24H0z', fill: '#ff7a59' }] });
+  assert.equal(app.dmvIcon_(null), null);
+  assert.equal(app.dmvIcon_({ shapes: 'M0 0' }), null);
+  assert.equal(app.dmvIcon_({ viewBox: '0 0 24', shapes: valid.shapes }), null, 'short viewBox');
+  assert.equal(app.dmvIcon_({ viewBox: 'javascript:alert(1)', shapes: valid.shapes }), null);
+  // A remote or scripted fill, a non-hex colour and stray markup all leave nothing behind.
+  assert.equal(app.dmvIcon_({ shapes: [{ d: 'M0 0h24v24H0z', fill: 'url(#a)' }] }), null);
+  assert.equal(app.dmvIcon_({ shapes: [{ d: 'M0 0h24v24H0z', fill: 'red' }] }), null);
+  assert.equal(app.dmvIcon_({ shapes: [{ d: '"/><script>x()</script>', fill: '#000000' }] }), null);
+  assert.equal(app.dmvIcon_({ shapes: [{ d: 'M0 0 url(#a)', fill: '#000000' }] }), null);
+  const mixed = built({ shapes: [
+    { d: 'M0 0h2v2H0z', fill: '#000000', rule: 'evenodd', opacity: 0.07, extra: 'dropped' },
+    { d: 'M0 0h2v2H0z', fill: '#000000', rule: 'nonzero', opacity: 4 },
+  ] });
+  assert.equal(mixed.viewBox, '0 0 24 24', 'a mark without a viewBox falls back to the 24 grid');
+  assert.deepEqual(mixed.shapes, [
+    { d: 'M0 0h2v2H0z', fill: '#000000', rule: 'evenodd', opacity: 0.07 },
+    { d: 'M0 0h2v2H0z', fill: '#000000' },
+  ]);
+});
+
 test('the sample credential bundle covers every source and carries no usable secret', () => {
   const app = loadProduction();
   const sample = app.dmvCredentialSample();

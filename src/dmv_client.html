@@ -45,6 +45,7 @@
       node.addEventListener('click', handler);
       return node;
     };
+    const SVG_NS = 'http://www.w3.org/2000/svg';
     const provider = (id) => state.catalog.find((item) => item.id === id);
     const currentProvider = () => provider($('report-provider').value);
     const currentReport = () =>
@@ -127,6 +128,7 @@
       select.replaceChildren();
       for (const source of state.catalog) select.append(option(source.id, source.label));
       if (selected && provider(selected)) select.value = selected;
+      paintSourceBadge(select);
     }
     function refreshConnections(selected) {
       const dropdown = $('report-connection');
@@ -140,22 +142,63 @@
       if (connections.some((item) => item.id === previous)) dropdown.value = previous;
       $('connection-empty').hidden = connections.length > 0;
     }
-    function providerBadge(source) {
-      const badge = el(
-        'span',
-        'provider-badge',
-        (source?.label || '?')
-          .split(/\s+/)
-          .map((word) => word[0])
-          .slice(0, 2)
-          .join('')
+    // Brand marks reach the browser as validated path geometry, never as markup: every path is
+    // built with createElementNS, so nothing a connector declares is ever parsed as HTML.
+    function providerIcon(source) {
+      const icon = source?.icon;
+      const shapes = Array.isArray(icon?.shapes) ? icon.shapes : [];
+      const svg = document.createElementNS(SVG_NS, 'svg');
+      svg.setAttribute(
+        'viewBox',
+        /^-?[\d.]+ -?[\d.]+ [\d.]+ [\d.]+$/.test(icon?.viewBox || '') ? icon.viewBox : '0 0 24 24'
       );
-      if (/^#[a-f\d]{6}$/i.test(source?.color || '')) {
-        badge.style.color = source.color;
-        badge.style.backgroundColor = source.color + '12';
+      svg.setAttribute('aria-hidden', 'true');
+      svg.setAttribute('focusable', 'false');
+      for (const shape of shapes) {
+        if (!/^[MmLlHhVvCcSsQqTtAaZz0-9eE ,.+-]+$/.test(shape?.d || '')) continue;
+        if (!/^#[0-9a-f]{6}$/i.test(shape?.fill || '')) continue;
+        const path = document.createElementNS(SVG_NS, 'path');
+        path.setAttribute('d', shape.d);
+        path.setAttribute('fill', shape.fill);
+        if (shape.rule === 'evenodd') path.setAttribute('fill-rule', 'evenodd');
+        if (shape.opacity > 0 && shape.opacity < 1)
+          path.setAttribute('opacity', String(shape.opacity));
+        svg.append(path);
       }
+      return svg.childElementCount ? svg : null;
+    }
+    // A source that declares no mark keeps the initials badge tinted with its brand colour.
+    function fillBadge(node, source) {
+      const icon = providerIcon(source);
+      node.replaceChildren();
+      node.style.color = '';
+      node.style.backgroundColor = '';
+      node.classList.toggle('has-icon', Boolean(icon));
+      node.title = source?.label || '';
+      if (icon) {
+        node.append(icon);
+        return node;
+      }
+      node.textContent = (source?.label || '?')
+        .split(/\s+/)
+        .map((word) => word[0])
+        .slice(0, 2)
+        .join('');
+      if (/^#[a-f\d]{6}$/i.test(source?.color || '')) {
+        node.style.color = source.color;
+        node.style.backgroundColor = source.color + '12';
+      }
+      return node;
+    }
+    function providerBadge(source) {
+      const badge = el('span', 'provider-badge');
       badge.setAttribute('aria-hidden', 'true');
-      return badge;
+      return fillBadge(badge, source);
+    }
+    // The source dropdowns stay native selects, so the chosen source's mark sits inside the control.
+    function paintSourceBadge(select) {
+      const node = $(select.id + '-badge');
+      if (node) fillBadge(node, provider(select.value));
     }
     function empty(title, description, icon = '▦') {
       const node = el('div', 'empty-state');
@@ -752,6 +795,7 @@
     }
     // A connection = a credential (saved, new, or embedded in older connections) + its own fields.
     function renderAuth(connection) {
+      paintSourceBadge($('connection-provider'));
       state.accountEpoch++;
       state.accountChoices = [];
       const source = provider($('connection-provider').value);
@@ -1347,6 +1391,7 @@
       updateSchedule();
     }
     function changeProvider(selectedType) {
+      paintSourceBadge($('report-provider'));
       refreshConnections('');
       $('report-type').replaceChildren();
       const reports = currentProvider()?.reports || [];
