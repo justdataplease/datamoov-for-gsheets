@@ -45,6 +45,9 @@ function dmvWriteReportsUnlocked_(spreadsheet, outputs, beforeCommit) {
   if (!Array.isArray(outputs) || !outputs.length || outputs.length > 8)
     throw new Error('Choose between one and eight report outputs.');
   var properties = dmvStore_();
+  // An earlier write in this execution may have created tabs the caller's Spreadsheet object
+  // has never seen; planning against it would try to create them a second time.
+  spreadsheet = dmvReopen_(spreadsheet);
   dmvRecoverOutputJournal_(spreadsheet, properties);
   var physicalGrids = dmvGridSizes_(spreadsheet.getId());
   var plan = {

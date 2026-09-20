@@ -95,7 +95,7 @@ test('a truncated answer gets one tool-free recovery without replaying a real fe
   assert.equal(f.requests.length, 4);
   assert.equal(f.fetched, 1);
   assert.equal(f.state.batches.length, 1);
-  assert.equal(f.book.getSheetByName('Performance report').getRange(2, 2).getValues()[0][0], 125.5);
+  assert.equal(f.tab('Performance report').getRange(2, 2).getValues()[0][0], 125.5);
   assert.equal(result.events.filter((event) => event.kind === 'write').length, 1);
   assert.ok(f.requests.slice(0, 3).every((request) => request.tools.length > 0));
   assert.deepEqual(f.requests[3].tools, []);

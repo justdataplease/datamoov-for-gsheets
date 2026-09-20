@@ -52,7 +52,7 @@ test('ranked winners write through the protected atomic writer into a new tab', 
   assert.equal(written.rows, 2);
   assert.equal(written.range, 'Top campaigns per month!A1:C3');
   assert.equal(f.state.batches.length, 1);
-  assert.equal(f.value(f.book.getSheetByName('Top campaigns per month'), 2, 3), 14);
+  assert.equal(f.value(f.tab('Top campaigns per month'), 2, 3), 14);
   const occupied = f.book.sheets[0];
   f.setCell(occupied, 1, 1, 'Keep this data');
   assert.throws(() => f.api.dmvChatWriteSheet_(f.session, { resultId: ranked.resultId, sheetName: occupied.getName() }), /existing data/);

@@ -1053,7 +1053,7 @@ function dmvChatWriteSheet_(session, input) {
   } catch (error) {
     if (sheetUpdated || error.sheetUpdated) {
       error.sheetUpdated = true;
-      var committedUrl = dmvSheetLink_(session.spreadsheet, report.target);
+      var committedUrl = dmvSheetLink_(dmvChatSeeNewTabs_(session), report.target);
       session.events.push({
         kind: 'write',
         text: 'Updated ' + sheetName + '. ' + error.message,
@@ -1062,7 +1062,7 @@ function dmvChatWriteSheet_(session, input) {
     }
     throw error;
   }
-  var sheet = session.spreadsheet.getSheetByName(sheetName);
+  var sheet = dmvChatSeeNewTabs_(session).getSheetByName(sheetName);
   var area = {
     sheetName: sheetName,
     sheetId: sheet.getSheetId(),

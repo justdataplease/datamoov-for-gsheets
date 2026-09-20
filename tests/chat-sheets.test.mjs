@@ -13,7 +13,7 @@ function fixture() {
     if (!options?.includeGridData) return get(id, options);
     f.state.gets.push({ spreadsheetId: id, options: plain(options) });
     const match = /^'((?:[^']|'')*)'!(.+)$/.exec(options.ranges[0]);
-    const sheet = f.state.books.get(id).getSheetByName(match[1].replace(/''/g, "'"));
+    const sheet = f.tab(match[1].replace(/''/g, "'"), f.state.books.get(id));
     const area = f.api.dmvChatSheetArea_(sheet, match[2]);
     return {
       sheets: [
@@ -323,7 +323,7 @@ test('freeze and new-tab creation are bounded, while rename protects saved repor
   assert.equal(f.sheet.frozenRows, 1);
   assert.equal(f.sheet.frozenColumns, 1);
   f.api.dmvChatEditSheet_(f.session, { action: 'create_sheet', newName: 'New output' });
-  assert.ok(f.book.getSheetByName('New output'));
+  assert.ok(f.tab('New output'));
   assert.throws(
     () => f.api.dmvChatEditSheet_(f.session, { action: 'create_sheet', newName: 'New output' }),
     /already exists/
@@ -339,7 +339,7 @@ test('freeze and new-tab creation are bounded, while rename protects saved repor
   assert.throws(() => f.edit('rename_sheet', { newName: 'Renamed' }), /saved dashboard/);
   f.api.dmvList_ = () => [];
   f.edit('rename_sheet', { newName: 'Renamed' });
-  assert.ok(f.book.getSheetByName('Renamed'));
+  assert.ok(f.tab('Renamed'));
   assert.equal(f.state.batches.length, 3);
 });
 

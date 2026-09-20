@@ -60,6 +60,18 @@ function dmvSpreadsheet_() {
   return spreadsheet;
 }
 
+// The Advanced Sheets service creates tabs on the server, but a Spreadsheet object Apps Script
+// already materialized never learns about them. Opening the spreadsheet again does.
+function dmvReopen_(spreadsheet) {
+  try {
+    SpreadsheetApp.flush();
+    return SpreadsheetApp.openById(spreadsheet.getId());
+  } catch (ignored) {
+    // A refresh failure must never undo an already committed write.
+    return spreadsheet;
+  }
+}
+
 // Output receipts are private to the user who wrote the report; other people's cells stay
 // protected by the existing-data check in the writer.
 function dmvOutputKey_(spreadsheetId, reportId) {

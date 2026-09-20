@@ -128,8 +128,8 @@
             </div>
             <p class="field-help">
               Create a dashboard directly in Chat, then refresh it here. It combines sources into a
-              Data tab and a Report tab; no separate saved reports are needed. Your setup stays
-              private.
+              Data tab and a Dashboard tab with the summary and charts; no separate saved reports
+              are needed. Your setup stays private.
             </p>
             <div id="dashboards-list" class="card-list"></div>
           </section>
@@ -591,15 +591,24 @@
                 </svg>
               </button>
             </div>
-            <button
-              type="button"
-              id="import-credentials"
-              class="button secondary full"
-              aria-describedby="credential-import-help"
-              disabled
-            >
-              Import from file
-            </button>
+            <div class="action-row">
+              <button
+                type="button"
+                id="import-credentials"
+                class="button secondary"
+                aria-describedby="credential-import-help"
+                disabled
+              >
+                Import from file</button
+              ><button
+                type="button"
+                id="sample-credentials"
+                class="button secondary"
+                aria-describedby="credential-import-help"
+              >
+                Download sample
+              </button>
+            </div>
             <input
               type="file"
               id="credential-import-file"

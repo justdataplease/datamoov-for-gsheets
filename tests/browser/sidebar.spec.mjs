@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
+import assert from 'node:assert/strict';
 
 async function startReport(page, source = 'google_ads') {
   await page.locator('#new-report').click();
@@ -606,5 +607,24 @@ test('AI settings keep standing instructions and link to where each key is creat
   await page.locator('#ai-settings summary').click();
   await expect(page.locator('#ai-instructions')).toHaveValue('Spend is in EUR. Brand campaigns start with BR_.');
   expect((await rpc(page, 'dmvAiSettings')).instructions).toContain('EUR');
+  await noOverflow(page);
+});
+
+test('the credentials sample downloads as an editable bundle covering every source', async ({
+  page,
+}) => {
+  await page.locator('#tab-settings').click();
+  const button = page.locator('#sample-credentials');
+  await expect(button).toBeEnabled();
+  const [download] = await Promise.all([page.waitForEvent('download'), button.click()]);
+  assert.equal(download.suggestedFilename(), 'datamoov-credentials-sample.json');
+  const stream = await download.createReadStream();
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  const bundle = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  assert.equal(bundle.version, 1);
+  assert.ok(bundle.connections.length >= 3);
+  assert.ok(bundle.credentials.every((item) => item.ref && item.family));
+  await expect(page.locator('#notice')).toContainText('placeholder values');
   await noOverflow(page);
 });

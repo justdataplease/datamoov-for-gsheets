@@ -148,7 +148,7 @@ test('a full Anthropic turn runs a report, summarizes, writes the table, charts 
   assert.deepEqual(summary.rows, [{ campaign: 'Brand', spend__sum: 30.5, clicks__sum: 250 }, { campaign: 'Generic', spend__sum: 5, clicks__sum: 20 }]);
   assert.deepEqual(summary.columns.map((column) => column.label), ['Campaign', 'Spend', 'Clicks']);
 
-  const sheet = f.book.getSheetByName('Spend by campaign');
+  const sheet = f.tab('Spend by campaign');
   assert.equal(f.value(sheet, 1, 1), 'Campaign');
   assert.equal(f.value(sheet, 2, 1), 'Brand');
   assert.equal(f.value(sheet, 2, 2), 30.5);
@@ -466,5 +466,5 @@ test('read_sheet keeps long cell text whole for later writes and shortens only w
   assert.match(reply.text, /Copied/);
   const seen = JSON.parse(payload(f.state.http[1]).messages[2].content[0].content);
   assert.equal(seen.rows[0].note.length, 81, 'the model sees a shortened sample');
-  assert.equal(f.value(f.book.getSheetByName('Copy'), 2, 1), long, 'the written cell is complete');
+  assert.equal(f.value(f.tab('Copy'), 2, 1), long, 'the written cell is complete');
 });

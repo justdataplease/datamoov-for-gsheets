@@ -248,8 +248,8 @@ test('a Gemini tool round saves and runs a two-source dashboard with underscore 
   assert.equal(responses.get('run_dashboard').rowCount, 2);
   assert.equal(responses.get('run_dashboard').dataRowCount, 2);
   assert.equal(f.state.batches.length, 1, 'both dashboard tabs are committed in one atomic batch');
-  assert.equal(f.value(f.book.getSheetByName('Gemini dashboard'), 4, 2), 'meadow');
-  assert.equal(f.value(f.book.getSheetByName('Gemini dashboard'), 4, 4), 7);
+  assert.equal(f.value(f.tab('Gemini dashboard'), 4, 2), 'meadow');
+  assert.equal(f.value(f.tab('Gemini dashboard'), 4, 4), 7);
   assert.equal(JSON.stringify(reply).includes(SOURCE_KEY), false);
   assert.equal(JSON.stringify(reply).includes(AI_KEY), false);
 });

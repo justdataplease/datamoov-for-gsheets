@@ -28,7 +28,7 @@ test('receipt cleanup failure after a committed write preserves its output statu
   assert.equal(result.isError, true);
   assert.match(JSON.parse(result.content).error, /Receipt cleanup failed/);
   assert.equal(f.state.batches.length, 1);
-  const sheet = f.book.getSheetByName('Completed output');
+  const sheet = f.tab('Completed output');
   assert.equal(sheet.getRange(2, 1).getValues()[0][0], 42);
   assert.deepEqual(plain(f.session.events.map((event) => event.kind)), ['write', 'error']);
   const write = f.session.events[0];
@@ -43,6 +43,6 @@ test('a failed Sheets batch never produces a committed-output event', () => {
   f.state.failBatch = true;
   const result = f.write();
   assert.equal(result.isError, true);
-  assert.equal(f.book.getSheetByName('Completed output'), null);
+  assert.equal(f.tab('Completed output'), null);
   assert.deepEqual(plain(f.session.events.map((event) => event.kind)), ['error']);
 });

@@ -67,6 +67,29 @@ function bundle(accounts = ['one', 'two']) {
   };
 }
 
+test('the downloadable sample is a valid bundle the importer accepts end to end', () => {
+  const f = fixture();
+  const sample = f.api.dmvCredentialSample();
+  const bundle = JSON.parse(sample.json);
+  // The sample is generated from the registry, so it must satisfy the importer's own schema.
+  assert.doesNotThrow(() => f.api.dmvImportPlan_(bundle));
+  assert.deepEqual(
+    bundle.connections.map((connection) => connection.connectorId),
+    ['import_source']
+  );
+  const credential = bundle.credentials[0];
+  assert.equal(credential.family, 'import_source');
+  // Hidden alternatives are included so a user can switch mode by editing the file alone.
+  assert.deepEqual(Object.keys(credential.values).sort(), ['authMode', 'otherSecret', 'token']);
+  assert.equal(credential.values.authMode, 'token');
+  assert.match(credential.values.token, /^REPLACE_/);
+  assert.deepEqual(Object.keys(bundle.connections[0].credentials), ['account']);
+  const result = plain(f.api.dmvImportCredentials(bundle));
+  assert.equal(result.credentials[0].status, 'saved');
+  assert.equal(result.connections[0].status, 'saved');
+  assert.equal(f.checks.length, 1, 'the sample connection is checked like any other import');
+});
+
 test('import shares private credentials, checks each new account, and is idempotent during active runs', () => {
   const f = fixture();
   const first = f.api.dmvImportCredentials(bundle());

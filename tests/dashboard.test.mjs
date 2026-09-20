@@ -106,8 +106,8 @@ test('private dashboard saves two different source queries and refreshes both ta
   assert.equal(f.fetched.length, 2);
   assert.equal(f.state.batches.length, 1);
   assert.equal(f.state.batches[0].body.requests.filter((request) => request.addSheet).length, 2);
-  const raw = f.book.getSheetByName('Dashboard data'),
-    report = f.book.getSheetByName('Dashboard report');
+  const raw = f.tab('Dashboard data'),
+    report = f.tab('Dashboard report');
   assert.equal(f.value(raw, 2, 3), '=literal');
   assert.equal(f.formula(raw, 2, 3), '');
   assert.equal(f.value(report, 2, 3), 10);
@@ -124,15 +124,15 @@ test('refresh fetches fresh sources again, preserves stable tabs, and clears own
   const f = fixture(),
     saved = f.save();
   f.run(saved.id);
-  const raw = f.book.getSheetByName('Dashboard data'),
-    report = f.book.getSheetByName('Dashboard report');
+  const raw = f.tab('Dashboard data'),
+    report = f.tab('Dashboard report');
   f.setRows('one', [{ date: '2026-08-03', campaign: 'Changed', spend: 5, clicks: 1 }]);
   f.setRows('two', []);
   const refreshed = f.run(saved.id);
   assert.equal(f.fetched.length, 4);
   assert.equal(refreshed.dataRowCount, 1);
-  assert.equal(f.book.getSheetByName('Dashboard data').id, raw.id);
-  assert.equal(f.book.getSheetByName('Dashboard report').id, report.id);
+  assert.equal(f.tab('Dashboard data').id, raw.id);
+  assert.equal(f.tab('Dashboard report').id, report.id);
   assert.equal(f.value(raw, 3, 1), '');
   assert.equal(f.value(report, 2, 3), 5);
   assert.equal(f.state.batches.length, 2);
@@ -142,8 +142,8 @@ test('a failed later source preserves both previous outputs and stores only sani
   const f = fixture(),
     saved = f.save();
   f.run(saved.id);
-  const raw = f.book.getSheetByName('Dashboard data'),
-    report = f.book.getSheetByName('Dashboard report');
+  const raw = f.tab('Dashboard data'),
+    report = f.tab('Dashboard report');
   const before = [plain([...raw.cells]), plain([...report.cells])];
   f.setRows('one', []);
   f.setRows('two', new Error('Source rejected private-dashboard-token'));
@@ -161,11 +161,11 @@ test('second destination occupancy or edited ownership blocks all writes and new
   f.setCell(report, 1, 1, 'Keep');
   const saved = f.save();
   assert.throws(() => f.run(saved.id), /existing data/);
-  assert.equal(f.book.getSheetByName('Dashboard data'), null);
+  assert.equal(f.tab('Dashboard data'), null);
   assert.equal(f.state.batches.length, 0);
   f.setCell(report, 1, 1, '');
   f.run(saved.id);
-  const raw = f.book.getSheetByName('Dashboard data');
+  const raw = f.tab('Dashboard data');
   f.setCell(report, 2, 1, 'Manual edit');
   const before = plain([...raw.cells]);
   assert.throws(() => f.run(saved.id), /edited or moved/);
@@ -178,8 +178,8 @@ test('atomic batch failure creates neither output tab nor ownership receipts', (
     saved = f.save();
   f.state.failBatch = true;
   assert.throws(() => f.run(saved.id), /atomic batch failure/);
-  assert.equal(f.book.getSheetByName('Dashboard data'), null);
-  assert.equal(f.book.getSheetByName('Dashboard report'), null);
+  assert.equal(f.tab('Dashboard data'), null);
+  assert.equal(f.tab('Dashboard report'), null);
   assert.equal(f.readOutput(saved.id + '-data'), null);
   assert.equal(f.readOutput(saved.id + '-report'), null);
 });
@@ -329,8 +329,8 @@ test('ownership journals recover both committed tabs after a receipt-storage fai
     return set.call(this, key, value);
   };
   assert.throws(() => f.run(saved.id), /tabs were updated.*receipts/);
-  assert.ok(f.book.getSheetByName('Dashboard data'));
-  assert.ok(f.book.getSheetByName('Dashboard report'));
+  assert.ok(f.tab('Dashboard data'));
+  assert.ok(f.tab('Dashboard report'));
   const journalKey = 'dmv:v1:write-journal:' + f.book.id;
   assert.ok(f.state.user.getProperty(journalKey));
   assert.ok(!f.state.user.getProperty(journalKey).includes('private-dashboard-token'));
@@ -357,7 +357,7 @@ test('journal recovery never adopts manually edited cells as dashboard-owned out
     return set.call(this, key, value);
   };
   assert.throws(() => f.run(saved.id), /tabs were updated/);
-  const report = f.book.getSheetByName('Dashboard report');
+  const report = f.tab('Dashboard report');
   f.setCell(report, 2, 3, 'Manual');
   fail = false;
   assert.throws(() => f.run(saved.id), /existing data/);
@@ -394,7 +394,7 @@ test('combined row and cumulative workbook capacity limits stop both outputs', (
   g.book.sheets[0].maxRows = 383462;
   assert.throws(() => g.run(g.save().id), /cell capacity/);
   assert.equal(g.state.batches.length, 0);
-  assert.equal(g.book.getSheetByName('Dashboard data'), null);
+  assert.equal(g.tab('Dashboard data'), null);
 });
 
 test('the shared writer handles two nonoverlapping ranges beyond one existing grid', () => {

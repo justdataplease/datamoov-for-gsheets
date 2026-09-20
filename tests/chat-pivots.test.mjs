@@ -82,7 +82,7 @@ test('native pivot is one atomic new-tab batch with exact source offsets and no 
   assert.equal(f.state.scriptLockAcquires, 1);
   assert.equal(f.state.scriptLockReleases, 1);
   assert.equal(f.session.events[0].kind, 'write');
-  assert.ok(f.book.getSheetByName('Campaign pivot'));
+  assert.ok(f.tab('Campaign pivot'));
   assert.equal(JSON.stringify(result).includes('Brand'), false);
 });
 
@@ -91,7 +91,7 @@ test('API failure leaves no new tab, source mutation, success event or session t
     before = plain([...f.source.cells]);
   f.state.failBatch = true;
   assert.throws(() => f.api.dmvChatCreatePivot_(f.session, f.input), /atomic batch failure/);
-  assert.equal(f.book.getSheetByName('Campaign pivot'), null);
+  assert.equal(f.tab('Campaign pivot'), null);
   assert.deepEqual(plain([...f.source.cells]), before);
   assert.deepEqual(f.session.events, []);
   assert.deepEqual(f.session.sheetNames, ['Source']);

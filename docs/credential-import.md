@@ -1,5 +1,7 @@
 # Import credentials into your Google account
 
+**Download sample** next to the import button saves `datamoov-credentials-sample.json`: one credential per type and one connection per source, generated from the app's own registry, with placeholder values throughout. Edit it locally and import it. Importing it unchanged fails the provider checks, which is the intended outcome.
+
 Open the add-on in the intended Google account, then choose **Settings > Credentials > Import from file** and select your local DataMoov JSON bundle. The selected file is read in browser memory and sent through the sidebar's authenticated Apps Script call. Secrets are saved in that user's private properties for this script. The import does not store them in source code, spreadsheet cells or browser local storage.
 
 Exact matching credentials and connections are reused. A label alone is not a match, and an import never overwrites a different existing credential or moves a report to another connection. Existing AI settings and schedules are unchanged. New Google OAuth credentials use the ordinary token check; each new connection uses the connector's normal connectivity check. An unused token can be saved without proving account access. Results distinguish saved, existing and failed items. A provider rejection leaves that connection unsaved; other successful items remain available.
@@ -12,7 +14,7 @@ Keep the local file private and out of source control. The file picker is cleare
 
 The top-level object uses version 1 with credential and connection arrays. Each credential has a unique local ref, a label, a registered family and that family's values. Each connection refers to a credential ref and includes only the connector's per-connection fields. Refs connect items inside the file; they are not saved object IDs. Connector and family names must come from the app's catalog.
 
-A placeholder example (replace the token locally):
+A placeholder example (replace the token locally); **Download sample** produces the same shape for every installed source:
 
 ```json
 {

@@ -63,7 +63,7 @@ function dmvChatDashboardTools_(session, baseTools) {
     {
       name: 'save_dashboard',
       description:
-        'Save a repeatable multi-source performance dashboard. Stores source queries, column mappings, dates and aggregation/ranking rules. It appears under Reports > Dashboards with Refresh dashboard. The raw combined data and final report use two distinct tabs. Saving does not fetch or change output; call run_dashboard next. Start with list_dashboards to avoid duplicates; updates need id and revision. Plans stay private to this account. Charts or native pivots can be added to the output separately.',
+        'Save a repeatable multi-source performance dashboard. Stores source queries, column mappings, dates and aggregation/ranking rules. It appears under Reports > Dashboards with Refresh dashboard. It writes two distinct tabs: dataTarget holds the combined source rows and is named "<subject> Data"; target is the dashboard itself, named "<subject> Dashboard", holding the summary table and its charts. Saving does not fetch or change output; call run_dashboard next. Start with list_dashboards to avoid duplicates; updates need id and revision. Plans stay private to this account. Charts or native pivots can be added to the output separately.',
       input_schema: {
         type: 'object',
         properties: {
@@ -82,7 +82,7 @@ function dmvChatDashboardTools_(session, baseTools) {
     {
       name: 'run_dashboard',
       description:
-        'Refetch every source in a saved dashboard, validate and combine complete results, then rebuild the raw-data and report tabs together. Both previous outputs stay unchanged if a source or destination fails. Reuse this or the Refresh dashboard button on later visits; no cached chat results are needed.',
+        'Refetch every source in a saved dashboard, validate and combine complete results, then rebuild the data and dashboard tabs together. Both previous outputs stay unchanged if a source or destination fails. Reuse this or the Refresh dashboard button on later visits; no cached chat results are needed.',
       input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       run: dmvChatRunDashboard_,
     },
@@ -145,7 +145,7 @@ function dmvChatRunDashboard_(session, input) {
         links: dmvChatDashboardLinks_(error),
         action: 'updated_incomplete',
         text:
-          'Updated the data and report tabs, but could not finish saving refresh status. ' +
+          'Updated the data and dashboard tabs, but could not finish saving refresh status. ' +
           error.message,
       });
     throw error;
@@ -174,7 +174,7 @@ function dmvChatRunDashboard_(session, input) {
 
 function dmvChatDashboardLinks_(result) {
   return [
-    { label: 'Report: ' + result.target.sheetName, url: result.reportUrl },
+    { label: 'Dashboard: ' + result.target.sheetName, url: result.reportUrl },
     { label: 'Data: ' + result.dataTarget.sheetName, url: result.dataUrl },
   ].filter(function (link) {
     return !!link.url;

@@ -210,7 +210,7 @@ test('dashboard refresh failure preserves previous output counts and removal pre
     return dialog.accept();
   });
   await card(page).getByRole('button', { name: 'Remove', exact: true }).click();
-  expect(confirmation).toContain('Data and Report tabs and existing sheet data stay in place');
+  expect(confirmation).toContain('Data and Dashboard tabs and existing sheet data stay in place');
   await expect(card(page).getByRole('button', { name: 'Refresh dashboard' })).toBeDisabled();
   expect(await page.evaluate(() => window.dashboardProbe.removals[0].args)).toEqual([
     'dashboard-fixture',
@@ -220,7 +220,7 @@ test('dashboard refresh failure preserves previous output counts and removal pre
     window.dashboardProbe.removals[0].succeed({ ok: true });
   });
   await expect(card(page)).toHaveCount(0);
-  await expect(page.locator('#notice')).toContainText('Data and Report tabs were kept');
+  await expect(page.locator('#notice')).toContainText('Data and Dashboard tabs were kept');
 });
 
 test('resetting the report list ignores late dashboard run and poll responses', async ({

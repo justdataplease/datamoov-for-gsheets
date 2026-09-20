@@ -175,7 +175,7 @@ test('actual chat saves, runs and charts a multi-provider dashboard with one dat
     'https://docs.google.com/spreadsheets/d/' +
     f.book.getId() +
     '/edit#gid=' +
-    f.book.getSheetByName(name).getSheetId() +
+    f.tab(name).getSheetId() +
     '&range=' +
     start;
   assert.equal(run.dataUrl, outputUrl('Campaign data', 'A1'));
@@ -188,8 +188,9 @@ test('actual chat saves, runs and charts a multi-provider dashboard with one dat
   );
   assert.match(
     results.get('chart').value.url,
-    new RegExp('#gid=' + f.book.getSheetByName('Campaign dashboard').getSheetId() + '&range=')
+    new RegExp('#gid=' + f.tab('Campaign dashboard').getSheetId() + '&range=')
   );
+  f.setActive(f.reopen());
   assert.equal(plain(f.api.dmvListDashboards())[0].reportUrl, run.reportUrl);
   assert.deepEqual(
     run.columns.map((column) => column.key),
@@ -209,7 +210,7 @@ test('actual chat saves, runs and charts a multi-provider dashboard with one dat
   assert.equal(writes.length, 1, 'both tables are committed together once');
   assert.equal(writes[0].body.requests.filter((request) => request.addSheet).length, 2);
   assert.equal(f.state.batches.length, 2, 'the chart is a separate completed action');
-  const report = f.book.getSheetByName('Campaign dashboard');
+  const report = f.tab('Campaign dashboard');
   assert.equal(f.value(report, 4, 2), 'Second');
   assert.equal(f.value(report, 4, 4), 7);
   assert.equal(f.readOutput(saved.id + '-report').sheetId, report.id);
@@ -234,7 +235,7 @@ test('future-row chart ranges survive a fresh sidebar refresh with no AI setting
   const domain = chart.spec.basicChart.domains[0].domain.sourceRange.sources[0];
   const series = chart.spec.basicChart.series[0].series.sourceRange.sources[0];
   assert.deepEqual(domain, {
-    sheetId: f.book.getSheetByName('Campaign dashboard').id,
+    sheetId: f.tab('Campaign dashboard').id,
     startRowIndex: 2,
     startColumnIndex: 1,
     endColumnIndex: 2,
@@ -257,7 +258,7 @@ test('future-row chart ranges survive a fresh sidebar refresh with no AI setting
   assert.equal(f.state.http.length, httpCount);
   assert.equal(f.state.charts.length, 1);
   assert.deepEqual(plain(f.state.charts[0]), chart);
-  assert.equal(f.value(f.book.getSheetByName('Campaign dashboard'), 4, 2), 'New after chat');
+  assert.equal(f.value(f.tab('Campaign dashboard'), 4, 2), 'New after chat');
 });
 
 test('chat rejects over-limit dashboard saves and unsupported filters before source fetches or writes', () => {
@@ -318,6 +319,48 @@ test('refresh honors a row limit raised in Settings after the dashboard was save
   assert.ok(reply.events.some((event) => event.action === 'refreshed'));
 });
 
+test('tabs the dashboard creates through the Sheets API are visible to later tools in the turn', () => {
+  const f = fixture();
+  // Apps Script materializes one Spreadsheet per execution, blind to tabs the Advanced Sheets
+  // service adds afterwards. Everything a turn does after a dashboard write - listing tabs,
+  // charting, building links - has to reopen the spreadsheet rather than trust that object.
+  assert.equal(f.book.getSheetByName('Campaign dashboard'), null);
+  const { reply, results } = scriptedTurn(f, [
+    () => [tool('save', 'save_dashboard', f.plan)],
+    (results) => [tool('run', 'run_dashboard', { id: results.get('save').value.id })],
+    (results) => {
+      const run = results.get('run').value;
+      assert.ok(run.dataUrl && run.reportUrl, 'both output links resolve to real tab ids');
+      return [tool('list', 'list_sheets', {})];
+    },
+    (results) => {
+      assert.deepEqual(
+        results.get('list').value.sheets.map((sheet) => sheet.sheetName).sort(),
+        ['Campaign dashboard', 'Campaign data', 'Output']
+      );
+      const run = results.get('run').value;
+      return [
+        tool('chart', 'create_chart', {
+          sheetName: run.target.sheetName,
+          range: run.reportRange,
+          chartType: 'column',
+          xColumn: run.columns[0].label,
+          seriesColumns: [run.columns[2].label],
+          title: 'Campaign spend',
+        }),
+      ];
+    },
+    (results) => {
+      assert.notEqual(results.get('chart').is_error, true, 'the chart finds the tab just created');
+      return [answer()];
+    },
+  ]);
+  assert.deepEqual(
+    reply.events[1].links.map((link) => link.label),
+    ['Dashboard: Campaign dashboard', 'Data: Campaign data']
+  );
+});
+
 test('a failed source reaches the model as a redacted tool error with no sheet write action', () => {
   const f = fixture();
   f.rows.meadow = new Error('Source rejected ' + SOURCE_KEY);
@@ -332,8 +375,8 @@ test('a failed source reaches the model as a redacted tool error with no sheet w
   ]);
   assert.equal(f.fetched.length, 2);
   assert.equal(f.state.batches.length, 0);
-  assert.equal(f.book.getSheetByName('Campaign data'), null);
-  assert.equal(f.book.getSheetByName('Campaign dashboard'), null);
+  assert.equal(f.tab('Campaign data'), null);
+  assert.equal(f.tab('Campaign dashboard'), null);
   assert.deepEqual(
     reply.events.map((event) => event.kind),
     ['dashboard', 'error']
@@ -374,7 +417,7 @@ test('post-commit receipt failure remains visible as a sheet write and recoverab
   assert.match(output.reply.events.find((event) => event.kind === 'write').text, /Updated.*tabs/);
   assert.equal(f.state.batches.length, 1);
   assert.equal(output.reply.events.find((event) => event.kind === 'write').links.length, 2);
-  assert.ok(f.book.getSheetByName('Campaign dashboard'));
+  assert.ok(f.tab('Campaign dashboard'));
   const id = output.results.get('save').value.id;
   assert.equal(f.readOutput(id + '-report'), null);
   f.api.dmvRunDashboard(id);
@@ -429,8 +472,8 @@ test('ordinary write_to_sheet reports completed cells when its ownership receipt
     /tabs were updated/
   );
   assert.equal(f.state.batches.length, 1);
-  assert.equal(f.value(f.book.getSheetByName('Single report'), 2, 1), 'First');
-  assert.equal(f.value(f.book.getSheetByName('Single report'), 2, 2), 3);
+  assert.equal(f.value(f.tab('Single report'), 2, 1), 'First');
+  assert.equal(f.value(f.tab('Single report'), 2, 2), 3);
   assert.equal(
     [...f.state.user.data.keys()].filter((key) => key.startsWith('dmv:v1:output:')).length,
     0

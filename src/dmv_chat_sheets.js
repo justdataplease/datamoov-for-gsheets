@@ -22,8 +22,24 @@ function dmvChatSheetDeadline_(session) {
     throw new Error('The sheet action reached its time limit. Ask again to continue.');
 }
 
+// Call after any tool that can create a tab, so the rest of the turn can find it.
+function dmvChatSeeNewTabs_(session) {
+  session.spreadsheet = dmvReopen_(session.spreadsheet);
+  try {
+    session.sheetNames = session.spreadsheet.getSheets().map(function (sheet) {
+      return sheet.getName();
+    });
+  } catch (ignored) {
+    /* A metadata refresh cannot hide an already successful write. */
+  }
+  return session.spreadsheet;
+}
+
 function dmvChatSheetTarget_(session, name) {
-  var sheet = session.spreadsheet.getSheetByName(dmvSheetName_(name));
+  var sheetName = dmvSheetName_(name);
+  var sheet = session.spreadsheet.getSheetByName(sheetName);
+  // A tab an earlier tool created through the Sheets API is not on the cached object yet.
+  if (!sheet) sheet = dmvChatSeeNewTabs_(session).getSheetByName(sheetName);
   if (!sheet)
     throw new Error(
       'No tab named "' +
@@ -658,14 +674,7 @@ function dmvChatEditSheet_(session, input) {
           ? 'Created tab ' + input.newName
           : 'Updated ' + input.sheetName + '!' + area.a1,
     });
-    try {
-      SpreadsheetApp.flush();
-      session.sheetNames = session.spreadsheet.getSheets().map(function (item) {
-        return item.getName();
-      });
-    } catch (ignored) {
-      /* A metadata refresh cannot hide an already successful write. */
-    }
+    dmvChatSeeNewTabs_(session);
     return {
       ok: true,
       action: input.action,

@@ -52,7 +52,7 @@ test('generic connector flows through saved connection, report, execution and ty
   assert.equal(f.state.legacyWrites.length, 0, 'write through the atomic typed Sheets API');
   assert.equal(f.state.batches.length, 1);
   assert.equal(f.readReport(report.id).status, 'success');
-  assert.deepEqual(f.state.opened, ['spreadsheet-one']);
+  assert.deepEqual([...new Set(f.state.opened)], ['spreadsheet-one']);
   assert.equal(f.state.lockAcquires, f.state.lockReleases);
 });
 
@@ -220,7 +220,7 @@ test('scheduled execution only refreshes reports saved in the spreadsheet that o
   assert.equal(f.readReport(report.id).status, 'ready');
   f.setActive(f.book);
   f.api.dmvRefreshScheduled();
-  assert.deepEqual(f.state.opened, ['spreadsheet-one']);
+  assert.deepEqual([...new Set(f.state.opened)], ['spreadsheet-one']);
   assert.equal(f.value(f.book.sheets[0], 2, 1), 0);
   assert.equal(other.sheets[0].cells.size, 0);
   assert.equal(f.readReport(report.id).status, 'success');
@@ -347,7 +347,7 @@ test('connections, reports and receipts stay user-private; other users still can
   first.api.dmvRunReport(report.id);
   const second = createDatamoovSandbox();
   second.setActive(first.book);
-  second.state.books.set(first.book.id, first.book);
+  second.state.books.set(first.book.id, first.book.server);
   let serial = 0;
   second.api.Utilities.getUuid = () => `other-user-${++serial}`;
   second.api.dmvRegisterConnector_({ id: 'different', label: 'Another connector', authFields: [],

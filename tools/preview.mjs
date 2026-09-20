@@ -249,6 +249,50 @@ function installPreview(initial) {
       };
     },
     showWindow: () => ({ ok: true }),
+    dmvCredentialSample() {
+      const value = (field, connectorId) => {
+        if (field.type === 'select') {
+          const chosen = field.default === undefined ? (field.options || [])[0] : field.default;
+          return typeof chosen === 'object' && chosen ? chosen.value : chosen || '';
+        }
+        if (field.default !== undefined && field.default !== null && field.type !== 'password')
+          return field.default;
+        if (field.type === 'number') return 0;
+        return (
+          'REPLACE_' +
+          String(field.key).replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase() +
+          (connectorId ? '_' + connectorId.toUpperCase() : '')
+        );
+      };
+      const values = (fields, connectorId) =>
+        Object.fromEntries((fields || []).map((field) => [field.key, value(field, connectorId)]));
+      return {
+        fileName: 'datamoov-credentials-sample.json',
+        json: JSON.stringify(
+          {
+            version: 1,
+            credentials: data.credentialFamilies.map((family) => ({
+              ref: family.id,
+              label: family.label + ' (sample)',
+              family: family.id,
+              values: values(family.fields, family.connectors.length === 1 ? family.id : ''),
+            })),
+            connections: data.catalog.map((source) => ({
+              ref: source.id,
+              label: source.label + ' (sample)',
+              connectorId: source.id,
+              credentialRef: source.credentialFamily || source.id,
+              credentials: values(
+                (source.authFields || []).filter((field) => field.perConnection),
+                source.id
+              ),
+            })),
+          },
+          null,
+          2
+        ),
+      };
+    },
     dmvImportCredentials(bundle) {
       if (window.DATAMOOV_PREVIEW_IMPORT_RESULT) return copy(window.DATAMOOV_PREVIEW_IMPORT_RESULT);
       if (

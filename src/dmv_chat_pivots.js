@@ -238,9 +238,12 @@ function dmvChatCreatePivot_(session, input) {
       throw new Error(
         'This pivot could exceed 512 columns or 1,000,000 output cells. Use fewer column groups or a smaller source range.'
       );
-    var ids = session.spreadsheet.getSheets().map(function (sheet) {
-      return sheet.getSheetId();
-    });
+    // Include tabs created earlier in this turn, so a new pivot cannot reuse their ids.
+    var ids = dmvChatSeeNewTabs_(session)
+      .getSheets()
+      .map(function (sheet) {
+        return sheet.getSheetId();
+      });
     var sheetId;
     for (var attempt = 0; attempt < 5; attempt++) {
       sheetId = (parseInt(dmvOutputDigest_(Utilities.getUuid()).slice(0, 8), 16) % 2147483646) + 1;
@@ -277,6 +280,7 @@ function dmvChatCreatePivot_(session, input) {
     Sheets.Spreadsheets.batchUpdate({ requests: requests }, session.spreadsheetId);
     if (session.sheetNames && session.sheetNames.indexOf(target) < 0)
       session.sheetNames.push(target);
+    dmvChatSeeNewTabs_(session);
     var url = dmvSheetUrl_(session.spreadsheet, sheetId, 'A1');
     session.events.push({
       kind: 'write',

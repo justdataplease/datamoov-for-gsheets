@@ -102,8 +102,9 @@ passed as native date groups. An already prepared month column can be an ordinar
 ## Saved multi-source dashboards
 
 A report imports one source into a table. A saved dashboard combines 2 to 8 source queries,
-normalizes matching fields, and produces two outputs: combined source data and an aggregated
-report. Both use the same report runtime. Create the dashboard directly in Chat; no separate
+normalizes matching fields, and produces two tabs: a **Data** tab with the combined source rows
+and a **Dashboard** tab with the aggregated summary and its charts. Both use the same report
+runtime. Create the dashboard directly in Chat; no separate
 saved reports are required first.
 
 For example: **"Create a monthly Google Ads and Facebook performance dashboard, with spend,

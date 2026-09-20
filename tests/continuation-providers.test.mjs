@@ -49,7 +49,7 @@ test('real GitHub search resumes through private checkpoints and writes both pag
 
   // A second Google user shares the spreadsheet and project, but not UserProperties.
   const other = createDatamoovSandbox();
-  other.state.books.set(f.book.id, f.book);
+  other.state.books.set(f.book.id, f.book.server);
   other.setActive(f.book);
   other.api.PropertiesService.getScriptProperties = () => f.state.script;
   other.api.PropertiesService.getDocumentProperties = () => f.state.document;

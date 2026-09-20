@@ -414,7 +414,7 @@
         return;
       }
       input.value =
-        'Create a reusable dashboard combining my connected sources, with a Data tab and a Report tab. Ask me which sources, metrics and date range to use.';
+        'Create a reusable dashboard combining my connected sources, with a Data tab and a Dashboard tab holding the summary and charts. Ask me which sources, metrics and date range to use.';
       input.focus();
     }
     function renderDashboards() {
@@ -463,7 +463,7 @@
         content.append(
           top,
           dashboardDetail('Data tab', dashboard.dataTarget, dashboard.dataUrl),
-          dashboardDetail('Report tab', dashboard.target, dashboard.reportUrl),
+          dashboardDetail('Dashboard tab', dashboard.target, dashboard.reportUrl),
           detail('Updated', timeLabel(dashboard.lastRun))
         );
         if (dashboard.lastDataRowCount != null || dashboard.lastRowCount != null)
@@ -565,7 +565,7 @@
         !window.confirm(
           'Remove your dashboard "' +
             dashboard.name +
-            '"? Its Data and Report tabs and existing sheet data stay in place.'
+            '"? Its Data and Dashboard tabs and existing sheet data stay in place.'
         )
       )
         return;
@@ -577,7 +577,7 @@
         await api('dmvDeleteDashboard', dashboard.id);
         if (dashboardView.disposed || dashboardView.removals.get(dashboard.id) !== token) return;
         state.dashboards = state.dashboards.filter((item) => item.id !== dashboard.id);
-        notice('Dashboard setup removed. Its Data and Report tabs were kept.');
+        notice('Dashboard setup removed. Its Data and Dashboard tabs were kept.');
       } catch (error) {
         if (!dashboardView.disposed && dashboardView.removals.get(dashboard.id) === token)
           notice(error.message || 'The dashboard could not be removed.', 'error');
@@ -1680,6 +1680,30 @@
       })
     );
     // ---- Settings tab handlers ----
+    $('sample-credentials').addEventListener('click', (event) =>
+      busy(event.currentTarget, 'Preparing\u2026', async () => {
+        const sample = await api('dmvCredentialSample');
+        try {
+          const url = URL.createObjectURL(new Blob([sample.json], { type: 'application/json' }));
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = sample.fileName;
+          document.body.append(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
+        } catch (error) {
+          throw new Error(
+            'This sidebar could not start the download. Use Open DataMoov in a window and try again.'
+          );
+        }
+        notice(
+          'Sample saved as ' +
+            sample.fileName +
+            '. It covers every source with placeholder values; replace them with your own before importing.'
+        );
+      })
+    );
     $('import-credentials').addEventListener('click', () => $('credential-import-file').click());
     $('credential-import-file').addEventListener('change', importCredentials);
     $('credential-family').addEventListener('change', () => renderCredentialFields());

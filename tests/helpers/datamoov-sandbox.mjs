@@ -142,25 +142,49 @@ export function createDatamoovSandbox() {
     };
     return sheet;
   }
-  function addSpreadsheet(id = 'spreadsheet-one', names = ['Output']) {
-    const book = {
-      id, sheets: names.map((name) => makeSheet(name)), timezone: 'Europe/Athens', activeRange: null, activeSheet: null,
-      getId: () => id, getSpreadsheetTimeZone: () => book.timezone,
-      getSheets: () => book.sheets,
-      getSheetByName: (name) => book.sheets.find((sheet) => sheet.name === name) || null,
-      insertSheet(name) { const sheet = makeSheet(name); book.sheets.push(sheet); return sheet; },
-      getActiveRange: () => book.activeRange,
-      getActiveSheet: () => book.activeSheet || book.sheets[0] || null,
+  // Apps Script materializes one Spreadsheet object per execution. Tabs the Advanced Sheets
+  // service creates afterwards stay invisible to it; only opening the spreadsheet again, which
+  // returns a separate object, reveals them. Server state lives in `server`; each handle keeps
+  // its own `known` set of the tabs it has seen.
+  function makeHandle(server) {
+    const known = new Set(server.sheets.map((sheet) => sheet.id));
+    const visible = () => server.sheets.filter((sheet) => known.has(sheet.id));
+    return {
+      server,
+      get sheets() { return server.sheets; },
+      get id() { return server.id; },
+      get timezone() { return server.timezone; },
+      set timezone(value) { server.timezone = value; },
+      get activeRange() { return server.activeRange; },
+      set activeRange(value) { server.activeRange = value; },
+      get activeSheet() { return server.activeSheet; },
+      getId: () => server.id, getSpreadsheetTimeZone: () => server.timezone,
+      getSheets: visible,
+      getSheetByName: (name) => visible().find((sheet) => sheet.name === name) || null,
+      insertSheet(name) { const sheet = makeSheet(name); server.sheets.push(sheet); known.add(sheet.id); return sheet; },
+      getActiveRange: () => server.activeRange,
+      getActiveSheet: () => server.activeSheet || visible()[0] || null,
       setActiveSheet(sheet) {
-        if (!book.sheets.includes(sheet)) throw new Error('Sheet belongs to another spreadsheet');
-        book.activeSheet = sheet;
-        book.activeRange = range(sheet, 1, 1);
+        if (!server.sheets.includes(sheet)) throw new Error('Sheet belongs to another spreadsheet');
+        server.activeSheet = sheet;
+        server.activeRange = range(sheet, 1, 1);
         return sheet;
       },
     };
-    state.books.set(id, book);
-    if (!activeSpreadsheet) activeSpreadsheet = book;
-    return book;
+  }
+  function addSpreadsheet(id = 'spreadsheet-one', names = ['Output']) {
+    const server = { id, sheets: names.map((name) => makeSheet(name)), timezone: 'Europe/Athens', activeRange: null, activeSheet: null };
+    state.books.set(id, server);
+    const handle = makeHandle(server);
+    if (!activeSpreadsheet) activeSpreadsheet = handle;
+    return handle;
+  }
+  // Server state, regardless of which tabs a given Spreadsheet handle has seen.
+  function findTab(name, book) {
+    return (book || activeSpreadsheet).sheets.find((sheet) => sheet.name === name) || null;
+  }
+  function reopen(book) {
+    return makeHandle((book || activeSpreadsheet).server);
   }
   function addTrigger(handler) {
     const trigger = { id: `trigger-${++serial}`, getHandlerFunction: () => handler };
@@ -294,7 +318,8 @@ export function createDatamoovSandbox() {
     },
     SpreadsheetApp: {
       getActiveSpreadsheet: () => activeSpreadsheet,
-      openById(id) { state.opened.push(id); const book = state.books.get(id); if (!book) throw new Error('Spreadsheet not found'); return book; },
+      // A separate object with a fresh view, exactly as Apps Script returns.
+      openById(id) { state.opened.push(id); const server = state.books.get(id); if (!server) throw new Error('Spreadsheet not found'); return makeHandle(server); },
       flush() { state.flushes++; },
     },
     Sheets: { Spreadsheets: {
@@ -335,7 +360,7 @@ export function createDatamoovSandbox() {
   }
   const book = addSpreadsheet();
   return {
-    api: context, state, book, addSpreadsheet, addTrigger,
+    api: context, state, book, addSpreadsheet, addTrigger, tab: findTab, reopen,
     setActive: (spreadsheet) => { activeSpreadsheet = spreadsheet; },
     advance: (milliseconds) => { now += milliseconds; },
     setCell(sheet, row, column, value, formula = '') { sheet.cells.set(address(row, column), { value, formula }); },

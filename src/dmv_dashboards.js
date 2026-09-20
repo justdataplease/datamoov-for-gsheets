@@ -458,6 +458,8 @@ function dmvRunDashboard(id, requestedDeadline) {
       check();
       dmvWriteReports_(spreadsheet, outputs, check);
       sheetUpdated = true;
+      // Both destinations may be new tabs; their links need a spreadsheet that can see them.
+      spreadsheet = dmvReopen_(spreadsheet);
       current.status = 'success';
       current.statusMessage = 'Updated both tabs from all ' + dashboard.sources.length + ' sources';
       current.lastRun = new Date().toISOString();
@@ -508,6 +510,8 @@ function dmvRunDashboard(id, requestedDeadline) {
     }
     var failure = new Error(message);
     if (sheetUpdated) {
+      // The commit happened; its tabs may be new, so links need a spreadsheet that sees them.
+      spreadsheet = dmvReopen_(spreadsheet);
       failure.sheetUpdated = true;
       failure.id = dashboard.id;
       failure.target = dashboard.target;

@@ -1,4 +1,84 @@
 /* Import local credential bundles into the executing user's private settings. */
+/* A ready-to-edit bundle covering every source, built from the live registry. */
+function dmvSampleValue_(field, connectorId) {
+  if (field.type === 'select') {
+    var options = field.options || [];
+    var chosen = field.default === undefined ? options[0] : field.default;
+    return typeof chosen === 'string' || typeof chosen === 'number'
+      ? chosen
+      : (chosen && chosen.value) || '';
+  }
+  if (field.default !== undefined && field.default !== null && field.type !== 'password')
+    return field.default;
+  if (field.type === 'number') return 0;
+  if (field.key === 'serviceAccountJson')
+    return JSON.stringify({
+      type: 'service_account',
+      project_id: 'REPLACE_PROJECT',
+      private_key_id: 'REPLACE',
+      private_key: 'REPLACE_WITH_YOUR_PRIVATE_KEY',
+      client_email: 'datamoov@REPLACE_PROJECT.iam.gserviceaccount.com',
+      client_id: '000000000000000000000',
+      token_uri: 'https://oauth2.googleapis.com/token',
+    });
+  // Placeholders say what belongs there; no sample ever carries a usable secret.
+  return (
+    'REPLACE_' +
+    String(field.key)
+      .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+      .toUpperCase() +
+    (connectorId ? '_' + connectorId.toUpperCase() : '')
+  );
+}
+
+function dmvSampleValues_(fields, connectorId) {
+  var values = {};
+  (fields || []).forEach(function (field) {
+    values[field.key] = dmvSampleValue_(field, connectorId);
+  });
+  return values;
+}
+
+// One credential per type and one connection per source, so the file shows every shape the
+// importer accepts. Values are placeholders: importing it unchanged fails the provider checks.
+function dmvCredentialSample() {
+  var families = dmvCredentialFamilies_();
+  var credentials = Object.keys(families)
+    .sort()
+    .map(function (id) {
+      var family = families[id];
+      return {
+        ref: id,
+        label: family.label + ' (sample)',
+        family: family.id,
+        values: dmvSampleValues_(family.fields, family.connectors.length === 1 ? family.id : ''),
+      };
+    });
+  var connections = Object.keys(DMV_CONNECTORS || {})
+    .sort()
+    .filter(function (id) {
+      return !!families[dmvFamilyId_(dmvConnector_(id))];
+    })
+    .map(function (id) {
+      var connector = dmvConnector_(id);
+      return {
+        ref: id,
+        label: connector.label + ' (sample)',
+        connectorId: id,
+        credentialRef: dmvFamilyId_(connector),
+        credentials: dmvSampleValues_(dmvConnectionFields_(connector), id),
+      };
+    });
+  return {
+    fileName: 'datamoov-credentials-sample.json',
+    json: JSON.stringify(
+      { version: 1, credentials: credentials, connections: connections },
+      null,
+      2
+    ),
+  };
+}
+
 function dmvImportObject_(value, allowed, label) {
   if (!value || Object.prototype.toString.call(value) !== '[object Object]')
     throw new Error(label + ' must be an object.');

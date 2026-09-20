@@ -48,6 +48,38 @@ test('complete production bundle registers thirteen sources and fifteen reports 
   assert.deepEqual(JSON.parse(JSON.stringify(catalog.filter((connector) => connector.describesTables).map((connector) => connector.id))), ['bigquery', 'postgres', 'snowflake']);
 });
 
+test('the sample credential bundle covers every source and carries no usable secret', () => {
+  const app = loadProduction();
+  const sample = app.dmvCredentialSample();
+  assert.equal(sample.fileName, 'datamoov-credentials-sample.json');
+  const bundle = JSON.parse(sample.json);
+  assert.equal(bundle.version, 1);
+  assert.deepEqual(
+    bundle.connections.map((connection) => connection.connectorId),
+    Array.from(app.dmvCatalog_(), (connector) => connector.id).sort()
+  );
+  // Every connection resolves to a credential in the same file, of that source's own type.
+  const byRef = new Map(bundle.credentials.map((credential) => [credential.ref, credential]));
+  assert.equal(byRef.size, bundle.credentials.length);
+  for (const connection of bundle.connections) {
+    const credential = byRef.get(connection.credentialRef);
+    assert.ok(credential, connection.connectorId + ' references a credential in the bundle');
+    assert.equal(credential.family, connection.credentialRef);
+  }
+  assert.ok(bundle.credentials.length <= 20 && bundle.connections.length <= 20);
+  assert.ok(sample.json.length <= 250000);
+  // A shipped file must never look like a real key.
+  assert.equal(/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(sample.json), false);
+  assert.equal(/(ghp_|github_pat_|sk-|EAA[A-Za-z0-9]{20})/.test(sample.json), false);
+  for (const credential of bundle.credentials)
+    for (const [key, value] of Object.entries(credential.values))
+      assert.equal(
+        typeof value === 'string' ? /REPLACE|^$/.test(value) || value.length < 40 : true,
+        true,
+        credential.ref + '.' + key + ' is a placeholder'
+      );
+});
+
 test('open and install entry points build the Extensions add-on menu with existing application handlers', () => {
   const app = loadProduction();
   const menus = [];

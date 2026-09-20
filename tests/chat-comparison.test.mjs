@@ -210,8 +210,8 @@ test('a saved three-account comparison fetches six relative queries and advances
     ]).flat()
   );
   const sheetIds = [
-    f.book.getSheetByName('Weekly source data').id,
-    f.book.getSheetByName('Weekly comparison').id,
+    f.tab('Weekly source data').id,
+    f.tab('Weekly comparison').id,
   ];
   f.advance(3 * DAY);
   const second = f.api.dmvRunDashboard(saved.id);
@@ -226,7 +226,7 @@ test('a saved three-account comparison fetches six relative queries and advances
     ]).flat()
   );
   assert.deepEqual(
-    [f.book.getSheetByName('Weekly source data').id, f.book.getSheetByName('Weekly comparison').id],
+    [f.tab('Weekly source data').id, f.tab('Weekly comparison').id],
     sheetIds
   );
 });
