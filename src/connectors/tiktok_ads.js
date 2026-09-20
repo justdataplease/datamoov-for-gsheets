@@ -184,6 +184,7 @@ dmvRegisterConnector_({
       label: 'Advertiser ID',
       type: 'text',
       required: true,
+      perConnection: true,
       help: 'The numeric advertiser (ad account) ID from TikTok Ads Manager.',
     },
     {

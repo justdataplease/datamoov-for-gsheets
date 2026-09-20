@@ -13,6 +13,8 @@ function dmvBootstrap() {
     branding: { name: 'DataMoov', version: '1.0 beta' },
     catalog: dmvCatalog_(),
     connections: dmvList_('connection').map(dmvConnectionSummary_),
+    credentials: dmvCredentialSummaries_(),
+    credentialFamilies: dmvFamilyCatalog_(),
     reports: dmvList_('report').filter(function (report) {
       return report.spreadsheetId === spreadsheet.getId();
     }),
@@ -148,7 +150,7 @@ function dmvDeleteReport(id) {
 }
 
 function dmvDiscoverFields(input) {
-  var connection = dmvRead_('connection', input.connectionId);
+  var connection = dmvReadConnection_(input.connectionId);
   var connector = dmvConnector_(connection.connectorId);
   var definition = dmvDefinition_(connector, input.reportType);
   if (!definition.discoverFields) return definition.fields || [];
@@ -176,7 +178,7 @@ function dmvReportDates_(definition, report, spreadsheet) {
 }
 
 function dmvFetchReport_(report, spreadsheet, deadline) {
-  var connection = dmvRead_('connection', report.connectionId);
+  var connection = dmvReadConnection_(report.connectionId);
   var connector = dmvConnector_(connection.connectorId);
   var definition = dmvDefinition_(connector, report.reportType);
   var dates = dmvReportDates_(definition, report, spreadsheet);

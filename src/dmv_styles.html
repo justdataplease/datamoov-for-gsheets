@@ -111,6 +111,8 @@
   .tabs {
     display: flex;
     padding: 0 12px;
+    overflow-x: auto;
+    scrollbar-width: none;
     border-bottom: 1px solid var(--line);
     position: sticky;
     top: 0;
@@ -123,7 +125,8 @@
     background: none;
     color: var(--muted);
     padding: 13px 3px 12px;
-    flex: 1;
+    flex: 1 0 auto;
+    min-width: 0;
     font-size: 11px;
     font-weight: 650;
     white-space: nowrap;
@@ -675,6 +678,77 @@
     font-size: 9px;
     font-weight: 650;
     letter-spacing: 0.2px;
+  }
+  .settings-card {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: #fff;
+    padding: 0 14px;
+    margin-bottom: 14px;
+  }
+  .settings-card > summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 13px 0;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .settings-card > summary::-webkit-details-marker {
+    display: none;
+  }
+  .settings-card > summary::after {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-right: 2px solid var(--muted);
+    border-bottom: 2px solid var(--muted);
+    transform: rotate(-45deg);
+    margin-left: 8px;
+    flex: 0 0 auto;
+  }
+  .settings-card[open] > summary::after {
+    transform: rotate(45deg);
+  }
+  .settings-card[open] > summary {
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 12px;
+  }
+  .icon-button.primary {
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
+    font-size: 18px;
+    line-height: 1;
+  }
+  .icon-button.primary:hover {
+    background: var(--primary-dark);
+  }
+  .card-status {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 650;
+    color: var(--muted);
+    background: var(--wash);
+    border-radius: 6px;
+    padding: 3px 7px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 55%;
+  }
+  .card-status.ok {
+    color: var(--success);
+    background: #e9f6ef;
+  }
+  .settings-card > form,
+  .settings-card > .card-list,
+  .settings-card > .connection-editor,
+  .settings-card > .field-help {
+    margin-bottom: 12px;
   }
   .setup-guide {
     border: 1px solid var(--line);

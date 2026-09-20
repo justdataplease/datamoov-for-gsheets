@@ -7,7 +7,8 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | src/dmv_app.js | Google Sheets menu, sidebar entry point and template includes |
 | src/dmv_core.js | Connector registry, catalog, validation, dates and typed result normalization |
 | src/dmv_store.js | Private per-user storage of connections and reports, locks, active spreadsheet |
-| src/dmv_connections.js | Save, delete and test connections; summaries never expose secrets |
+| src/dmv_credentials.js | Saved credentials: types derived from the connectors (one shared Google type), save with a Google token check, delete refused while in use, and the merge of a credential into its connections at run time |
+| src/dmv_connections.js | Save, delete and test connections (a saved credential plus per-connection values); summaries never expose secrets |
 | src/dmv_reports.js | Bootstrap, report validation, discovery, preview, run and refresh-all |
 | src/dmv_continuation.js | Bounded per-user checkpoint storage, snapshot recovery and saved-report chunk execution |
 | src/dmv_writer.js | Output ownership receipt, overlap checks and one atomic Sheets batch |

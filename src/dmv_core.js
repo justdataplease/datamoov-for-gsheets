@@ -6,6 +6,7 @@ var DMV_LIMITS = {
   maxColumns: 80,
   maxReports: 30,
   maxConnections: 20,
+  maxCredentials: 20,
   maxBytes: 8000000,
 };
 
@@ -46,6 +47,7 @@ function dmvCatalog_() {
           accountDiscovery: definition.accountDiscovery || null,
           supportsAccountDiscovery: typeof definition.discoverAccounts === 'function',
           guide: definition.guide || null,
+          credentialFamily: dmvFamilyId_(definition),
           describesTables: typeof definition.describeTables === 'function',
           reports: definition.reports.map(function (report) {
             return {

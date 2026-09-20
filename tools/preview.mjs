@@ -16,6 +16,7 @@ export async function previewCatalog() {
   for (const name of [
     'dmv_core.js',
     'dmv_connector_helpers.js',
+    'dmv_credentials.js',
     'dmv_ai.js',
     ...connectorFiles.map((name) => 'connectors/' + name),
   ]) {
@@ -23,6 +24,23 @@ export async function previewCatalog() {
     new vm.Script(source, { filename: name }).runInContext(context, { timeout: 1000 });
   }
   return JSON.parse(JSON.stringify(context.dmvCatalog_()));
+}
+
+export async function previewFamilies() {
+  const context = vm.createContext({}, { codeGeneration: { strings: false, wasm: false } });
+  const connectorFiles = (await readdir(path.join(root, 'src/connectors')))
+    .filter((name) => name.endsWith('.js'))
+    .sort();
+  for (const name of [
+    'dmv_core.js',
+    'dmv_connector_helpers.js',
+    'dmv_credentials.js',
+    ...connectorFiles.map((name) => 'connectors/' + name),
+  ]) {
+    const source = await readFile(path.join(root, 'src', name), 'utf8');
+    new vm.Script(source, { filename: name }).runInContext(context, { timeout: 1000 });
+  }
+  return JSON.parse(JSON.stringify(context.dmvFamilyCatalog_()));
 }
 
 export async function previewAiProviders() {
@@ -33,12 +51,60 @@ export async function previewAiProviders() {
   return JSON.parse(JSON.stringify(context.dmvAiCatalog_()));
 }
 
-export function previewFixture(catalog, aiProviders = []) {
+export function previewFixture(catalog, aiProviders = [], families = []) {
+  // Families may be derived from the catalog when the caller has none (unit tests).
+  const credentialFamilies = families.length
+    ? families
+    : Object.values(
+        catalog.reduce((all, source) => {
+          const id = source.credentialFamily || source.id;
+          const fields = (source.authFields || []).filter((field) => !field.perConnection);
+          if (!fields.length) return all;
+          all[id] ||= {
+            id,
+            label: id === 'google' ? 'Google Cloud' : source.label,
+            fields,
+            guide: source.guide || null,
+            connectors: [],
+          };
+          all[id].connectors.push(source.id);
+          return all;
+        }, {})
+      );
+  const isSecret = (field) =>
+    field.secret || field.type === 'password' || field.key === 'serviceAccountJson';
+  const credentials = credentialFamilies.map((fam) => ({
+    id: 'demo-credential-' + fam.id,
+    label: fam.label + ' · Demo key',
+    family: fam.id,
+    familyLabel: fam.label,
+    values: Object.fromEntries(
+      fam.fields
+        .filter((field) => !isSecret(field))
+        .map((field) => [
+          field.key,
+          field.default ??
+            ({ email: 'demo@example.com', username: 'report_reader' }[field.key] || ''),
+        ])
+    ),
+    configuredFields: fam.fields
+      .filter(isSecret)
+      .filter(
+        (field) =>
+          !field.showWhen ||
+          [field.showWhen.value]
+            .flat()
+            .includes(fam.fields.find((item) => item.key === field.showWhen.key)?.default ?? '')
+      )
+      .map((field) => field.key),
+    usedBy: fam.connectors.length,
+  }));
   const connections = catalog.map((source, index) => ({
     id: 'demo-' + source.id,
     label:
       source.label + (source.category === 'Database' ? ' · Demo warehouse' : ' · Demo account'),
     connectorId: source.id,
+    credentialId: 'demo-credential-' + (source.credentialFamily || source.id),
     values: Object.fromEntries(
       (source.authFields || [])
         .filter(
@@ -107,6 +173,8 @@ export function previewFixture(catalog, aiProviders = []) {
   });
   return {
     catalog,
+    credentialFamilies,
+    credentials,
     connections,
     reports,
     sheetNames: ['Campaigns', 'Website', 'Deals', 'New report'],
@@ -178,11 +246,69 @@ function installPreview(initial) {
         complete: true,
       };
     },
+    showWindow: () => ({ ok: true }),
+    dmvSaveCredential(input) {
+      if (!input.label) throw new Error('Enter a credential name.');
+      const fam = data.credentialFamilies.find((item) => item.id === input.family);
+      if (!fam) throw new Error('Choose a supported credential type.');
+      const previous = data.credentials.find((item) => item.id === input.id);
+      const secretKeys = fam.fields
+        .filter(
+          (field) => field.secret || field.type === 'password' || field.key === 'serviceAccountJson'
+        )
+        .map((field) => field.key);
+      const values = { ...previous?.values };
+      Object.keys(input.values || {})
+        .filter((key) => !secretKeys.includes(key))
+        .forEach((key) => {
+          values[key] = input.values[key];
+        });
+      for (const field of fam.fields) {
+        const visible =
+          !field.showWhen ||
+          [field.showWhen.value].flat().includes(String(values[field.showWhen.key] ?? ''));
+        if (visible && field.required && !secretKeys.includes(field.key) && !values[field.key])
+          throw new Error(field.label + ' is required.');
+      }
+      const saved = {
+        id: input.id || 'preview-credential-' + nextId++,
+        label: input.label,
+        family: fam.id,
+        familyLabel: fam.label,
+        values,
+        configuredFields: Array.from(
+          new Set([
+            ...(previous?.configuredFields || []),
+            ...secretKeys.filter((key) => input.values?.[key]),
+          ])
+        ),
+        usedBy: data.connections.filter((item) => item.credentialId === input.id).length,
+        verified: fam.id === 'google' && values.authMode !== 'token',
+      };
+      const index = data.credentials.findIndex((item) => item.id === saved.id);
+      if (index < 0) data.credentials.push(saved);
+      else data.credentials[index] = saved;
+      return copy(saved);
+    },
+    dmvDeleteCredential(id) {
+      const users = data.connections.filter((item) => item.credentialId === id);
+      if (users.length)
+        throw new Error(
+          'This credential is used by ' +
+            users.map((item) => item.label).join(', ') +
+            '. Point those connections at another credential first.'
+        );
+      data.credentials = data.credentials.filter((item) => item.id !== id);
+      return { ok: true };
+    },
     dmvSaveConnection(input) {
       if (!input.label) throw new Error('Enter a connection name.');
       const source = data.catalog.find((item) => item.id === input.connectorId);
       const previous = data.connections.find((item) => item.id === input.id);
-      const credentials = input.credentials || {};
+      const credential = data.credentials.find((item) => item.id === input.credentialId);
+      if (input.credentialId && !credential)
+        throw new Error('This credential no longer exists. Refresh the sidebar.');
+      const credentials = { ...(credential?.values || {}), ...(input.credentials || {}) };
       const secretKeys = source.authFields
         .filter(
           (field) => field.secret || field.type === 'password' || field.key === 'serviceAccountJson'
@@ -198,6 +324,7 @@ function installPreview(initial) {
         id: input.id || 'preview-connection-' + nextId++,
         label: input.label,
         connectorId: input.connectorId,
+        credentialId: input.credentialId || null,
         values,
         configuredFields: Array.from(
           new Set([
@@ -302,7 +429,7 @@ function installPreview(initial) {
     },
     dmvChat(input) {
       if (!data.ai.configured)
-        throw new Error('Add an AI provider and API key in the Chat tab first.');
+        throw new Error('Add an AI provider and API key under Settings first.');
       const text = String(input.text || '');
       if (/which|\?$/i.test(text) && !/^Use /.test(text) && !/highest|chart/i.test(text)) {
         return {
@@ -401,7 +528,9 @@ export async function renderPreview() {
       await readFile(path.join(root, 'src/' + filename + '.html'), 'utf8')
     );
   }
-  const fixture = JSON.stringify(previewFixture(await previewCatalog(), await previewAiProviders()))
+  const fixture = JSON.stringify(
+    previewFixture(await previewCatalog(), await previewAiProviders(), await previewFamilies())
+  )
     .replace(/</g, '\\u003c')
     .replace(/\u2028/g, '\\u2028')
     .replace(/\u2029/g, '\\u2029');

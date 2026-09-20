@@ -259,9 +259,10 @@ dmvRegisterConnector_({
       label: 'Account ID',
       type: 'text',
       required: true,
+      perConnection: true,
       help: 'The numeric advertising account ID (not the account number).',
     },
-    { key: 'customerId', label: 'Customer ID', type: 'text', required: true },
+    { key: 'customerId', label: 'Customer ID', type: 'text', required: true, perConnection: true },
     {
       key: 'developerToken',
       label: 'Developer token',

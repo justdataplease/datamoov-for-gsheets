@@ -400,12 +400,14 @@ dmvRegisterConnector_({
   }),
   discoverAccounts: dmvGa4DiscoverAccounts_,
   googleScopes: ['https://www.googleapis.com/auth/analytics.readonly'],
+  credentialFamily: DMV_GOOGLE_CREDENTIAL,
   authFields: [
     {
       key: 'propertyId',
       label: 'Property ID',
       type: 'text',
       required: true,
+      perConnection: true,
       help: 'The numeric GA4 property ID, not the G- measurement ID.',
     },
   ].concat(dmvGoogleAuthFields_()),

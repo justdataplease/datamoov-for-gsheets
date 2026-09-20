@@ -7,9 +7,11 @@ network destination is the AI provider you configure.
 
 ## Setup
 
-1. Open **Extensions → DataMoov → Open DataMoov**, choose **Chat**.
-2. Pick a provider (Anthropic, OpenAI or Google Gemini), paste an API key from your own
-   account, keep or change the model name, then **Save** and **Test**. The key is stored in
+1. Open **Extensions → DataMoov → Open DataMoov**, choose **Settings** (the Chat tab points
+   there until a key is saved).
+2. Under **AI provider** pick Anthropic, OpenAI or Google Gemini, paste an API key from your
+   own account, keep or change the model name, then **Save** and **Test**. The card collapses
+   once configured; the gear in the Chat tab reopens it. The key is stored in
    your private script properties and is never shown again; leave the field blank when
    editing to keep it. The **Create a key** link opens the provider's key page.
    **Instructions for the assistant** is optional standing context sent with every question:

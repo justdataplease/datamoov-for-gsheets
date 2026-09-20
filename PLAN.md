@@ -16,9 +16,10 @@ documentation lands in `README.md`, `docs/code-layout.md`, `docs/connector-contr
 | 7 Docs | done | README, docs/chat.md, code-layout, connector-contract, marketing-connectors, AGENTS.md |
 | 8 Least authorization: no Google API scopes in the manifest; service account / OAuth client / token only; Find accounts in every mode; per-source credential guides | done | `tests/app.test.mjs` (manifest and guides), account-discovery, manual-oauth, transport, google-oauth, Playwright |
 | 9 Chat: standing instructions in settings; `describe_database` with per-connection schema/dataset scope for PostgreSQL and BigQuery | done | `tests/chat.test.mjs`, database-research, business-connectors, Playwright |
+| 11 Settings tab with saved credentials (types derived from connectors, one shared Google type, dropdown + inline add in the connection form, delete refused while in use, rotated secrets land on the credential) and the AI provider card; four tabs with the report and connection editors as screens behind + buttons; larger-window mode | done | `tests/credentials.test.mjs`, sidebar, Playwright (38) |
 | 10 Review fixes (`.local/latest-changes-review.md`): one deadline per chat turn; additive metadata; partial-failure reporting; result ids replayed; last-week preset; whole cell text; search-before-cap discovery on one query path; rotated refresh tokens persisted; LinkedIn `r_ads`; Microsoft probe test; New chat race | done | `tests/date-range.test.mjs`, chat, google-oauth, manual-oauth, ad-connectors, database-research, business-connectors, Playwright |
 
-Offline suite: 185 tests green; browser suite: 36 green. Still needs live verification in a
+Offline suite: 190 tests green; browser suite: 38 green. Still needs live verification in a
 real spreadsheet, as with every source: an AI key per provider (the Anthropic path is the
 one documented from the current API reference; OpenAI and Gemini shapes were checked against
 their current docs), a TikTok, LinkedIn and Microsoft account (Microsoft's report download

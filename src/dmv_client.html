@@ -5,6 +5,9 @@
     const state = {
       catalog: [],
       connections: [],
+      credentials: [],
+      families: [],
+      credentialId: null,
       reports: [],
       limits: { maxRows: 20000, defaultRows: 1000 },
       reportId: null,
@@ -59,13 +62,25 @@
       if (message && kind === 'error')
         $('notice').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-    const TABS = ['reports', 'compose', 'chat', 'connections'];
+    const TABS = ['reports', 'chat', 'connections', 'settings'];
+    // Editors are screens inside a tab, not tabs of their own.
+    const SCREENS = { compose: 'reports', connect: 'connections' };
+    const PANELS = TABS.concat(Object.keys(SCREENS));
+    const family = (id) => state.families.find((item) => item.id === id);
+    const familyFor = (source) => (source ? family(source.credentialFamily) : undefined);
+    const credentialFields = (source) =>
+      (source?.authFields || []).filter((field) => !field.perConnection);
+    const connectionFields = (source) =>
+      (source?.authFields || []).filter((field) => field.perConnection);
+    const usedBy = (credentialId) =>
+      state.connections.filter((item) => item.credentialId === credentialId).length;
     function tab(name) {
-      state.activeTab = name;
+      const selected = SCREENS[name] || name;
+      state.activeTab = selected;
+      for (const item of PANELS) $('panel-' + item).hidden = item !== name;
       for (const item of TABS) {
-        $('panel-' + item).hidden = item !== name;
-        $('tab-' + item).setAttribute('aria-selected', String(item === name));
-        $('tab-' + item).tabIndex = item === name ? 0 : -1;
+        $('tab-' + item).setAttribute('aria-selected', String(item === selected));
+        $('tab-' + item).tabIndex = item === selected ? 0 : -1;
       }
     }
     async function busy(node, label, work) {
@@ -310,6 +325,17 @@
           .map((key) => connection.values?.[key])
           .find(Boolean);
         if (identity) content.append(detail(source.accountDiscovery.label, identity));
+        const credential = state.credentials.find((item) => item.id === connection.credentialId);
+        content.append(
+          detail(
+            'Credential',
+            credential
+              ? credential.label
+              : connection.credentialMissing
+                ? 'Missing: choose another'
+                : 'Stored with this connection'
+          )
+        );
         const actions = el('div', 'card-bottom');
         actions.append(
           button('Edit', 'text-button subtle', () => editConnection(connection)),
@@ -429,14 +455,15 @@
       }
       return result;
     }
+    // A connection = a credential (saved, new, or embedded in older connections) + its own fields.
     function renderAuth(connection) {
       state.accountEpoch++;
       state.accountChoices = [];
       const source = provider($('connection-provider').value);
-      const container = $('auth-fields');
-      container.replaceChildren();
-      for (const field of source?.authFields || []) {
-        container.append(
+      const own = $('auth-fields');
+      own.replaceChildren();
+      for (const field of connectionFields(source)) {
+        own.append(
           createField(
             field,
             'auth-',
@@ -445,19 +472,82 @@
           )
         );
       }
-      updateConditionalFields(container, source?.authFields || []);
-      renderGuide();
+      updateConditionalFields(own, connectionFields(source));
+      const inline = $('inline-credential-fields');
+      inline.replaceChildren();
+      const embedded = Boolean(connection && !connection.credentialId);
+      for (const field of credentialFields(source)) {
+        inline.append(
+          createField(
+            field,
+            'auth-',
+            embedded ? connection.values?.[fieldKey(field)] : undefined,
+            embedded && connection.configuredFields?.includes(fieldKey(field))
+          )
+        );
+      }
+      updateConditionalFields(inline, credentialFields(source));
+      refreshCredentialChoices(connection);
       renderAccountDiscovery();
+    }
+    function refreshCredentialChoices(connection) {
+      const source = provider($('connection-provider').value);
+      const fam = familyFor(source);
+      const select = $('connection-credential');
+      select.replaceChildren();
+      const saved = state.credentials.filter((item) => item.family === fam?.id);
+      for (const credential of saved) select.append(option(credential.id, credential.label));
+      if (connection && !connection.credentialId)
+        select.append(option('__embedded', 'Stored with this connection'));
+      select.append(option('__new', saved.length ? 'Add a new credential…' : 'New credential'));
+      select.value =
+        connection?.credentialId && saved.some((item) => item.id === connection.credentialId)
+          ? connection.credentialId
+          : connection && !connection.credentialId
+            ? '__embedded'
+            : saved[0]?.id || '__new';
+      $('connection-credential-help').textContent = fam
+        ? saved.length
+          ? 'One ' + fam.label + ' credential can serve every ' + fam.label + ' connection.'
+          : 'No ' + fam.label + ' credential saved yet; add one here or under Settings.'
+        : '';
+      $('inline-credential-label').value =
+        connection && !connection.credentialId ? connection.label + ' credential' : '';
+      renderCredentialInline();
+    }
+    function credentialChoice() {
+      return $('connection-credential').value;
+    }
+    function renderCredentialInline() {
+      const choice = credentialChoice();
+      const inline = choice === '__new' || choice === '__embedded';
+      $('credential-inline').hidden = !inline;
+      $('inline-credential-label').disabled = !inline;
+      $('inline-credential-label').required = choice === '__new';
+      for (const input of $('inline-credential-fields').querySelectorAll('input,select,textarea'))
+        if (!inline) input.disabled = true;
+      if (inline)
+        updateConditionalFields(
+          $('inline-credential-fields'),
+          credentialFields(provider($('connection-provider').value))
+        );
+      renderGuide();
     }
     // "How to get these credentials": the connector's steps, plus the steps for the chosen mode.
     function renderGuide() {
-      const guide = provider($('connection-provider').value)?.guide;
-      const panel = $('setup-guide');
+      const source = provider($('connection-provider').value);
+      renderGuideInto($('setup-guide'), $('setup-guide-body'), source?.guide, currentAuthMode());
+    }
+    function currentAuthMode() {
+      if (!$('credential-inline').hidden)
+        return $('inline-credential-fields').querySelector('[name=authMode]')?.value;
+      const credential = state.credentials.find((item) => item.id === credentialChoice());
+      return credential?.values?.authMode;
+    }
+    function renderGuideInto(panel, body, guide, mode) {
       panel.hidden = !guide;
       if (!guide) return;
-      const mode = $('auth-fields').querySelector('[name=authMode]')?.value;
       const modeGuide = (mode && guide.modes?.[mode]) || null;
-      const body = $('setup-guide-body');
       body.replaceChildren();
       if (guide.intro) body.append(el('p', 'guide-intro', guide.intro));
       const steps = [...(modeGuide?.steps || []), ...(guide.steps || [])];
@@ -480,6 +570,151 @@
         }
         body.append(row);
       }
+    }
+    // The credential part of the connection form: a saved id, or values typed inline.
+    function connectionCredentialInput() {
+      const source = provider($('connection-provider').value);
+      const choice = credentialChoice();
+      const inline = $('credential-inline').hidden
+        ? {}
+        : readFields($('inline-credential-fields'), credentialFields(source), true);
+      return {
+        credentialId: choice && choice !== '__new' && choice !== '__embedded' ? choice : null,
+        inline,
+        newCredential:
+          choice === '__new'
+            ? {
+                label: $('inline-credential-label').value.trim(),
+                family: familyFor(source)?.id,
+                values: inline,
+              }
+            : null,
+      };
+    }
+    // ---- Settings: saved credentials ----
+    function renderCredentials() {
+      const list = $('credentials-list');
+      list.replaceChildren();
+      $('credentials-status').textContent = state.credentials.length
+        ? state.credentials.length + ' saved'
+        : 'None saved';
+      if (!state.credentials.length)
+        list.append(
+          empty(
+            'No credentials yet',
+            'Save a key once here, or while adding a connection, and reuse it everywhere.',
+            '🔑'
+          )
+        );
+      for (const credential of state.credentials) {
+        const card = el('article', 'connection-card');
+        const top = el('div', 'card-top');
+        const names = el('div');
+        names.append(
+          el('div', 'card-title', credential.label),
+          el('div', 'card-subtitle', credential.familyLabel)
+        );
+        top.append(names);
+        const content = el('div', 'card-content');
+        content.append(top);
+        const count = usedBy(credential.id);
+        content.append(
+          detail(
+            'Used by',
+            count ? count + (count === 1 ? ' connection' : ' connections') : 'No connection yet'
+          )
+        );
+        if (credential.values?.authMode)
+          content.append(
+            detail(
+              'Mode',
+              { service_account: 'Service account', oauth: 'OAuth client', token: 'Access token' }[
+                credential.values.authMode
+              ] || credential.values.authMode
+            )
+          );
+        const actions = el('div', 'card-bottom');
+        actions.append(
+          button('Edit', 'text-button subtle', () => editCredential(credential)),
+          button('Remove', 'text-button subtle', (event) =>
+            busy(event.currentTarget, 'Removing…', async () => {
+              if (
+                !window.confirm('Remove "' + credential.label + '"? Connections must not use it.')
+              )
+                return;
+              await api('dmvDeleteCredential', credential.id);
+              state.credentials = state.credentials.filter((item) => item.id !== credential.id);
+              renderCredentials();
+              if (state.credentialId === credential.id) resetCredential();
+              refreshCredentialChoices();
+              notice('Credential removed.');
+            })
+          )
+        );
+        card.append(content, actions);
+        list.append(card);
+      }
+    }
+    function fillFamilies(select, selected) {
+      select.replaceChildren();
+      for (const fam of state.families) select.append(option(fam.id, fam.label));
+      if (selected && family(selected)) select.value = selected;
+    }
+    function renderCredentialFields(credential) {
+      const fam = family($('credential-family').value);
+      const container = $('credential-fields');
+      container.replaceChildren();
+      for (const field of fam?.fields || [])
+        container.append(
+          createField(
+            field,
+            'cred-',
+            credential?.values?.[fieldKey(field)],
+            credential?.configuredFields?.includes(fieldKey(field))
+          )
+        );
+      updateConditionalFields(container, fam?.fields || []);
+      const sources = (fam?.connectors || []).map((id) => provider(id)?.label || id);
+      $('credential-family-help').textContent = sources.length
+        ? 'Used by: ' + sources.join(', ') + '.'
+        : '';
+      renderCredentialGuide();
+    }
+    function renderCredentialGuide() {
+      const fam = family($('credential-family').value);
+      renderGuideInto(
+        $('credential-guide'),
+        $('credential-guide-body'),
+        fam?.guide,
+        $('credential-fields').querySelector('[name=authMode]')?.value
+      );
+    }
+    function resetCredential(familyId) {
+      state.credentialId = null;
+      $('credential-form').reset();
+      fillFamilies($('credential-family'), familyId);
+      $('credential-family').disabled = false;
+      $('credential-editor-title').textContent = 'Add a credential';
+      $('save-credential').textContent = 'Save credential';
+      $('credential-editor').hidden = true;
+      renderCredentialFields();
+    }
+    function openCredentialEditor() {
+      $('credential-editor').hidden = false;
+      $('credentials-card').open = true;
+      $('credential-editor').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      $('credential-label').focus();
+    }
+    function editCredential(credential) {
+      state.credentialId = credential.id;
+      fillFamilies($('credential-family'), credential.family);
+      $('credential-family').disabled = true;
+      $('credential-label').value = credential.label;
+      $('credential-editor-title').textContent = 'Edit credential';
+      $('save-credential').textContent = 'Save changes';
+      renderCredentialFields(credential);
+      tab('settings');
+      openCredentialEditor();
     }
     function accountDiscoveryActive() {
       const source = provider($('connection-provider').value);
@@ -525,10 +760,15 @@
       node.textContent = 'Finding accounts…';
       $('account-discovery-status').textContent = 'Checking access with these credentials…';
       try {
+        const chosen = connectionCredentialInput();
         const result = await api('dmvDiscoverAccounts', {
           ...(state.connectionId ? { id: state.connectionId } : {}),
           connectorId: source.id,
-          credentials: readFields($('auth-fields'), source.authFields || [], true),
+          ...(chosen.credentialId ? { credentialId: chosen.credentialId } : {}),
+          credentials: {
+            ...readFields($('auth-fields'), connectionFields(source), true),
+            ...chosen.inline,
+          },
         });
         if (epoch !== state.accountEpoch) return;
         if (!result || result.complete !== true || !Array.isArray(result.accounts))
@@ -557,8 +797,12 @@
       $('connection-provider').disabled = false;
       $('connection-editor-title').textContent = 'Add a connection';
       $('save-connection').textContent = 'Save connection';
-      $('cancel-connection').hidden = true;
       renderAuth();
+    }
+    function openConnectionEditor(connectorId) {
+      resetConnection(connectorId);
+      tab('connect');
+      $('connection-label').focus();
     }
     function editConnection(connection) {
       state.connectionId = connection.id;
@@ -567,9 +811,8 @@
       $('connection-label').value = connection.label;
       $('connection-editor-title').textContent = 'Edit connection';
       $('save-connection').textContent = 'Save changes';
-      $('cancel-connection').hidden = false;
       renderAuth(connection);
-      tab('connections');
+      tab('connect');
       $('connection-label').focus();
     }
     function resetReport(connectorId) {
@@ -577,9 +820,7 @@
       $('report-form').reset();
       $('data-preview').hidden = true;
       $('report-editor-title').textContent = 'Build a report';
-      $('tab-compose').textContent = 'New report';
       $('save-report').textContent = 'Save report';
-      $('reset-report').hidden = true;
       fillProviders($('report-provider'), connectorId);
       $('row-limit').value = state.limits.defaultRows || 1000;
       $('row-limit').max = state.limits.maxRows || 20000;
@@ -729,9 +970,7 @@
       $('start-date').value = report.dateRange?.startDate || '';
       $('end-date').value = report.dateRange?.endDate || '';
       $('report-editor-title').textContent = 'Edit report';
-      $('tab-compose').textContent = 'Edit report';
       $('save-report').textContent = 'Save changes';
-      $('reset-report').hidden = false;
       updateDates();
       updateSchedule();
       tab('compose');
@@ -809,6 +1048,8 @@
         const data = await api('dmvBootstrap');
         state.catalog = data.catalog || [];
         state.connections = data.connections || [];
+        state.credentials = data.credentials || [];
+        state.families = data.credentialFamilies || [];
         state.reports = data.reports || [];
         state.limits = data.limits || state.limits;
         state.target = data.defaultTarget;
@@ -822,14 +1063,20 @@
         );
         renderReports();
         renderConnections();
+        renderCredentials();
         if (window.dmvChatUi) window.dmvChatUi.bootstrap(data);
         if (!state.loaded) {
           resetReport();
           resetConnection();
+          resetCredential();
           $('report-fields').disabled = false;
           $('connection-fields').disabled = false;
+          $('credential-fieldset').disabled = false;
           state.loaded = true;
-        } else refreshConnections();
+        } else {
+          refreshConnections();
+          refreshCredentialChoices();
+        }
         notice('');
       } catch (error) {
         notice(error.message || 'Could not open the workspace.', 'error');
@@ -880,22 +1127,71 @@
     $('report-config').addEventListener('change', () =>
       updateConditionalFields($('report-config'), currentReport()?.configFields || [])
     );
-    $('connect-source').addEventListener('click', () => {
-      resetConnection($('report-provider').value);
-      tab('connections');
-      $('connection-label').focus();
+    $('connect-source').addEventListener('click', () =>
+      openConnectionEditor($('report-provider').value)
+    );
+    $('new-connection').addEventListener('click', () => openConnectionEditor());
+    $('new-credential').addEventListener('click', () => {
+      resetCredential();
+      openCredentialEditor();
     });
     $('connection-provider').addEventListener('change', () => renderAuth());
+    $('connection-credential').addEventListener('change', () => {
+      renderCredentialInline();
+      invalidateAccounts();
+    });
     const authChanged = (event) => {
       const source = provider($('connection-provider').value);
-      updateConditionalFields($('auth-fields'), source?.authFields || []);
+      updateConditionalFields($('auth-fields'), connectionFields(source));
+      if (!$('credential-inline').hidden)
+        updateConditionalFields($('inline-credential-fields'), credentialFields(source));
       if (event.target.name === 'authMode') renderGuide();
       // Discovered choices belong to the credentials they were listed with.
       if (!(source?.accountDiscovery?.credentialKeys || []).includes(event.target.name))
         invalidateAccounts();
     };
-    $('auth-fields').addEventListener('input', authChanged);
-    $('auth-fields').addEventListener('change', authChanged);
+    for (const id of ['auth-fields', 'inline-credential-fields']) {
+      $(id).addEventListener('input', authChanged);
+      $(id).addEventListener('change', authChanged);
+    }
+    $('open-window').addEventListener('click', (event) =>
+      busy(event.currentTarget, '…', async () => {
+        await api('showWindow');
+        notice('DataMoov opened in a larger window.');
+      })
+    );
+    // ---- Settings tab handlers ----
+    $('credential-family').addEventListener('change', () => renderCredentialFields());
+    $('credential-fields').addEventListener('change', (event) => {
+      updateConditionalFields(
+        $('credential-fields'),
+        family($('credential-family').value)?.fields || []
+      );
+      if (event.target.name === 'authMode') renderCredentialGuide();
+    });
+    $('cancel-credential').addEventListener('click', () => resetCredential());
+    $('credential-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const fam = family($('credential-family').value);
+      const credential = {
+        ...(state.credentialId ? { id: state.credentialId } : {}),
+        label: $('credential-label').value.trim(),
+        family: fam?.id,
+        values: readFields($('credential-fields'), fam?.fields || [], true),
+      };
+      formBusy('credential-fieldset', 'save-credential', 'Saving…', async () => {
+        const saved = await api('dmvSaveCredential', credential);
+        upsert(state.credentials, saved);
+        renderCredentials();
+        refreshCredentialChoices();
+        resetCredential(saved.family);
+        notice(
+          saved.verified
+            ? 'Credential saved and verified with Google.'
+            : 'Credential saved. It is checked when you connect an account with it.'
+        );
+      });
+    });
     $('discover-accounts').addEventListener('click', discoverAccounts);
     $('discovered-account').addEventListener('change', () => {
       const selected = $('discovered-account').value;
@@ -908,25 +1204,42 @@
       $('account-discovery-status').textContent =
         (discovery?.label || 'Account') + ' filled in above. Save the connection to continue.';
     });
-    $('cancel-connection').addEventListener('click', () => resetConnection());
+    $('cancel-connection').addEventListener('click', () => {
+      resetConnection();
+      tab('connections');
+    });
     $('connection-form').addEventListener('submit', (event) => {
       event.preventDefault();
+      const source = provider($('connection-provider').value);
+      const chosen = connectionCredentialInput();
       const connection = {
         ...(state.connectionId ? { id: state.connectionId } : {}),
         label: $('connection-label').value.trim(),
-        connectorId: $('connection-provider').value,
-        credentials: readFields(
-          $('auth-fields'),
-          provider($('connection-provider').value)?.authFields || [],
-          true
-        ),
+        connectorId: source.id,
+        credentialId: chosen.credentialId,
+        credentials: {
+          ...readFields($('auth-fields'), connectionFields(source), true),
+          ...(credentialChoice() === '__embedded' ? chosen.inline : {}),
+        },
       };
       formBusy('connection-fields', 'save-connection', 'Saving…', async () => {
+        if (chosen.newCredential) {
+          // The new credential is saved first so it can be reused even if the connection fails.
+          const credential = await api('dmvSaveCredential', chosen.newCredential);
+          upsert(state.credentials, credential);
+          renderCredentials();
+          connection.credentialId = credential.id;
+          refreshCredentialChoices();
+          $('connection-credential').value = credential.id;
+          renderCredentialInline();
+        }
         const saved = await api('dmvSaveConnection', connection);
         upsert(state.connections, saved);
         renderConnections();
+        renderCredentials();
         refreshConnections(saved.id);
         resetConnection(saved.connectorId);
+        tab('connections');
         notice(
           saved.verified
             ? 'Connection saved and verified with the provider.'
@@ -982,6 +1295,8 @@
       });
     });
     if (window.DATAMOOV_LOCAL_PREVIEW === true) $('preview-banner').hidden = false;
+    // Inside the larger window there is nothing wider to open.
+    if (window.innerWidth >= 440) $('open-window').hidden = true;
     // The chat partial builds on these helpers; nothing else is exposed.
     window.dmvSidebar = { api, el, button, notice, provider, state, tab };
     tab('reports');

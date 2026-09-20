@@ -326,11 +326,13 @@ dmvRegisterConnector_({
   color: '#4285f4',
   allowedHosts: ['bigquery.googleapis.com'],
   googleScopes: ['https://www.googleapis.com/auth/bigquery.readonly'],
+  credentialFamily: DMV_GOOGLE_CREDENTIAL,
   authFields: [
     {
       key: 'chatDatasets',
       label: 'Datasets for chat',
       type: 'text',
+      perConnection: true,
       help: 'Comma-separated project.dataset names the chat may explore, for example my-project.analytics. Reports are not limited by this.',
     },
   ].concat(

@@ -288,6 +288,7 @@ dmvRegisterConnector_({
       label: 'Zendesk subdomain',
       type: 'text',
       required: true,
+      perConnection: true,
       help: 'For example: acme from acme.zendesk.com.',
     },
     { key: 'email', label: 'Agent email', type: 'text', required: true },

@@ -19,7 +19,18 @@
           ></span>
           <div><strong>DataMoov</strong><span>YOUR DATA, IN SHEETS</span></div>
         </div>
-        <span class="edition">Sheets</span>
+        <div class="heading-actions">
+          <button
+            type="button"
+            class="icon-button"
+            id="open-window"
+            aria-label="Open DataMoov in a larger window"
+            title="Open in a larger window"
+          >
+            &#x2921;
+          </button>
+          <span class="edition">Sheets</span>
+        </div>
       </header>
       <nav class="tabs" aria-label="Workspace" role="tablist">
         <button
@@ -31,16 +42,6 @@
           data-tab="reports"
         >
           Reports<span id="report-count" class="tab-count">0</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="tab-compose"
-          aria-controls="panel-compose"
-          aria-selected="false"
-          data-tab="compose"
-        >
-          New report
         </button>
         <button
           type="button"
@@ -62,6 +63,16 @@
         >
           Connections
         </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-settings"
+          aria-controls="panel-settings"
+          aria-selected="false"
+          data-tab="settings"
+        >
+          Settings
+        </button>
       </nav>
       <main>
         <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
@@ -77,32 +88,40 @@
               <h1>Your reports</h1>
               <p>Fresh numbers. Familiar spreadsheet.</p>
             </div>
-            <button
-              type="button"
-              class="icon-button"
-              id="refresh-reports"
-              aria-label="Refresh reports"
-              title="Refresh reports"
-            >
-              &#8635;
-            </button>
+            <div class="heading-actions">
+              <button
+                type="button"
+                class="icon-button"
+                id="refresh-reports"
+                aria-label="Refresh reports"
+                title="Refresh reports"
+              >
+                &#8635;
+              </button>
+              <button
+                type="button"
+                class="icon-button primary"
+                id="new-report"
+                aria-label="Create a report"
+                title="Create a report"
+              >
+                +
+              </button>
+            </div>
           </div>
           <div id="reports-list" class="card-list"></div>
-          <button type="button" id="new-report" class="button primary full">
-            <span aria-hidden="true">+</span> Create a report
-          </button>
           <p class="footnote">
             Nothing leaves your Google account. Credentials and reports are stored in your account
             and this spreadsheet. DataMoov has no servers and keeps no copy of your data.
           </p>
         </section>
-        <section id="panel-compose" role="tabpanel" aria-labelledby="tab-compose" hidden>
+        <section id="panel-compose" role="tabpanel" aria-labelledby="tab-reports" hidden>
           <div class="section-heading">
             <div>
               <h1 id="report-editor-title">Build a report</h1>
               <p>Choose the essentials. Bring them to Sheets.</p>
             </div>
-            <button type="button" class="text-button" id="reset-report" hidden>Cancel</button>
+            <button type="button" class="text-button" id="reset-report">&larr; Reports</button>
           </div>
           <form id="report-form">
             <fieldset id="report-fields" disabled>
@@ -257,8 +276,15 @@
               <p>Ask a question. Get the numbers, the table and the chart.</p>
             </div>
             <div class="heading-actions">
-              <button type="button" class="text-button subtle" id="chat-new" hidden>
-                New chat
+              <button
+                type="button"
+                class="icon-button"
+                id="chat-new"
+                aria-label="New chat"
+                title="New chat"
+                hidden
+              >
+                &#x270E;
               </button>
               <button
                 type="button"
@@ -272,11 +298,136 @@
               </button>
             </div>
           </div>
-          <section id="ai-settings" class="ai-settings" aria-label="AI provider settings">
-            <div class="field-heading">
-              <h2 id="ai-settings-title">Set up your AI provider</h2>
-              <button type="button" id="ai-settings-close" class="text-button" hidden>Close</button>
+          <div id="chat-setup" class="empty-state" hidden>
+            <span class="empty-icon" aria-hidden="true">&#x2728;</span>
+            <strong>Bring your own AI key</strong>
+            <p>Add an Anthropic, OpenAI or Gemini API key under Settings to start chatting.</p>
+            <button type="button" id="chat-open-settings" class="button primary">
+              Set up the AI provider
+            </button>
+          </div>
+          <div id="chat-ready" hidden>
+            <p id="ai-status" class="field-help"></p>
+            <div id="chat-suggestions" class="chip-row" aria-label="Suggestions"></div>
+            <div id="chat-messages" class="chat-messages" role="log" aria-live="polite"></div>
+            <p id="chat-working" class="boot-state" hidden>
+              <span class="spinner" aria-hidden="true"></span>Working with your data&hellip; this
+              can take a minute.
+            </p>
+            <form id="chat-form" class="chat-composer">
+              <label for="chat-input" class="visually-hidden">Your question</label
+              ><textarea
+                id="chat-input"
+                rows="2"
+                maxlength="4000"
+                placeholder="e.g. Spend by campaign last month, in a new tab with a chart"
+              ></textarea
+              ><button type="submit" id="chat-send" class="button primary">Ask</button>
+            </form>
+            <p class="field-help">
+              The chat runs your saved connections, writes only into empty cells and never changes
+              your accounts.
+            </p>
+          </div>
+        </section>
+        <section id="panel-connections" role="tabpanel" aria-labelledby="tab-connections" hidden>
+          <div class="section-heading">
+            <div>
+              <h1>Connections</h1>
+              <p>Connect an account once. Use it for reports and in chat.</p>
             </div>
+            <button
+              type="button"
+              class="icon-button primary"
+              id="new-connection"
+              aria-label="Add a connection"
+              title="Add a connection"
+            >
+              +
+            </button>
+          </div>
+          <div id="connections-list" class="card-list"></div>
+        </section>
+        <section id="panel-connect" role="tabpanel" aria-labelledby="tab-connections" hidden>
+          <div class="section-heading">
+            <div>
+              <h1 id="connection-editor-title">Add a connection</h1>
+              <p>Pick a source, choose a credential, point at an account.</p>
+            </div>
+            <button type="button" class="text-button" id="cancel-connection">
+              &larr; Connections
+            </button>
+          </div>
+          <form id="connection-form">
+            <fieldset id="connection-fields" disabled>
+              <label for="connection-provider">Data source</label
+              ><select id="connection-provider" required></select>
+              <label for="connection-label">Connection name</label
+              ><input
+                id="connection-label"
+                type="text"
+                required
+                maxlength="120"
+                placeholder="e.g. Marketing account"
+              />
+              <label for="connection-credential">Credential</label
+              ><select id="connection-credential"></select>
+              <p id="connection-credential-help" class="field-help"></p>
+              <div id="credential-inline" hidden>
+                <label for="inline-credential-label">Credential name</label
+                ><input
+                  id="inline-credential-label"
+                  type="text"
+                  maxlength="120"
+                  placeholder="e.g. Agency service account"
+                />
+                <div id="inline-credential-fields"></div>
+              </div>
+              <div id="auth-fields"></div>
+              <details id="setup-guide" class="setup-guide" hidden>
+                <summary>How to get these credentials</summary>
+                <div id="setup-guide-body"></div>
+              </details>
+              <div id="account-discovery" class="account-discovery" hidden>
+                <p class="field-help">
+                  Not sure of the ID? Let DataMoov list the accounts this credential can reach.
+                </p>
+                <button type="button" id="discover-accounts" class="button secondary full">
+                  Find accounts
+                </button>
+                <label for="discovered-account" id="discovered-account-label">Account</label>
+                <select id="discovered-account" disabled>
+                  <option value="">Find accounts first</option>
+                </select>
+                <p
+                  id="account-discovery-status"
+                  class="field-help"
+                  role="status"
+                  aria-live="polite"
+                ></p>
+              </div>
+              <p class="field-help">
+                Saved privately to your Google account and checked with the provider when you save.
+                Secrets are never displayed again.
+              </p>
+              <button type="submit" id="save-connection" class="button primary full">
+                Save connection
+              </button>
+            </fieldset>
+          </form>
+        </section>
+        <section id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
+          <div class="section-heading">
+            <div>
+              <h1>Settings</h1>
+              <p>Keys and credentials. Saved once, used everywhere.</p>
+            </div>
+          </div>
+          <details id="ai-settings" class="settings-card" aria-label="AI provider settings">
+            <summary>
+              <span>AI provider</span
+              ><span id="ai-settings-status" class="card-status">Not set up</span>
+            </summary>
             <form id="ai-form">
               <fieldset id="ai-fields">
                 <label for="ai-provider">AI provider</label
@@ -320,92 +471,63 @@
                 </button>
               </fieldset>
             </form>
-          </section>
-          <div id="chat-ready" hidden>
-            <p id="ai-status" class="field-help"></p>
-            <div id="chat-suggestions" class="chip-row" aria-label="Suggestions"></div>
-            <div id="chat-messages" class="chat-messages" role="log" aria-live="polite"></div>
-            <p id="chat-working" class="boot-state" hidden>
-              <span class="spinner" aria-hidden="true"></span>Working with your data&hellip; this
-              can take a minute.
-            </p>
-            <form id="chat-form" class="chat-composer">
-              <label for="chat-input" class="visually-hidden">Your question</label
-              ><textarea
-                id="chat-input"
-                rows="2"
-                maxlength="4000"
-                placeholder="e.g. Spend by campaign last month, in a new tab with a chart"
-              ></textarea
-              ><button type="submit" id="chat-send" class="button primary">Ask</button>
-            </form>
+          </details>
+          <details id="credentials-card" class="settings-card" open>
+            <summary>
+              <span>Credentials</span
+              ><span id="credentials-status" class="card-status">None saved</span>
+            </summary>
             <p class="field-help">
-              The chat runs your saved connections, writes only into empty cells and never changes
-              your accounts.
+              A credential is a key or token you reuse: one Google service account for every Google
+              source, one Meta system-user token for every ad account.
             </p>
-          </div>
-        </section>
-        <section id="panel-connections" role="tabpanel" aria-labelledby="tab-connections" hidden>
-          <div class="section-heading">
-            <div>
-              <h1>Connections</h1>
-              <p>One account. As many reports as you need.</p>
-            </div>
-          </div>
-          <div id="connections-list" class="card-list"></div>
-          <div class="connection-editor">
             <div class="field-heading">
-              <h2 id="connection-editor-title">Add a connection</h2>
-              <button type="button" id="cancel-connection" class="text-button" hidden>
-                Cancel
+              <h2>Saved credentials</h2>
+              <button
+                type="button"
+                class="icon-button primary"
+                id="new-credential"
+                aria-label="Add a credential"
+                title="Add a credential"
+              >
+                +
               </button>
             </div>
-            <form id="connection-form">
-              <fieldset id="connection-fields" disabled>
-                <label for="connection-provider">Data source</label
-                ><select id="connection-provider" required></select>
-                <label for="connection-label">Connection name</label
-                ><input
-                  id="connection-label"
-                  type="text"
-                  required
-                  maxlength="120"
-                  placeholder="e.g. Marketing account"
-                />
-                <div id="auth-fields"></div>
-                <details id="setup-guide" class="setup-guide" hidden>
-                  <summary>How to get these credentials</summary>
-                  <div id="setup-guide-body"></div>
-                </details>
-                <div id="account-discovery" class="account-discovery" hidden>
+            <div id="credentials-list" class="card-list"></div>
+            <div id="credential-editor" class="connection-editor" hidden>
+              <div class="field-heading">
+                <h2 id="credential-editor-title">Add a credential</h2>
+                <button type="button" id="cancel-credential" class="text-button">Cancel</button>
+              </div>
+              <form id="credential-form">
+                <fieldset id="credential-fieldset" disabled>
+                  <label for="credential-family">Type</label
+                  ><select id="credential-family" required></select>
+                  <p id="credential-family-help" class="field-help"></p>
+                  <label for="credential-label">Name</label
+                  ><input
+                    id="credential-label"
+                    type="text"
+                    required
+                    maxlength="120"
+                    placeholder="e.g. Agency service account"
+                  />
+                  <div id="credential-fields"></div>
+                  <details id="credential-guide" class="setup-guide" hidden>
+                    <summary>How to get this credential</summary>
+                    <div id="credential-guide-body"></div>
+                  </details>
                   <p class="field-help">
-                    Not sure of the ID? Enter the credentials above and let DataMoov list the
-                    accounts they can reach.
+                    Stored privately in your Google account. Secrets are never shown again; leave a
+                    secret blank when editing to keep it.
                   </p>
-                  <button type="button" id="discover-accounts" class="button secondary full">
-                    Find accounts
+                  <button type="submit" id="save-credential" class="button primary full">
+                    Save credential
                   </button>
-                  <label for="discovered-account" id="discovered-account-label">Account</label>
-                  <select id="discovered-account" disabled>
-                    <option value="">Find accounts first</option>
-                  </select>
-                  <p
-                    id="account-discovery-status"
-                    class="field-help"
-                    role="status"
-                    aria-live="polite"
-                  ></p>
-                </div>
-                <p class="field-help">
-                  Credentials are saved privately to your Google account and checked with the
-                  provider when you save. Saved secrets are never displayed again.
-                </p>
-                <button type="submit" id="save-connection" class="button primary full">
-                  Save connection
-                </button>
-              </fieldset>
-            </form>
-          </div>
+                </fieldset>
+              </form>
+            </div>
+          </details>
         </section>
       </main>
       <footer class="app-footer">

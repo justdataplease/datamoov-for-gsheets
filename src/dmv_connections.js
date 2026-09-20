@@ -1,21 +1,33 @@
-/* Saved connections: credentials stay private to the Google user who entered them. */
+/* Saved connections: a saved credential (or, for older connections, embedded secrets) plus the
+   per-connection values. Secrets stay private to the Google user who entered them. */
 function dmvConnectionSummary_(connection) {
   var fields = dmvConnector_(connection.connectorId).authFields || [];
+  var merged,
+    credentialMissing = false;
+  try {
+    merged = dmvConnectionValues_(connection);
+  } catch (error) {
+    merged = connection.credentials || {};
+    credentialMissing = true;
+  }
   var values = {};
   var configured = [];
   fields.forEach(function (field) {
-    var value = connection.credentials[field.key];
+    var value = merged[field.key];
     if (value !== undefined && value !== '') configured.push(field.key);
     if (field.type !== 'password' && !field.secret && field.key !== 'serviceAccountJson')
       values[field.key] = value;
   });
-  return {
+  var summary = {
     id: connection.id,
     label: connection.label,
     connectorId: connection.connectorId,
+    credentialId: connection.credentialId || null,
     values: values,
     configuredFields: configured,
   };
+  if (credentialMissing) summary.credentialMissing = true;
+  return summary;
 }
 
 function dmvAccountSelectionKeys_(connector) {
@@ -31,9 +43,9 @@ function dmvAccountSelectionKeys_(connector) {
   return keys;
 }
 
-function dmvConnectionCredentials_(connector, input, previous) {
+function dmvConnectionCredentials_(connector, input, previous, fields) {
   var credentials = {};
-  (connector.authFields || []).forEach(function (field) {
+  (fields || connector.authFields || []).forEach(function (field) {
     var value = (input.credentials || {})[field.key];
     var secret = field.secret || field.type === 'password' || field.key === 'serviceAccountJson';
     if (secret && (value === '' || value === undefined) && previous)
@@ -53,6 +65,13 @@ function dmvDiscoverAccounts(input) {
     throw new Error('Choose a connection for this source.');
   var keys = dmvAccountSelectionKeys_(connector);
   var credentials = dmvConnectionCredentials_(connector, input, previous);
+  if (input.credentialId) {
+    // Discovery with a saved credential: its values under the form's per-connection values.
+    var stored = dmvRead_('credential', input.credentialId).values;
+    Object.keys(stored).forEach(function (key) {
+      if (credentials[key] === undefined || credentials[key] === '') credentials[key] = stored[key];
+    });
+  } else if (previous) credentials = Object.assign({}, dmvConnectionValues_(previous), credentials);
   credentials = dmvFieldsInput_(
     (connector.authFields || []).filter(function (field) {
       return keys.indexOf(field.key) === -1;
@@ -119,23 +138,35 @@ function dmvSaveConnection(input) {
       throw new Error('Wait for the current refresh to finish before editing this connection.');
     if (!previous && dmvList_('connection').length >= DMV_LIMITS.maxConnections)
       throw new Error('Keep at most ' + DMV_LIMITS.maxConnections + ' connections in this app.');
-    var credentials = dmvFieldsInput_(
-      connector.authFields,
-      dmvConnectionCredentials_(connector, input, previous)
+    // With a saved credential the connection keeps only its own values (account ids, chat scope);
+    // older connections may still embed the whole credential.
+    var credential = null;
+    if (input.credentialId) {
+      credential = dmvRead_('credential', input.credentialId);
+      if (credential.family !== dmvFamilyId_(connector))
+        throw new Error('This credential is for another type of source.');
+    }
+    var ownFields = credential ? dmvConnectionFields_(connector) : connector.authFields || [];
+    var own = dmvFieldsInput_(
+      ownFields,
+      dmvConnectionCredentials_(connector, input, previous, ownFields)
     );
-    (connector.authFields || []).forEach(function (field) {
-      if (String(credentials[field.key] || '').length > 12000)
+    ownFields.forEach(function (field) {
+      if (String(own[field.key] || '').length > 12000)
         throw new Error(field.label + ' is too long.');
     });
+    var credentials = credential ? Object.assign({}, credential.values, own) : own;
+    var before = previous ? dmvConnectionValues_(previous) : null;
     var changed =
       !previous ||
+      (previous.credentialId || null) !== (credential ? credential.id : null) ||
       (connector.authFields || []).some(function (field) {
-        return credentials[field.key] !== previous.credentials[field.key];
+        return credentials[field.key] !== before[field.key];
       });
     var selectionChanged =
       previous &&
       dmvAccountSelectionKeys_(connector).some(function (key) {
-        return String(previous.credentials[key] || '') !== String(credentials[key] || '');
+        return String(before[key] || '') !== String(credentials[key] || '');
       });
     if (
       selectionChanged &&
@@ -149,9 +180,17 @@ function dmvSaveConnection(input) {
     var verified = changed && (typeof connector.test === 'function' || !!connector.googleScopes);
     if (verified) {
       try {
+        // Rotated secrets from the check land on the credential record, or (embedded) on the
+        // very object stored below.
         var context = dmvContext_(
           connector,
-          { credentials: credentials },
+          credential
+            ? {
+                credentials: credentials,
+                credentialId: credential.id,
+                credentialRevision: credential.revision || 0,
+              }
+            : { credentials: credentials },
           { config: {}, fields: [], maxRows: 1 },
           {}
         );
@@ -165,7 +204,8 @@ function dmvSaveConnection(input) {
       id: previous ? previous.id : dmvId_(),
       label: dmvText_(input.label, 'Connection name', 80, true),
       connectorId: connector.id,
-      credentials: credentials,
+      credentialId: credential ? credential.id : undefined,
+      credentials: own,
       revision: previous ? (previous.revision || 0) + 1 : 1,
     };
     dmvSave_('connection', connection);
@@ -178,24 +218,26 @@ function dmvSaveConnection(input) {
 // Persist a provider-issued replacement secret (a rotated refresh token) into the saved
 // connection. Skipped when the user edited the connection meanwhile; only secret fields change.
 function dmvRotateCredentials_(connection, patch) {
-  var raw = dmvStore_().getProperty(dmvKey_('connection', connection.id));
+  var kind = connection.credentialId ? 'credential' : 'connection';
+  var id = connection.credentialId || connection.id;
+  if (!id) return;
+  var raw = dmvStore_().getProperty(dmvKey_(kind, id));
   if (!raw) return;
   var saved = JSON.parse(raw);
-  if ((saved.revision || 0) !== (connection.revision || 0)) return;
-  var secrets = (dmvConnector_(saved.connectorId).authFields || [])
-    .filter(function (field) {
-      return field.secret || field.type === 'password';
-    })
-    .map(function (field) {
-      return field.key;
-    });
+  var expected = connection.credentialId ? connection.credentialRevision : connection.revision;
+  if ((saved.revision || 0) !== (expected || 0)) return;
+  var fields = connection.credentialId
+    ? dmvCredentialFamily_(saved.family).fields
+    : dmvConnector_(saved.connectorId).authFields || [];
+  var secrets = dmvSecretKeys_(fields);
+  var target = connection.credentialId ? saved.values : saved.credentials;
   var changed = false;
   Object.keys(patch).forEach(function (key) {
     if (secrets.indexOf(key) < 0 || typeof patch[key] !== 'string') return;
-    saved.credentials[key] = patch[key];
+    target[key] = patch[key];
     changed = true;
   });
-  if (changed) dmvSave_('connection', saved);
+  if (changed) dmvSave_(kind, saved);
 }
 
 function dmvDeleteConnection(id) {
@@ -213,7 +255,7 @@ function dmvDeleteConnection(id) {
 }
 
 function dmvTestConnection(id) {
-  var connection = dmvRead_('connection', id);
+  var connection = dmvReadConnection_(id);
   var connector = dmvConnector_(connection.connectorId);
   if (typeof connector.test !== 'function')
     return {

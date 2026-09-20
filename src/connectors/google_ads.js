@@ -334,12 +334,14 @@ dmvRegisterConnector_({
   }),
   discoverAccounts: dmvGoogleAdsDiscoverAccounts_,
   googleScopes: ['https://www.googleapis.com/auth/adwords'],
+  credentialFamily: DMV_GOOGLE_CREDENTIAL,
   authFields: [
     {
       key: 'customerId',
       label: 'Customer ID',
       type: 'text',
       required: true,
+      perConnection: true,
       help: 'Your advertising account ID, with or without hyphens.',
     },
     {
@@ -347,6 +349,7 @@ dmvRegisterConnector_({
       label: 'Manager customer ID (optional)',
       type: 'text',
       required: false,
+      perConnection: true,
     },
     {
       key: 'developerToken',

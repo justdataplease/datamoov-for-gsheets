@@ -134,6 +134,22 @@ function dmvGroupTables_(rows, nameOf) {
   return tables;
 }
 
+// One saved Google credential (service account, OAuth client or token) serves every Google
+// source; each source adds its own account or property id per connection.
+var DMV_GOOGLE_CREDENTIAL = {
+  id: 'google',
+  label: 'Google Cloud',
+  fields: dmvGoogleAuthFields_(),
+  guide: dmvGoogleGuide_({
+    apis: 'the APIs of the Google sources you will connect (Google Ads API, Analytics Data and Admin APIs, BigQuery API, Search Console API)',
+    access: 'each account or property you connect',
+    scope:
+      'the scopes of those sources (adwords, analytics.readonly, bigquery.readonly, webmasters.readonly)',
+    grant:
+      'Grant the service account email access in each product you connect: Google Ads → Admin → Access and security; Analytics → Property access management; BigQuery → IAM; Search Console → Users and permissions. Each source guide repeats its step.',
+  }),
+};
+
 // Bearer token for Google APIs from the context; other providers read their own credentials.
 function dmvBearer_(ctx) {
   var token =

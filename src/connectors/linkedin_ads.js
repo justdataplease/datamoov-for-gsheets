@@ -205,6 +205,7 @@ dmvRegisterConnector_({
       label: 'Ad account ID',
       type: 'text',
       required: true,
+      perConnection: true,
       help: 'The numeric sponsored account ID from Campaign Manager.',
     },
     {

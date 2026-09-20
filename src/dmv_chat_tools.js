@@ -311,7 +311,7 @@ function dmvChatReportHint_(session, input) {
 /* discover_fields: account-specific columns (custom fields, SQL result columns). */
 /* describe_database: tables and columns of the schemas/datasets the user scoped for chat. */
 function dmvChatDescribeDatabase_(session, input) {
-  var connection = dmvRead_('connection', (input || {}).connectionId);
+  var connection = dmvReadConnection_((input || {}).connectionId);
   var connector = dmvConnector_(connection.connectorId);
   if (typeof connector.describeTables !== 'function')
     throw new Error(

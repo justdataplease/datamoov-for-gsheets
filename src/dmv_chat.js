@@ -517,7 +517,7 @@ function dmvChatFinalAnswer_(settings, system, messages, deadline) {
 function dmvChat(input) {
   input = input || {};
   var settings = dmvAiRead_();
-  if (!settings) throw new Error('Add an AI provider and API key in the Chat tab first.');
+  if (!settings) throw new Error('Add an AI provider and API key under Settings first.');
   var text = dmvText_(input.text, 'Message', DMV_CHAT.maxMessageChars, true);
   var started = Date.now(),
     deadline = started + DMV_CHAT.deadlineMs;

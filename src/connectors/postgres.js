@@ -238,9 +238,16 @@ dmvRegisterConnector_({
     ],
   },
   authFields: [
-    { key: 'host', label: 'Database host', type: 'text', required: true },
-    { key: 'port', label: 'Port', type: 'number', default: 5432, required: true },
-    { key: 'database', label: 'Database', type: 'text', required: true },
+    { key: 'host', label: 'Database host', type: 'text', required: true, perConnection: true },
+    {
+      key: 'port',
+      label: 'Port',
+      type: 'number',
+      default: 5432,
+      required: true,
+      perConnection: true,
+    },
+    { key: 'database', label: 'Database', type: 'text', required: true, perConnection: true },
     { key: 'username', label: 'Read-only username', type: 'text', required: true },
     {
       key: 'password',
@@ -254,6 +261,7 @@ dmvRegisterConnector_({
       label: 'Schemas for chat',
       type: 'text',
       default: 'public',
+      perConnection: true,
       help: 'Comma-separated schemas the chat may explore, for example public, analytics. Reports are not limited by this.',
     },
   ],

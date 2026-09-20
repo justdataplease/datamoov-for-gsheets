@@ -195,6 +195,7 @@ dmvRegisterConnector_({
       label: 'Ad account ID',
       type: 'text',
       required: true,
+      perConnection: true,
       help: 'Numeric account ID, with or without act_.',
     },
     {

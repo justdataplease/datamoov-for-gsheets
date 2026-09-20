@@ -117,6 +117,7 @@ dmvRegisterConnector_({
   color: '#34a853',
   allowedHosts: ['searchconsole.googleapis.com', 'www.googleapis.com'],
   googleScopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
+  credentialFamily: DMV_GOOGLE_CREDENTIAL,
   accountDiscovery: {
     label: 'Search Console property',
     credentialKeys: ['siteUrl'],
@@ -151,6 +152,7 @@ dmvRegisterConnector_({
       label: 'Property',
       type: 'text',
       required: true,
+      perConnection: true,
       help: 'A domain property (sc-domain:example.com) or URL-prefix property (https://example.com/).',
     },
   ].concat(

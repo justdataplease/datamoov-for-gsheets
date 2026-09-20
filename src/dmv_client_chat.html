@@ -2,7 +2,7 @@
   (function () {
     'use strict';
     const $ = (id) => document.getElementById(id);
-    const { api, el, button, notice, provider, state } = window.dmvSidebar;
+    const { api, el, button, notice, provider, state, tab } = window.dmvSidebar;
     // generation changes on every reset; a reply from an older generation is dropped.
     const chat = { ai: null, transcript: [], busy: false, settingsOpen: false, generation: 0 };
 
@@ -25,10 +25,6 @@
       $('ai-key').placeholder = configured ? 'Saved — leave blank to keep' : '';
       $('ai-key').required = !configured;
       $('ai-instructions').value = configured ? chat.ai.instructions || '' : '';
-      $('ai-settings-title').textContent = configured
-        ? 'AI provider settings'
-        : 'Set up your AI provider';
-      $('ai-settings-close').hidden = !configured;
       $('ai-remove').hidden = !configured;
       $('ai-test').hidden = !configured;
     }
@@ -50,8 +46,14 @@
     }
     function render() {
       const configured = Boolean(chat.ai?.configured);
-      const showSettings = !configured || chat.settingsOpen;
-      $('ai-settings').hidden = !showSettings;
+      // The settings card sits under Settings: open until a key is saved, collapsed afterwards.
+      $('ai-settings').open = !configured || chat.settingsOpen;
+      const status = $('ai-settings-status');
+      status.textContent = configured
+        ? chat.ai.providerLabel + ' · ' + chat.ai.model
+        : 'Not set up';
+      status.className = 'card-status' + (configured ? ' ok' : '');
+      $('chat-setup').hidden = configured;
       $('chat-ready').hidden = !configured;
       $('chat-settings-toggle').hidden = !configured;
       $('chat-new').hidden = !configured || !chat.transcript.length;
@@ -63,6 +65,14 @@
           chat.ai.model +
           '. Your key never leaves your Google account.';
       renderSuggestions();
+    }
+    function openSettings() {
+      chat.settingsOpen = true;
+      renderSettings();
+      render();
+      tab('settings');
+      $('ai-settings').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      $('ai-key').focus();
     }
     function renderSuggestions() {
       const row = $('chat-suggestions');
@@ -177,7 +187,7 @@
           chat.settingsOpen = false;
           renderSettings();
           render();
-          notice('AI provider saved. Use Test to check the key, then ask a question.');
+          notice('AI provider saved. Use Test to check the key, then ask a question in Chat.');
         })
         .catch((error) => notice(error.message, 'error'))
         .finally(() => {
@@ -209,15 +219,11 @@
         })
         .catch((error) => notice(error.message, 'error'));
     });
-    $('ai-settings-close').addEventListener('click', () => {
-      chat.settingsOpen = false;
-      render();
+    $('ai-settings').addEventListener('toggle', () => {
+      chat.settingsOpen = $('ai-settings').open;
     });
-    $('chat-settings-toggle').addEventListener('click', () => {
-      chat.settingsOpen = !chat.settingsOpen;
-      if (chat.settingsOpen) renderSettings();
-      render();
-    });
+    $('chat-settings-toggle').addEventListener('click', openSettings);
+    $('chat-open-settings').addEventListener('click', openSettings);
     $('chat-new').addEventListener('click', () => {
       if (chat.busy) return;
       resetConversation();

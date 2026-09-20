@@ -331,7 +331,7 @@ function dmvContext_(connector, connection, report, dates, deadline) {
       Object.keys(patch).forEach(function (key) {
         connection.credentials[key] = patch[key];
       });
-      if (connection.id) dmvRotateCredentials_(connection, patch);
+      dmvRotateCredentials_(connection, patch);
     },
   };
 }

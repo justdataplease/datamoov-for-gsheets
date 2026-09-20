@@ -121,7 +121,7 @@ function dmvFinishContinuation_(reportId) {
 }
 
 function dmvFetchContinued_(report, spreadsheet, token, connectionRevision) {
-  var connection = dmvRead_('connection', report.connectionId);
+  var connection = dmvReadConnection_(report.connectionId);
   if ((connection.revision || 0) !== connectionRevision)
     throw new Error('The connection changed during the refresh. Run it again.');
   var connector = dmvConnector_(connection.connectorId);
