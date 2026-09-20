@@ -28,8 +28,9 @@ network destination is the AI provider you configure.
    others. Remaining legacy defaults count toward the same limit.
    Instructions stay in private Google properties and are sent to your chosen AI provider as
    context. Long instructions are compressed into bounded pieces; a new version becomes active
-   only after every piece has been saved. The chat uses your own private connections; sharing or
-   copying report definitions does not supply another user's connection or credentials.
+   only after every piece has been saved and read back successfully. Existing compressed instructions
+   remain readable without resetting the API key or connection rules. The chat uses your own private
+   connections; sharing or copying report definitions does not supply another user's connection or credentials.
 
 Usage is billed by the AI provider to your key. A question uses model calls plus any required
 source fetches; multi-account and period comparisons can require several fetches.

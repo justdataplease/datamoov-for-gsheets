@@ -9,7 +9,7 @@
     --wash: #f7f8fc;
     --success: #237753;
     --danger: #b73e46;
-    --radius: 8px;
+    --radius: 4px;
     font-family:
       Inter,
       -apple-system,
@@ -77,7 +77,7 @@
     height: 34px;
     background: var(--primary);
     color: white;
-    border-radius: 6px;
+    border-radius: var(--radius);
     display: grid;
     place-items: center;
     box-shadow: 0 3px 7px #5146d620;
@@ -119,7 +119,7 @@
     letter-spacing: 0.3px;
     background: var(--wash);
     border: 1px solid var(--line);
-    border-radius: 5px;
+    border-radius: var(--radius);
     padding: 4px 7px;
     color: var(--muted);
   }
@@ -163,7 +163,7 @@
     font-size: 9px;
     background: #f0eefc;
     color: var(--primary);
-    border-radius: 5px;
+    border-radius: var(--radius);
     padding: 2px 4px;
     margin-left: 5px;
   }
@@ -207,7 +207,7 @@
     width: 32px;
     height: 32px;
     border: 1px solid var(--line);
-    border-radius: 7px;
+    border-radius: var(--radius);
     background: #fff;
     padding: 0;
     color: var(--muted);
@@ -254,7 +254,7 @@
     color: var(--primary);
     width: 30px;
     height: 30px;
-    border-radius: 8px;
+    border-radius: var(--radius);
     display: grid;
     place-items: center;
     font-size: 10px;
@@ -278,7 +278,7 @@
     font-weight: 650;
     padding: 3px 6px;
     white-space: nowrap;
-    border-radius: 6px;
+    border-radius: var(--radius);
     background: #f0f2f6;
     color: #687183;
     margin-left: auto;
@@ -342,7 +342,7 @@
   }
   .run-button {
     border: 1px solid #dfdbff;
-    border-radius: 6px;
+    border-radius: var(--radius);
     color: var(--primary);
     background: #f4f2ff;
     font-size: 10px;
@@ -362,7 +362,7 @@
     font-size: 11px;
     font-weight: 650;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: var(--radius);
     line-height: 1.4;
     transition: background 0.15s;
   }
@@ -421,7 +421,7 @@
   }
   .notice {
     margin-top: 14px;
-    border-radius: 8px;
+    border-radius: var(--radius);
     padding: 10px 12px;
     font-size: 11px;
     line-height: 1.6;
@@ -492,7 +492,7 @@
     display: block;
     width: 100%;
     border: 1px solid #dfe3ec;
-    border-radius: 7px;
+    border-radius: var(--radius);
     padding: 9px 10px;
     background: #fff;
     color: var(--ink);
@@ -534,7 +534,7 @@
     margin-top: 0;
   }
   .step-heading > span {
-    border-radius: 6px;
+    border-radius: var(--radius);
     background: #f0eefc;
     color: var(--primary);
     font-size: 10px;
@@ -562,7 +562,7 @@
   }
   .column-list {
     border: 1px solid var(--line);
-    border-radius: 8px;
+    border-radius: var(--radius);
     padding: 6px 10px;
     max-height: 230px;
     overflow: auto;
@@ -605,7 +605,7 @@
     font-size: 10px;
     line-height: 1.7;
     background: var(--wash);
-    border-radius: 7px;
+    border-radius: var(--radius);
     padding: 9px 11px;
     color: var(--muted);
     margin: 8px 0;
@@ -678,7 +678,7 @@
   }
   .table-scroll {
     border: 1px solid var(--line);
-    border-radius: 7px;
+    border-radius: var(--radius);
     overflow: auto;
     max-height: 260px;
   }
@@ -788,7 +788,7 @@
     font-weight: 650;
     color: var(--muted);
     background: var(--wash);
-    border-radius: 6px;
+    border-radius: var(--radius);
     padding: 3px 7px;
     white-space: nowrap;
     overflow: hidden;
@@ -807,7 +807,7 @@
   }
   .setup-guide {
     border: 1px solid var(--line);
-    border-radius: 8px;
+    border-radius: var(--radius);
     background: var(--wash);
     padding: 0 12px;
     margin-top: 12px;
@@ -874,7 +874,7 @@
   .account-discovery {
     border: 1px solid var(--line);
     background: var(--wash);
-    border-radius: 8px;
+    border-radius: var(--radius);
     padding: 10px;
     margin-top: 12px;
   }
@@ -931,7 +931,7 @@
     border: 1px solid #dfdbff;
     background: #f4f2ff;
     color: var(--primary);
-    border-radius: 6px;
+    border-radius: var(--radius);
     padding: 5px 10px;
     font-size: 10px;
     font-weight: 600;
@@ -949,7 +949,7 @@
     margin-bottom: 12px;
   }
   .chat-message {
-    border-radius: 6px;
+    border-radius: var(--radius);
     padding: 10px 12px;
     font-size: 11px;
     line-height: 1.6;
@@ -980,7 +980,7 @@
     margin-bottom: 14px;
     padding: 12px;
     border: 1px solid var(--line);
-    border-radius: 6px;
+    border-radius: var(--radius);
     background: var(--wash);
     font-size: 11px;
     overflow-wrap: anywhere;
@@ -1095,7 +1095,7 @@
   .markdown pre {
     margin: 8px 0;
     padding: 10px;
-    border-radius: 6px;
+    border-radius: var(--radius);
     background: #e9ebf2;
     overflow-x: auto;
     white-space: pre;

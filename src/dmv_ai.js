@@ -167,7 +167,13 @@ function dmvAiReadInstructions_(ref, all) {
     )
       throw new Error('Invalid instructions');
     var payload = JSON.parse(
-      Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(encoded))).getDataAsString()
+      Utilities.ungzip(
+        Utilities.newBlob(
+          Utilities.base64Decode(encoded),
+          'application/x-gzip',
+          'chat-instructions.json.gz'
+        )
+      ).getDataAsString('UTF-8')
     );
     return dmvAiInstructionInput_(
       payload.instructions,
@@ -243,6 +249,9 @@ function dmvAiWriteSettings_(settings) {
         prefix + i,
         encoded.slice(i * DMV_AI.instructionPartBytes, (i + 1) * DMV_AI.instructionPartBytes)
       );
+    // Verify the persisted pieces through the actual reader before making them active.
+    // A storage or decompression failure leaves the previous settings pointer intact.
+    dmvAiReadInstructions_(stored.instructionRef, store.getProperties());
     store.setProperty(dmvKey_('ai', 'settings'), raw);
   } catch (error) {
     // An interrupted save may leave unreferenced pieces; the next save removes them.

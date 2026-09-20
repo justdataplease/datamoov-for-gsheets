@@ -46,7 +46,13 @@ function dmvReadContinuation_(report) {
     )
       throw new Error('Invalid snapshot');
     var snapshot = JSON.parse(
-      Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(encoded))).getDataAsString()
+      Utilities.ungzip(
+        Utilities.newBlob(
+          Utilities.base64Decode(encoded),
+          'application/x-gzip',
+          'report-continuation.json.gz'
+        )
+      ).getDataAsString('UTF-8')
     );
     if (
       snapshot.version !== 1 ||

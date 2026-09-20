@@ -277,10 +277,13 @@ export function createDatamoovSandbox() {
       DigestAlgorithm: { SHA_256: 'SHA_256' }, Charset: { UTF_8: 'UTF_8' },
       computeDigest: (_algorithm, value) => [...createHash('sha256').update(String(value), 'utf8').digest()],
       getUuid: () => `id-${++serial}`,
-      newBlob: (value) => ({ getBytes: () => [...Buffer.from(Array.isArray(value) ? value : String(value))],
+      newBlob: (value, contentType = null, name = null) => ({ getContentType: () => contentType, getName: () => name, getBytes: () => [...Buffer.from(Array.isArray(value) ? value : String(value))],
         getDataAsString: () => Buffer.from(Array.isArray(value) ? value : String(value)).toString('utf8') }),
-      gzip: (blob) => ({ getBytes: () => [...gzipSync(Buffer.from(blob.getBytes()))] }),
-      ungzip: (blob) => ({ getDataAsString: () => gunzipSync(Buffer.from(blob.getBytes())).toString('utf8') }),
+      gzip: (blob) => ({ getContentType: () => 'application/x-gzip', getBytes: () => [...gzipSync(Buffer.from(blob.getBytes()))] }),
+      ungzip: (blob) => {
+        if (blob.getContentType?.() !== 'application/x-gzip') throw new Error('Invalid argument: expected a gzip blob');
+        return { getDataAsString: () => gunzipSync(Buffer.from(blob.getBytes())).toString('utf8') };
+      },
       base64Decode: (value) => [...Buffer.from(value, 'base64')],
       formatDate: (date, timezone) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date),
       parseCsv: (text) => parseCsv(text),
