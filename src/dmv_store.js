@@ -19,9 +19,7 @@ function dmvRead_(kind, id) {
 }
 
 function dmvSave_(kind, value) {
-  var text = JSON.stringify(value);
-  if (Utilities.newBlob(text).getBytes().length > 8000)
-    throw new Error('This configuration is too large. Shorten the query or select fewer fields.');
+  var text = dmvCheckRecordSize_(value);
   dmvStore_().setProperty(dmvKey_(kind, value.id), text);
   return value;
 }
@@ -38,15 +36,20 @@ function dmvList_(kind) {
     });
 }
 
-// Per-user lock: every record this app mutates belongs to the current user, and a Marketplace
-// add-on shares one script across all its users, so a script-wide lock would serialize everyone.
+// Private records use a per-user lock. Depth is execution-local so credential rotations can
+// reuse an already-held lock without releasing the outer operation.
+var DMV_USER_LOCK_DEPTH = 0;
+var DMV_WORKBOOK_LOCK_DEPTH = 0;
 function dmvLocked_(callback) {
+  if (DMV_USER_LOCK_DEPTH) return callback();
   var lock = LockService.getUserLock();
   if (!lock.tryLock(10000))
     throw new Error('Another refresh is updating this report. Try again shortly.');
+  DMV_USER_LOCK_DEPTH++;
   try {
     return callback();
   } finally {
+    DMV_USER_LOCK_DEPTH--;
     lock.releaseLock();
   }
 }
@@ -68,4 +71,27 @@ function dmvReportHere_(id) {
   if (report.spreadsheetId !== dmvSpreadsheet_().getId())
     throw new Error('This report belongs to a different spreadsheet.');
   return report;
+}
+
+function dmvCheckRecordSize_(value) {
+  var text = JSON.stringify(value);
+  if (Utilities.newBlob(text).getBytes().length > 8000)
+    throw new Error('This configuration is too large. Shorten the query or select fewer fields.');
+  return text;
+}
+
+// Shared sheet mutations and output verification/write use the same short lock in sidebar and
+// time-driven executions, including when no active document exists. Never hold it for a fetch.
+function dmvWorkbookLocked_(callback) {
+  if (DMV_WORKBOOK_LOCK_DEPTH) return callback();
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000))
+    throw new Error('Another user is updating report settings or output. Try again shortly.');
+  DMV_WORKBOOK_LOCK_DEPTH++;
+  try {
+    return callback();
+  } finally {
+    DMV_WORKBOOK_LOCK_DEPTH--;
+    lock.releaseLock();
+  }
 }

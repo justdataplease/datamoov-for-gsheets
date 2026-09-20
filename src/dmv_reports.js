@@ -4,6 +4,7 @@ function dmvBootstrap() {
   var active = spreadsheet.getActiveRange();
   var targetIsEmpty =
     active &&
+    !dmvReportSheetName_(active.getSheet().getName()) &&
     active.getCell(1, 1).getValues()[0][0] === '' &&
     active.getCell(1, 1).getFormulas()[0][0] === '';
   var fallbackName = 'DataMoov report',
@@ -15,12 +16,15 @@ function dmvBootstrap() {
     connections: dmvList_('connection').map(dmvConnectionSummary_),
     credentials: dmvCredentialSummaries_(),
     credentialFamilies: dmvFamilyCatalog_(),
-    reports: dmvList_('report').filter(function (report) {
-      return report.spreadsheetId === spreadsheet.getId();
-    }),
-    sheetNames: spreadsheet.getSheets().map(function (sheet) {
-      return sheet.getName();
-    }),
+    reports: dmvWorkbookReports_(spreadsheet),
+    sheetNames: spreadsheet
+      .getSheets()
+      .filter(function (sheet) {
+        return !dmvReportSheetName_(sheet.getName());
+      })
+      .map(function (sheet) {
+        return sheet.getName();
+      }),
     limits: DMV_LIMITS,
     ai: dmvAiSummary_(dmvAiRead_()),
     defaultTarget: {
@@ -39,6 +43,12 @@ function dmvValidateQuery_(input, spreadsheet) {
   var connector = dmvConnector_(connection.connectorId);
   if (input.connectorId && input.connectorId !== connector.id)
     throw new Error('The connection does not match this source.');
+  var query = dmvQuerySettings_(input, connector, spreadsheet);
+  query.connectionId = connection.id;
+  return query;
+}
+
+function dmvQuerySettings_(input, connector, spreadsheet) {
   var definition = dmvDefinition_(connector, input.reportType);
   var config = dmvFieldsInput_(definition.configFields || [], input.config || {});
   var fields = input.fields || dmvDefaultFields_(definition.fields || []);
@@ -53,7 +63,12 @@ function dmvValidateQuery_(input, spreadsheet) {
     throw new Error('Choose valid, distinct report fields.');
   if (!fields.length && (definition.fields || []).length)
     throw new Error('Select at least one report field.');
-  var dateRange = input.dateRange || { preset: 'last30' };
+  var requestedDates = input.dateRange || { preset: 'last30' };
+  var dateRange = { preset: requestedDates.preset || 'last30' };
+  if (dateRange.preset === 'custom') {
+    dateRange.startDate = requestedDates.startDate;
+    dateRange.endDate = requestedDates.endDate;
+  }
   if (definition.dateRange)
     dmvDateRange_(
       dateRange,
@@ -61,7 +76,6 @@ function dmvValidateQuery_(input, spreadsheet) {
     );
   return {
     connectorId: connector.id,
-    connectionId: connection.id,
     reportType: definition.id,
     fields: fields,
     config: config,
@@ -79,6 +93,8 @@ function dmvSheetName_(value) {
   var sheetName = dmvText_(value, 'Output tab', 100, true);
   if (/[\[\]*?:\\/]/.test(sheetName))
     throw new Error('The output tab name contains unsupported characters.');
+  if (dmvReportSheetName_(sheetName))
+    throw new Error('DataMoovReports is reserved for report settings. Choose another output tab.');
   return sheetName;
 }
 
@@ -107,43 +123,113 @@ function dmvValidateReport_(input, spreadsheet) {
 }
 
 function dmvSaveReport(input) {
+  input = input || {};
   return dmvLocked_(function () {
     var spreadsheet = dmvSpreadsheet_();
-    var previous = input && input.id ? dmvReportHere_(input.id) : null;
+    dmvMigrateReports_(spreadsheet);
+    var previous = input.id ? dmvReportHere_(input.id) : null;
+    if (!previous && input.definitionId)
+      previous =
+        dmvList_('report').filter(function (report) {
+          return (
+            report.spreadsheetId === spreadsheet.getId() &&
+            report.definitionId === input.definitionId
+          );
+        })[0] || null;
+    if (
+      previous &&
+      input.definitionId &&
+      previous.definitionId &&
+      input.definitionId !== previous.definitionId
+    )
+      throw new Error('This report does not match the selected workbook definition.');
     if (previous && previous.runToken && Date.now() - previous.startedAt < 300000)
       throw new Error('Wait for the current refresh to finish before editing this report.');
     if (!previous && dmvList_('report').length >= DMV_LIMITS.maxReports)
-      throw new Error('Keep at most ' + DMV_LIMITS.maxReports + ' reports in this app.');
-    var report = dmvValidateReport_(input, spreadsheet);
-    report.revision = previous ? previous.revision + 1 : 1;
-    report.status = previous && !dmvPendingReport_(previous) ? previous.status : 'ready';
-    ['lastRun', 'lastRowCount', 'lastError'].forEach(function (key) {
+      throw new Error('Keep at most ' + DMV_LIMITS.maxReports + ' connected reports in this app.');
+    var report = dmvValidateReport_(
+      Object.assign({}, input, { id: previous ? previous.id : undefined }),
+      spreadsheet
+    );
+    report.definitionId = (previous && previous.definitionId) || input.definitionId || report.id;
+    var definition = dmvReportDefinition_(report, spreadsheet);
+    report.definitionFingerprint = dmvDefinitionFingerprint_(definition);
+    report.revision = previous ? (previous.revision || 0) + 1 : 1;
+    report.status = 'ready';
+    ['lastRun', 'lastRowCount'].forEach(function (key) {
       if (previous && previous[key] !== undefined) report[key] = previous[key];
     });
+    report.lastError = '';
     report.nextRunAt = report.schedule === 'manual' ? null : Date.now();
-    dmvSave_('report', report);
-    try {
-      dmvEnsureSchedule_();
-    } catch (error) {
-      if (previous) dmvSave_('report', previous);
-      else dmvStore_().deleteProperty(dmvKey_('report', report.id));
-      throw new Error(
-        'The refresh schedule could not be created. Check Google authorization and try again.'
-      );
-    }
-    dmvClearContinuation_(report.id);
-    return report;
+    dmvCheckRecordSize_(report);
+    return dmvWorkbookLocked_(function () {
+      var stored = dmvReadDefinitions_(spreadsheet);
+      var existing = dmvFindDefinition_(stored, report.definitionId);
+      if (existing && input.definitionFingerprint !== dmvDefinitionFingerprint_(existing))
+        throw new Error(
+          'Report settings changed since you opened the editor. Reopen the report before saving.'
+        );
+      if (!existing && input.definitionId)
+        throw new Error('This workbook report no longer exists. Refresh the sidebar.');
+      var next = stored.definitions.filter(function (item) {
+        return item.definitionId !== report.definitionId;
+      });
+      next.push(definition);
+      dmvWriteDefinitions_(spreadsheet, stored, next);
+      try {
+        dmvSave_('report', report);
+        dmvEnsureSchedule_();
+      } catch (error) {
+        if (previous) dmvSave_('report', previous);
+        else dmvStore_().deleteProperty(dmvKey_('report', report.id));
+        dmvWriteDefinitions_(spreadsheet, dmvReadDefinitions_(spreadsheet), stored.definitions);
+        throw new Error(
+          'The report could not be saved with its refresh schedule. Check Google authorization and try again.'
+        );
+      }
+      dmvClearContinuation_(report.id);
+      return dmvReportSummary_(definition, report, spreadsheet);
+    });
   });
 }
 
-function dmvDeleteReport(id) {
+function dmvDeleteReport(input) {
   return dmvLocked_(function () {
-    var report = dmvReportHere_(id);
-    if (report.runToken && Date.now() - report.startedAt < 300000)
+    var spreadsheet = dmvSpreadsheet_();
+    var legacyRequest = typeof input === 'string';
+    input = legacyRequest ? { id: input } : input || {};
+    var report = input.id ? dmvReportHere_(input.id) : null;
+    if (report && report.runToken && Date.now() - report.startedAt < 300000)
       throw new Error('Wait for the current refresh to finish.');
-    dmvStore_().deleteProperty(dmvKey_('report', id));
-    dmvStore_().deleteProperty(dmvOutputKey_(report.spreadsheetId, id));
-    dmvClearContinuation_(id);
+    var definitionId = input.definitionId || (report && report.definitionId);
+    if (report && report.definitionId && report.definitionId !== definitionId)
+      throw new Error('This report does not match the selected workbook definition.');
+    if (definitionId)
+      dmvWorkbookLocked_(function () {
+        var stored = dmvReadDefinitions_(spreadsheet);
+        var existing = dmvFindDefinition_(stored, definitionId);
+        if (!existing && report) return; // Remove this user's orphaned binding without changing output.
+        if (!existing)
+          throw new Error('This workbook report no longer exists. Refresh the sidebar.');
+        var expected =
+          legacyRequest && report ? report.definitionFingerprint : input.definitionFingerprint;
+        if (expected !== dmvDefinitionFingerprint_(existing))
+          throw new Error(
+            'Report settings changed. Refresh the sidebar before removing the report.'
+          );
+        dmvWriteDefinitions_(
+          spreadsheet,
+          stored,
+          stored.definitions.filter(function (item) {
+            return item.definitionId !== definitionId;
+          })
+        );
+      });
+    if (report) {
+      dmvStore_().deleteProperty(dmvKey_('report', report.id));
+      dmvStore_().deleteProperty(dmvOutputKey_(report.spreadsheetId, report.id));
+      dmvClearContinuation_(report.id);
+    }
     dmvEnsureSchedule_();
     return { ok: true };
   });
@@ -215,7 +301,25 @@ function dmvExecuteReport_(requested) {
     var current = dmvRead_('report', requested.id);
     if (current.runToken && Date.now() - current.startedAt < 300000)
       throw new Error('This report is already refreshing.');
-    connectionRevision = dmvRead_('connection', current.connectionId).revision || 0;
+    var workbook = SpreadsheetApp.openById(current.spreadsheetId);
+    dmvValidateReport_(current, workbook);
+    try {
+      dmvCheckReportDefinition_(current, workbook);
+    } catch (error) {
+      if (error.dmvApprovalRequired) {
+        current.approvalRequired = true;
+        current.status = 'needs_review';
+        current.lastError = error.message;
+        current.nextRunAt = null;
+        delete current.continuation;
+        delete current.continuationRequested;
+        delete current.fetchedRowCount;
+        dmvSave_('report', current);
+        dmvClearContinuation_(current.id);
+      }
+      throw error;
+    }
+    connectionRevision = dmvConnectionRevision_(dmvReadConnection_(current.connectionId));
     current.status = 'running';
     current.runToken = token;
     current.startedAt = Date.now();
@@ -237,7 +341,8 @@ function dmvExecuteReport_(requested) {
       var current = dmvRead_('report', report.id);
       if (current.runToken !== token || current.revision !== report.revision)
         throw new Error('The report changed during the refresh. Run it again.');
-      if ((dmvRead_('connection', current.connectionId).revision || 0) !== connectionRevision)
+      dmvCheckReportDefinition_(current, spreadsheet);
+      if (dmvConnectionRevision_(dmvReadConnection_(current.connectionId)) !== connectionRevision)
         throw new Error('The connection changed during the refresh. Run it again.');
       if (result.pending) {
         current.status = 'paused';
@@ -277,13 +382,14 @@ function dmvExecuteReport_(requested) {
     dmvLocked_(function () {
       var current = dmvRead_('report', report.id);
       if (current.runToken === token) {
-        current.status = 'error';
+        current.status = error.dmvApprovalRequired ? 'needs_review' : 'error';
+        current.approvalRequired = !!error.dmvApprovalRequired;
         current.lastError = message;
         current.runToken = null;
         delete current.continuation;
         delete current.continuationRequested;
         delete current.fetchedRowCount;
-        current.nextRunAt = dmvNextRun_(current.schedule);
+        current.nextRunAt = current.approvalRequired ? null : dmvNextRun_(current.schedule);
         dmvSave_('report', current);
         dmvFinishContinuation_(current.id);
       }
@@ -294,8 +400,8 @@ function dmvExecuteReport_(requested) {
 
 function dmvRefreshAll() {
   var spreadsheet = dmvSpreadsheet_();
-  var reports = dmvList_('report').filter(function (report) {
-    return report.spreadsheetId === spreadsheet.getId();
+  var reports = dmvWorkbookReports_(spreadsheet).filter(function (report) {
+    return report.id && !report.connectionRequired && !report.approvalRequired;
   });
   var result = [];
   var started = Date.now();

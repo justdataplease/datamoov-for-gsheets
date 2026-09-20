@@ -143,6 +143,66 @@ function dmvCredentialSummaries_() {
     });
 }
 
+// Check an edited shared credential against its existing consumers before replacing it.
+// Provider-issued refresh tokens belong to the same OAuth identity even when a later account
+// check fails; retain those rotations without committing the rejected credential edit.
+function dmvVerifyCredentialConnections_(family, values, previous, connections, deadline) {
+  var verified = false;
+  var secrets = dmvSecretKeys_(family.fields);
+  connections.forEach(function (connection) {
+    var connector = dmvConnector_(connection.connectorId);
+    if (typeof connector.test !== 'function' && !connector.googleScopes) return;
+    var credentials = dmvFieldsInput_(
+      connector.authFields,
+      Object.assign({}, values, connection.credentials)
+    );
+    var context = dmvContext_(
+      connector,
+      { credentials: credentials },
+      { config: {}, fields: [], maxRows: 1 },
+      {},
+      deadline
+    );
+    var rotate = context.rotateCredentials;
+    context.rotateCredentials = function (patch) {
+      var sameIdentity =
+        previous &&
+        ['authMode', 'clientId', 'clientSecret', 'refreshToken'].every(function (key) {
+          return credentials[key] === previous.values[key];
+        });
+      var replacement = {};
+      Object.keys(patch).forEach(function (key) {
+        if (secrets.indexOf(key) >= 0 && typeof patch[key] === 'string')
+          replacement[key] = patch[key];
+      });
+      rotate(replacement);
+      Object.keys(replacement).forEach(function (key) {
+        values[key] = replacement[key];
+      });
+      if (sameIdentity && replacement.refreshToken) {
+        dmvRotateCredentials_(
+          { credentialId: previous.id, credentialRevision: previous.revision || 0 },
+          { refreshToken: replacement.refreshToken }
+        );
+        previous.values.refreshToken = replacement.refreshToken;
+      }
+    };
+    try {
+      if (typeof connector.test === 'function') connector.test(context);
+      else context.accessToken();
+      verified = true;
+    } catch (error) {
+      throw new Error(
+        'Could not verify connection "' +
+          connection.label +
+          '": ' +
+          dmvSafeError_(error, credentials)
+      );
+    }
+  });
+  return verified;
+}
+
 function dmvSaveCredential(input) {
   return dmvLocked_(function () {
     input = input || {};
@@ -165,26 +225,52 @@ function dmvSaveCredential(input) {
       family.fields.some(function (field) {
         return values[field.key] !== previous.values[field.key];
       });
-    // A Google key or OAuth client can be checked on its own by minting one token with the
-    // family's scopes; account access is checked later, when a connection is saved.
+    var label = dmvText_(input.label, 'Credential name', 80, true);
+    var connections = dmvList_('connection');
+    var consumers = previous
+      ? connections.filter(function (connection) {
+          return connection.credentialId === previous.id;
+        })
+      : [];
+    if (
+      changed &&
+      consumers.length &&
+      dmvList_('report').some(function (report) {
+        return (
+          report.runToken &&
+          Date.now() - report.startedAt < 300000 &&
+          consumers.some(function (connection) {
+            return connection.id === report.connectionId;
+          })
+        );
+      })
+    )
+      throw new Error('Wait for the current refresh to finish before editing this credential.');
+    // Unused Google credentials can be checked with a token exchange. Existing consumers also
+    // verify their account access before the edited credential replaces the last working one.
     var verified = false;
-    if (changed && family.google && values.authMode !== 'token') {
-      try {
-        dmvGoogleToken_(values, family.scopes, Date.now() + 60000);
-        verified = true;
-      } catch (error) {
-        throw new Error(dmvSafeError_(error, values));
+    if (changed) {
+      var deadline = Date.now() + 240000;
+      if (family.google && values.authMode !== 'token') {
+        try {
+          dmvGoogleToken_(values, family.scopes, deadline);
+          verified = true;
+        } catch (error) {
+          throw new Error(dmvSafeError_(error, values));
+        }
       }
+      verified =
+        dmvVerifyCredentialConnections_(family, values, previous, consumers, deadline) || verified;
     }
     var credential = {
       id: previous ? previous.id : dmvId_(),
-      label: dmvText_(input.label, 'Credential name', 80, true),
+      label: label,
       family: family.id,
       values: values,
-      revision: previous ? (previous.revision || 0) + 1 : 1,
+      revision: previous ? (previous.revision || 0) + (changed ? 1 : 0) : 1,
     };
     dmvSave_('credential', credential);
-    var summary = dmvCredentialSummary_(credential, dmvList_('connection'));
+    var summary = dmvCredentialSummary_(credential, connections);
     summary.verified = verified;
     return summary;
   });
@@ -217,15 +303,41 @@ function dmvConnectionValues_(connection) {
   var values = {};
   if (connection.credentialId) {
     var credential = dmvRead_('credential', connection.credentialId);
+    var connector = dmvConnector_(connection.connectorId);
+    if (credential.family !== dmvFamilyId_(connector))
+      throw new Error('This credential is for another type of source.');
     Object.keys(credential.values).forEach(function (key) {
       values[key] = credential.values[key];
     });
     connection.credentialRevision = credential.revision || 0;
+    dmvConnectionFields_(connector).forEach(function (field) {
+      var value = (connection.credentials || {})[field.key];
+      if (value !== undefined) values[field.key] = value;
+    });
+  } else {
+    Object.keys(connection.credentials || {}).forEach(function (key) {
+      values[key] = connection.credentials[key];
+    });
   }
-  Object.keys(connection.credentials || {}).forEach(function (key) {
-    values[key] = connection.credentials[key];
-  });
   return values;
+}
+
+// Capture both identities for report execution and continuation checks. A merged connection
+// uses the credential revision it actually loaded; a raw saved connection reads the current one.
+// Provider refresh-token rotations deliberately keep this token unchanged.
+function dmvConnectionRevision_(connection) {
+  var credentialRevision = 0;
+  if (connection.credentialId) {
+    credentialRevision =
+      connection.credentialRevision === undefined
+        ? dmvRead_('credential', connection.credentialId).revision || 0
+        : connection.credentialRevision;
+  }
+  return JSON.stringify([
+    connection.revision || 0,
+    connection.credentialId || null,
+    credentialRevision || 0,
+  ]);
 }
 
 // A saved connection with its credential merged in, ready for a connector context.

@@ -71,6 +71,7 @@ export function createDatamoovSandbox() {
   const state = {
     user, script, document, cache, books: new Map(), opened: [], batches: [], legacyWrites: [], clears: [],
     flushes: 0, lockAcquires: 0, lockReleases: 0, lockAvailable: true, triggers: [],
+    scriptLockAcquires: 0, scriptLockReleases: 0, scriptLockAvailable: true, scriptLockWaits: [],
     createdTriggers: [], deletedTriggers: [], http: [], responses: [], sleeps: [], charts: [], gets: [],
     failBatch: false, failTrigger: false, failProperty: null,
   };
@@ -111,10 +112,20 @@ export function createDatamoovSandbox() {
     for (const method of ['setFontWeight', 'setBackground', 'setFontColor', 'setNumberFormat', 'setWrap', 'setVerticalAlignment']) result[method] = () => result;
     return result;
   }
-  function makeSheet(name, maxRows = 100, maxColumns = 26) {
+  function makeSheet(name, maxRows = 100, maxColumns = 26, id = ++sheetSerial) {
     const sheet = {
-      id: ++sheetSerial, name, maxRows, maxColumns, cells: new Map(),
-      getName: () => name, getSheetId: () => sheet.id,
+      id, name, maxRows, maxColumns, hidden: false, frozenRows: 0, cells: new Map(),
+      getName: () => sheet.name, getSheetId: () => sheet.id,
+      isSheetHidden: () => sheet.hidden,
+      showSheet() { sheet.hidden = false; return sheet; },
+      getLastRow() {
+        let lastRow = 0;
+        for (const [key, entry] of sheet.cells) {
+          if (entry.formula || (entry.value !== '' && entry.value !== null && entry.value !== undefined))
+            lastRow = Math.max(lastRow, Number(key.split(':')[0]));
+        }
+        return lastRow;
+      },
       getMaxRows: () => sheet.maxRows, getMaxColumns: () => sheet.maxColumns,
       getRange: (...args) => range(sheet, ...args),
       getDataRange() {
@@ -127,18 +138,25 @@ export function createDatamoovSandbox() {
       },
       insertRowsAfter(_after, count) { sheet.maxRows += count; },
       insertColumnsAfter(_after, count) { sheet.maxColumns += count; },
-      setFrozenRows() {},
+      setFrozenRows(count) { sheet.frozenRows = count; return sheet; },
     };
     return sheet;
   }
   function addSpreadsheet(id = 'spreadsheet-one', names = ['Output']) {
     const book = {
-      id, sheets: names.map((name) => makeSheet(name)), timezone: 'Europe/Athens', activeRange: null,
+      id, sheets: names.map((name) => makeSheet(name)), timezone: 'Europe/Athens', activeRange: null, activeSheet: null,
       getId: () => id, getSpreadsheetTimeZone: () => book.timezone,
       getSheets: () => book.sheets,
       getSheetByName: (name) => book.sheets.find((sheet) => sheet.name === name) || null,
       insertSheet(name) { const sheet = makeSheet(name); book.sheets.push(sheet); return sheet; },
       getActiveRange: () => book.activeRange,
+      getActiveSheet: () => book.activeSheet || book.sheets[0] || null,
+      setActiveSheet(sheet) {
+        if (!book.sheets.includes(sheet)) throw new Error('Sheet belongs to another spreadsheet');
+        book.activeSheet = sheet;
+        book.activeRange = range(sheet, 1, 1);
+        return sheet;
+      },
     };
     state.books.set(id, book);
     if (!activeSpreadsheet) activeSpreadsheet = book;
@@ -154,17 +172,26 @@ export function createDatamoovSandbox() {
     if (state.failBatch) throw new Error('Simulated atomic batch failure');
     const book = state.books.get(spreadsheetId);
     if (!book) throw new Error('Unknown spreadsheet');
-    const staged = new Map(book.sheets.map((sheet) => [sheet.id, new Map(sheet.cells)]));
+    // Sheet additions, cells, metadata and charts are published together only after every request succeeds.
+    const originals = new Map(book.sheets.map((sheet) => [sheet.id, sheet]));
+    const staged = new Map(book.sheets.map((sheet) => [sheet.id, { ...sheet, cells: new Map(sheet.cells) }]));
+    const stagedCharts = [];
+    const replies = [];
+    let nextSheetId = sheetSerial;
     const findSheet = (id) => {
-      const sheet = book.sheets.find((candidate) => candidate.id === id);
+      const sheet = staged.get(id);
       if (!sheet) throw new Error(`Unknown sheet ${id}`);
       return sheet;
     };
     const readGrid = (grid) => {
       const sheet = findSheet(grid.sheetId);
-      if ((grid.endRowIndex ?? sheet.maxRows) > sheet.maxRows || (grid.endColumnIndex ?? sheet.maxColumns) > sheet.maxColumns) throw new Error('Batch range exceeds sheet grid');
-      return { sheet, cells: staged.get(sheet.id), startRow: grid.startRowIndex || 0, startColumn: grid.startColumnIndex || 0,
-        endRow: grid.endRowIndex ?? sheet.maxRows, endColumn: grid.endColumnIndex ?? sheet.maxColumns };
+      const startRow = grid.startRowIndex ?? 0, startColumn = grid.startColumnIndex ?? 0;
+      const endRow = grid.endRowIndex ?? sheet.maxRows, endColumn = grid.endColumnIndex ?? sheet.maxColumns;
+      if (![startRow, startColumn, endRow, endColumn].every(Number.isInteger) ||
+          startRow < 0 || startColumn < 0 || endRow < startRow || endColumn < startColumn ||
+          endRow > sheet.maxRows || endColumn > sheet.maxColumns)
+        throw new Error('Batch range exceeds sheet grid');
+      return { sheet, cells: sheet.cells, startRow, startColumn, endRow, endColumn };
     };
     const put = (cells, row, column, input) => {
       const entry = input?.userEnteredValue;
@@ -173,44 +200,79 @@ export function createDatamoovSandbox() {
       else cells.set(address(row + 1, column + 1), { value: entry.stringValue ?? entry.numberValue ?? entry.boolValue ?? '', formula: '' });
     };
     for (const request of body.requests || []) {
-      if (request.updateCells) {
+      let reply = {};
+      if (request.addSheet) {
+        const props = request.addSheet.properties || {};
+        const id = props.sheetId ?? ++nextSheetId;
+        const rows = props.gridProperties?.rowCount ?? 1000;
+        const columns = props.gridProperties?.columnCount ?? 26;
+        const frozenRows = props.gridProperties?.frozenRowCount ?? 0;
+        if (!Number.isInteger(id) || id < 0 || staged.has(id)) throw new Error('Invalid or duplicate sheet ID');
+        if (typeof props.title !== 'string' || !props.title || [...staged.values()].some((sheet) => sheet.name === props.title))
+          throw new Error('Invalid or duplicate sheet title');
+        if (!Number.isInteger(rows) || rows < 1 || !Number.isInteger(columns) || columns < 1 ||
+            !Number.isInteger(frozenRows) || frozenRows < 0 || frozenRows > rows)
+          throw new Error('Invalid sheet grid properties');
+        const sheet = makeSheet(props.title, rows, columns, id);
+        sheet.hidden = Boolean(props.hidden);
+        sheet.frozenRows = frozenRows;
+        staged.set(id, sheet);
+        nextSheetId = Math.max(nextSheetId, id);
+        reply = { addSheet: { properties: { ...plain(props), sheetId: id } } };
+      } else if (request.updateCells) {
         const update = request.updateCells;
-        if (!String(update.fields).includes('userEnteredValue') && update.fields !== '*') continue;
         const grid = update.range || { sheetId: update.start.sheetId, startRowIndex: update.start.rowIndex || 0, startColumnIndex: update.start.columnIndex || 0,
           endRowIndex: (update.start.rowIndex || 0) + (update.rows || []).length,
           endColumnIndex: (update.start.columnIndex || 0) + Math.max(0, ...(update.rows || []).map((row) => (row.values || []).length)) };
         const target = readGrid(grid);
-        for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++) {
-          put(target.cells, r, c, update.rows?.[r - target.startRow]?.values?.[c - target.startColumn]);
+        if (String(update.fields).includes('userEnteredValue') || update.fields === '*') {
+          for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++)
+            put(target.cells, r, c, update.rows?.[r - target.startRow]?.values?.[c - target.startColumn]);
         }
       } else if (request.repeatCell) {
         const repeat = request.repeatCell;
-        if (!String(repeat.fields).includes('userEnteredValue') && repeat.fields !== '*') continue;
         const target = readGrid(repeat.range);
-        for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++) put(target.cells, r, c, repeat.cell);
+        if (String(repeat.fields).includes('userEnteredValue') || repeat.fields === '*')
+          for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++) put(target.cells, r, c, repeat.cell);
       } else if (request.appendDimension) {
         const append = request.appendDimension, sheet = findSheet(append.sheetId);
+        if (!Number.isInteger(append.length) || append.length < 1) throw new Error('Invalid appended dimension length');
         if (append.dimension === 'ROWS') sheet.maxRows += append.length;
-        else sheet.maxColumns += append.length;
+        else if (append.dimension === 'COLUMNS') sheet.maxColumns += append.length;
+        else throw new Error('Invalid appended dimension');
       } else if (request.updateSheetProperties) {
         const props = request.updateSheetProperties.properties, sheet = findSheet(props.sheetId);
-        if (props.gridProperties?.rowCount) sheet.maxRows = props.gridProperties.rowCount;
-        if (props.gridProperties?.columnCount) sheet.maxColumns = props.gridProperties.columnCount;
+        if (props.gridProperties?.rowCount !== undefined) sheet.maxRows = props.gridProperties.rowCount;
+        if (props.gridProperties?.columnCount !== undefined) sheet.maxColumns = props.gridProperties.columnCount;
+        if (props.gridProperties?.frozenRowCount !== undefined) sheet.frozenRows = props.gridProperties.frozenRowCount;
+        if (props.hidden !== undefined) sheet.hidden = Boolean(props.hidden);
+        if (!Number.isInteger(sheet.maxRows) || sheet.maxRows < 1 || !Number.isInteger(sheet.maxColumns) ||
+            sheet.maxColumns < 1 || !Number.isInteger(sheet.frozenRows) || sheet.frozenRows < 0 || sheet.frozenRows > sheet.maxRows)
+          throw new Error('Invalid sheet grid properties');
       } else if (request.addChart) {
         const chart = request.addChart.chart;
         findSheet(chart.position.overlayPosition.anchorCell.sheetId);
         for (const source of JSON.stringify(chart.spec).matchAll(/"sheetId":(\d+)/g)) findSheet(Number(source[1]));
-        state.charts.push({ spreadsheetId, chartId: state.charts.length + 1, ...plain(chart) });
+        const chartId = state.charts.length + stagedCharts.length + 1;
+        stagedCharts.push({ spreadsheetId, chartId, ...plain(chart) });
+        reply = { addChart: { chart: { chartId } } };
       } else throw new Error(`Unsupported batch request: ${Object.keys(request)}`);
+      replies.push(reply);
     }
-    book.sheets.forEach((sheet) => { sheet.cells = staged.get(sheet.id); });
-    return { spreadsheetId, replies: (body.requests || []).map((request) => request.addChart ? { addChart: { chart: { chartId: state.charts.length } } } : ({})) };
+    for (const sheet of staged.values()) {
+      const existing = originals.get(sheet.id);
+      if (existing) Object.assign(existing, sheet);
+      else book.sheets.push(sheet);
+    }
+    sheetSerial = nextSheetId;
+    state.charts.push(...stagedCharts);
+    return { spreadsheetId, replies };
   }
   const fakeServices = {
     Date: ClockDate,
     PropertiesService: { getUserProperties: () => user, getScriptProperties: () => script, getDocumentProperties: () => document },
     LockService: { getUserLock: () => ({ tryLock() { state.lockAcquires++; return state.lockAvailable; }, releaseLock() { state.lockReleases++; } }),
-      getScriptLock: () => { throw new Error('Use the per-user lock; a Marketplace add-on shares one script across all users'); } },
+      getScriptLock: () => ({ tryLock(milliseconds) { state.scriptLockAcquires++; state.scriptLockWaits.push(milliseconds); return state.scriptLockAvailable; }, releaseLock() { state.scriptLockReleases++; } }) },
     Utilities: {
       DigestAlgorithm: { SHA_256: 'SHA_256' }, Charset: { UTF_8: 'UTF_8' },
       computeDigest: (_algorithm, value) => [...createHash('sha256').update(String(value), 'utf8').digest()],
@@ -238,7 +300,7 @@ export function createDatamoovSandbox() {
         state.gets.push({ spreadsheetId, options: plain(options || {}) });
         const book = state.books.get(spreadsheetId);
         if (!book) throw new Error('Unknown spreadsheet');
-        return { sheets: book.sheets.map((sheet) => ({ properties: { sheetId: sheet.id, gridProperties: { rowCount: sheet.maxRows, columnCount: sheet.maxColumns } } })) };
+        return { sheets: book.sheets.map((sheet) => ({ properties: { sheetId: sheet.id, title: sheet.name, hidden: sheet.hidden, gridProperties: { rowCount: sheet.maxRows, columnCount: sheet.maxColumns, frozenRowCount: sheet.frozenRows } } })) };
       },
     } },
     ScriptApp: {
@@ -265,7 +327,7 @@ export function createDatamoovSandbox() {
     } },
   };
   const context = vm.createContext(fakeServices, { codeGeneration: { strings: false, wasm: false } });
-  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_credentials.js', 'dmv_connections.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js', 'dmv_continuation.js', 'dmv_ai.js', 'dmv_chat_tools.js', 'dmv_chat.js']) {
+  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_report_store.js', 'dmv_credentials.js', 'dmv_connections.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js', 'dmv_continuation.js', 'dmv_ai.js', 'dmv_chat_tools.js', 'dmv_chat.js']) {
     new vm.Script(readFileSync(new URL(`../../src/${filename}`, import.meta.url), 'utf8'), { filename }).runInContext(context, { timeout: 1000 });
   }
   const book = addSpreadsheet();

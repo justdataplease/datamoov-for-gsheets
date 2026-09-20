@@ -6,13 +6,14 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | --- | --- |
 | src/dmv_app.js | Google Sheets menu, sidebar entry point and template includes |
 | src/dmv_core.js | Connector registry, catalog, validation, dates and typed result normalization |
-| src/dmv_store.js | Private per-user storage of connections and reports, locks, active spreadsheet |
-| src/dmv_credentials.js | Saved credentials: types derived from the connectors (one shared Google type), save with a Google token check, delete refused while in use, and the merge of a credential into its connections at run time |
+| src/dmv_store.js | Private per-user storage of connections, report bindings and runtime state, locks, active spreadsheet |
+| src/dmv_report_store.js | Shared report definitions in DataMoovReports, schema validation, fingerprints, private bindings and legacy migration |
+| src/dmv_credentials.js | Saved credentials: connector-derived types, Google token and available consumer checks on edits, delete refused while in use, and credential merging into connections at run time |
 | src/dmv_connections.js | Save, delete and test connections (a saved credential plus per-connection values); summaries never expose secrets |
 | src/dmv_reports.js | Bootstrap, report validation, discovery, preview, run and refresh-all |
 | src/dmv_continuation.js | Bounded per-user checkpoint storage, snapshot recovery and saved-report chunk execution |
 | src/dmv_writer.js | Output ownership receipt, overlap checks and one atomic Sheets batch |
-| src/dmv_schedule.js | One hourly trigger per user and spreadsheet driving normal schedules and pending continuations |
+| src/dmv_schedule.js | Private schedule enrollment and hourly refresh of explicitly approved reports and pending continuations |
 | src/dmv_http.js | Bounded HTTPS requests, retries and Google access tokens |
 | src/dmv_sql.js | Shared conservative read-only SQL validation |
 | src/dmv_connector_helpers.js | Provider-neutral helpers: Google credential fields, field selection, discovery check, number/text coercion, page budget, UTC date window, chunk validation/merging and complete-fetch wrapper |
@@ -31,6 +32,8 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | data/ and .local/ | Ignored private snapshots, verification records and credentials |
 
 Apps Script server files share a global namespace. The dmv prefix identifies the app's functions; names ending in an underscore are internal helpers. Node imports belong only in tools and tests.
+
+Report definitions are authoritative in the spreadsheet's hidden `DataMoovReports` tab. A stable shared definition ID identifies the recipe; each user's private binding connects that definition and spreadsheet to their own connection, approved definition fingerprint and schedule. The private report keeps a separate runtime ID for locks, continuation state and output receipts. Direct sheet edits require validation and renewed approval in the sidebar. Shared definition mutations and output verification/write use a short script lock; provider requests happen outside that shared lock. Private record mutations keep the user lock. See [report storage](report-storage.md) for copying, migration and the storage boundary.
 
 The runtime resolves and validates the date range before calling fetch, and the context exposes checkDeadline() for connectors to enforce the shared deadline. Continuations retain the initially resolved dates across executions. Connectors call dmvSelectFields_ to resolve the user's selection against their declared or discovered descriptors, so every source shares one selection rule and one error vocabulary.
 

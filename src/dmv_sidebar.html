@@ -27,7 +27,9 @@
             aria-label="Open DataMoov in a larger window"
             title="Open in a larger window"
           >
-            &#x2921;
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M14 4h6v6M20 4l-6 6M10 20H4v-6M4 20l6-6" />
+            </svg>
           </button>
           <span class="edition">Sheets</span>
         </div>
@@ -96,7 +98,9 @@
                 aria-label="Refresh reports"
                 title="Refresh reports"
               >
-                &#8635;
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M20 7v5h-5M4 17v-5h5M6.1 6.1A8 8 0 0 1 20 12M4 12a8 8 0 0 0 13.9 5.9" />
+                </svg>
               </button>
               <button
                 type="button"
@@ -105,14 +109,16 @@
                 aria-label="Create a report"
                 title="Create a report"
               >
-                +
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
               </button>
             </div>
           </div>
           <div id="reports-list" class="card-list"></div>
           <p class="footnote">
-            Nothing leaves your Google account. Credentials and reports are stored in your account
-            and this spreadsheet. DataMoov has no servers and keeps no copy of your data.
+            Report settings are shared with spreadsheet editors. Your credentials, connections and
+            refresh schedules stay private to your Google account. DataMoov has no servers.
           </p>
         </section>
         <section id="panel-compose" role="tabpanel" aria-labelledby="tab-reports" hidden>
@@ -123,6 +129,7 @@
             </div>
             <button type="button" class="text-button" id="reset-report">&larr; Reports</button>
           </div>
+          <p id="report-access-note" class="inline-note" hidden></p>
           <form id="report-form">
             <fieldset id="report-fields" disabled>
               <div class="step-heading">
@@ -131,7 +138,7 @@
               </div>
               <label for="report-provider">Data source</label
               ><select id="report-provider" required></select>
-              <label for="report-connection">Connection</label
+              <label for="report-connection">Your connection</label
               ><select id="report-connection" required></select>
               <div id="connection-empty" class="inline-note" hidden>
                 Add a connection to access this source.
@@ -235,7 +242,7 @@
                   />
                 </div>
                 <div>
-                  <label for="report-schedule">Refresh</label
+                  <label for="report-schedule">Your refresh</label
                   ><select id="report-schedule">
                     <option value="manual">Manual</option>
                     <option value="hourly">Hourly</option>
@@ -245,10 +252,12 @@
                 </div>
               </div>
               <p class="field-help">
-                Each run replaces this report's output range. Choose a blank area or a new tab.
+                Report settings are shared with spreadsheet editors. Your connection and refresh
+                schedule stay private. Each run replaces this report's output range.
               </p>
               <p id="schedule-note" class="inline-note" hidden>
-                Scheduled refreshes run with your account and connections.
+                Scheduled refreshes run with your account and connections. Shared changes pause your
+                schedule until you review and save them.
               </p>
               <div class="action-row">
                 <button type="button" id="preview-report" class="button secondary">
@@ -284,7 +293,11 @@
                 title="New chat"
                 hidden
               >
-                &#x270E;
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path
+                    d="M12 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 4l4 4M10 10l8-8 4 4-8 8-5 1 1-5Z"
+                  />
+                </svg>
               </button>
               <button
                 type="button"
@@ -294,7 +307,12 @@
                 title="AI provider settings"
                 hidden
               >
-                &#9881;
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path
+                    d="M10 2h4l.6 2.4 2 1.2L19 5l2 3.5-1.8 1.7v3.6l1.8 1.7-2 3.5-2.4-.6-2 1.2L14 22h-4l-.6-2.4-2-1.2L5 19l-2-3.5 1.8-1.7v-3.6L3 8.5 5 5l2.4.6 2-1.2Z"
+                  />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
               </button>
             </div>
           </div>
@@ -343,7 +361,9 @@
               aria-label="Add a connection"
               title="Add a connection"
             >
-              +
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
             </button>
           </div>
           <div id="connections-list" class="card-list"></div>
@@ -490,7 +510,9 @@
                 aria-label="Add a credential"
                 title="Add a credential"
               >
-                +
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
               </button>
             </div>
             <div id="credentials-list" class="card-list"></div>

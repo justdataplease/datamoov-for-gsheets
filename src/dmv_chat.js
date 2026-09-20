@@ -33,9 +33,14 @@ function dmvChatSession_(spreadsheet) {
     spreadsheetId: spreadsheet.getId(),
     timezone: timezone,
     today: Utilities.formatDate(new Date(), timezone, 'yyyy-MM-dd'),
-    sheetNames: spreadsheet.getSheets().map(function (sheet) {
-      return sheet.getName();
-    }),
+    sheetNames: spreadsheet
+      .getSheets()
+      .filter(function (sheet) {
+        return !dmvReportSheetName_(sheet.getName());
+      })
+      .map(function (sheet) {
+        return sheet.getName();
+      }),
     catalog: catalog,
     connections: dmvList_('connection')
       .map(dmvConnectionSummary_)

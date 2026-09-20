@@ -122,12 +122,23 @@ function dmvFinishContinuation_(reportId) {
 
 function dmvFetchContinued_(report, spreadsheet, token, connectionRevision) {
   var connection = dmvReadConnection_(report.connectionId);
-  if ((connection.revision || 0) !== connectionRevision)
+  if (dmvConnectionRevision_(connection) !== connectionRevision)
     throw new Error('The connection changed during the refresh. Run it again.');
   var connector = dmvConnector_(connection.connectorId);
   var definition = dmvDefinition_(connector, report.reportType);
   var snapshot = dmvReadContinuation_(report);
-  if (snapshot && snapshot.connectionRevision !== (connection.revision || 0))
+  if (snapshot && typeof snapshot.connectionRevision === 'number') {
+    if (connection.credentialId)
+      throw new Error(
+        'This report was paused before credential revision tracking was added. Its existing output is unchanged. Run again to restart safely.'
+      );
+    if (snapshot.connectionRevision !== (connection.revision || 0))
+      throw new Error(
+        'The connection changed during continuation. Run the report again to restart.'
+      );
+    snapshot.connectionRevision = dmvConnectionRevision_(connection);
+  }
+  if (snapshot && snapshot.connectionRevision !== dmvConnectionRevision_(connection))
     throw new Error('The connection changed during continuation. Run the report again to restart.');
   if (snapshot && Date.now() - snapshot.createdAt > DMV_CONTINUATION.lifetimeMs)
     throw new Error('The saved continuation expired. Run the report again to restart.');
@@ -137,7 +148,7 @@ function dmvFetchContinued_(report, spreadsheet, token, connectionRevision) {
       reportId: report.id,
       revision: report.revision,
       spreadsheetId: report.spreadsheetId,
-      connectionRevision: connection.revision || 0,
+      connectionRevision: dmvConnectionRevision_(connection),
       createdAt: Date.now(),
       dates: dmvReportDates_(definition, report, spreadsheet),
       result: null,
@@ -159,7 +170,8 @@ function dmvFetchContinued_(report, spreadsheet, token, connectionRevision) {
         var current = dmvRead_('report', report.id);
         if (current.runToken !== token || current.revision !== report.revision)
           throw new Error('The report changed during the refresh. Run it again.');
-        if ((dmvRead_('connection', current.connectionId).revision || 0) !== connectionRevision)
+        dmvCheckReportDefinition_(current, spreadsheet);
+        if (dmvConnectionRevision_(dmvReadConnection_(current.connectionId)) !== connectionRevision)
           throw new Error('The connection changed during the refresh. Run it again.');
         dmvSaveContinuation_(current, snapshot);
       });
@@ -170,6 +182,8 @@ function dmvFetchContinued_(report, spreadsheet, token, connectionRevision) {
     );
     return { pending: true, rowCount: snapshot.result.rows.length };
   } catch (error) {
-    throw new Error(dmvSafeError_(error, connection.credentials));
+    var safe = new Error(dmvSafeError_(error, connection.credentials));
+    if (error.dmvApprovalRequired) safe.dmvApprovalRequired = true;
+    throw safe;
   }
 }

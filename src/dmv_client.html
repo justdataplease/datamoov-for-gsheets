@@ -11,7 +11,10 @@
       reports: [],
       limits: { maxRows: 20000, defaultRows: 1000 },
       reportId: null,
+      reportDefinitionId: null,
+      reportDefinitionFingerprint: null,
       connectionId: null,
+      connectionReturnTo: 'connections',
       accountEpoch: 0,
       accountChoices: [],
       columns: [],
@@ -85,8 +88,9 @@
     }
     async function busy(node, label, work) {
       const previous = node.textContent;
+      const icon = node.classList.contains('icon-button');
       node.disabled = true;
-      node.textContent = label;
+      if (!icon) node.textContent = label;
       node.setAttribute('aria-busy', 'true');
       try {
         return await work();
@@ -95,7 +99,7 @@
         return null;
       } finally {
         node.disabled = false;
-        if (node.textContent === label) node.textContent = previous;
+        if (!icon && node.textContent === label) node.textContent = previous;
         node.removeAttribute('aria-busy');
       }
     }
@@ -115,6 +119,16 @@
       if (index < 0) items.push(item);
       else items[index] = item;
     }
+    function sameReport(left, right) {
+      return left.definitionId && right.definitionId
+        ? left.definitionId === right.definitionId
+        : Boolean(left.id && left.id === right.id);
+    }
+    function upsertReport(report) {
+      const index = state.reports.findIndex((item) => sameReport(item, report));
+      if (index < 0) state.reports.push(report);
+      else state.reports[index] = report;
+    }
     function fillProviders(select, selected) {
       select.replaceChildren();
       for (const source of state.catalog) select.append(option(source.id, source.label));
@@ -122,12 +136,14 @@
     }
     function refreshConnections(selected) {
       const dropdown = $('report-connection');
-      const previous = selected || dropdown.value;
+      const previous = selected === undefined ? dropdown.value : selected;
       const connections = state.connections.filter(
         (item) => item.connectorId === $('report-provider').value
       );
       dropdown.replaceChildren();
-      if (!connections.length) dropdown.append(option('', 'Connect an account first'));
+      dropdown.append(
+        option('', connections.length ? 'Choose your connection' : 'Connect an account first')
+      );
       connections.forEach((item) => dropdown.append(option(item.id, item.label)));
       if (connections.some((item) => item.id === previous)) dropdown.value = previous;
       $('connection-empty').hidden = connections.length > 0;
@@ -204,15 +220,25 @@
         const failed = Boolean(report.lastError) || ['failed', 'error'].includes(report.status);
         const running = ['running', 'started'].includes(report.status);
         const paused = report.status === 'paused';
-        const status = failed
-          ? ['Needs attention', 'error']
-          : running
-            ? ['Running', 'running']
-            : paused
-              ? ['Paused', 'paused']
-              : report.lastRun
-                ? ['Up to date', 'success']
-                : ['Ready', ''];
+        const definitionMissing = Boolean(report.definitionMissing);
+        const connectionRequired = Boolean(report.connectionRequired || !report.connectionId);
+        const approvalRequired = Boolean(report.approvalRequired);
+        const blocked = definitionMissing || connectionRequired || approvalRequired;
+        const status = definitionMissing
+          ? ['Definition removed', 'paused']
+          : connectionRequired
+            ? ['Needs connection', 'paused']
+            : approvalRequired
+              ? ['Review changes', 'paused']
+              : failed
+                ? ['Needs attention', 'error']
+                : running
+                  ? ['Running', 'running']
+                  : paused
+                    ? ['Paused', 'paused']
+                    : report.lastRun
+                      ? ['Up to date', 'success']
+                      : ['Ready', ''];
         top.append(providerBadge(source), names, el('span', 'status ' + status[1], status[0]));
         content.append(
           top,
@@ -236,26 +262,60 @@
                 : '')
           )
         );
-        if (paused) content.append(el('p', 'card-progress', continuationMessage(report)));
+        if (blocked)
+          content.append(
+            el(
+              'p',
+              'card-progress',
+              definitionMissing
+                ? 'The shared definition was removed. Remove your private setup to clear this report; existing sheet output stays in place.'
+                : connectionRequired
+                  ? 'Choose your connection and an empty output area or new tab, then save. Existing output stays in place.'
+                  : 'The shared report changed. Review its settings and save before running it again.'
+            )
+          );
+        else if (paused) content.append(el('p', 'card-progress', continuationMessage(report)));
         if (report.lastError) content.append(el('p', 'card-error', report.lastError));
         const actions = el('div', 'card-bottom');
+        if (!definitionMissing)
+          actions.append(
+            button(
+              connectionRequired ? 'Set up' : approvalRequired ? 'Review' : 'Edit',
+              'text-button subtle',
+              () => editReport(report)
+            )
+          );
         actions.append(
-          button('Edit', 'text-button subtle', () => editReport(report)),
           button('Remove', 'text-button subtle', (event) =>
             busy(event.currentTarget, 'Removing…', async () => {
               if (
                 !window.confirm(
-                  'Remove "' +
-                    report.name +
-                    '"? The report definition and its schedule will be removed. Existing sheet data stays in place.'
+                  definitionMissing
+                    ? 'Remove your private setup for "' +
+                        report.name +
+                        '"? Existing sheet data stays in place.'
+                    : 'Remove "' +
+                        report.name +
+                        '" for everyone in this spreadsheet? Existing sheet data stays in place.'
                 )
               )
                 return;
-              await api('dmvDeleteReport', report.id);
-              state.reports = state.reports.filter((item) => item.id !== report.id);
+              await api('dmvDeleteReport', {
+                ...(report.id ? { id: report.id } : {}),
+                definitionId: report.definitionId,
+                definitionFingerprint: report.definitionFingerprint,
+              });
+              state.reports = state.reports.filter((item) => !sameReport(item, report));
               renderReports();
-              if (state.reportId === report.id) resetReport();
-              notice('Report removed. Existing sheet data was kept.');
+              if (
+                sameReport({ id: state.reportId, definitionId: state.reportDefinitionId }, report)
+              )
+                resetReport();
+              notice(
+                definitionMissing
+                  ? 'Private report setup removed. Existing sheet data was kept.'
+                  : 'Report removed. Existing sheet data was kept.'
+              );
             })
           ),
           button(paused ? '▶ Resume' : '▶ Run', 'run-button', (event) =>
@@ -294,6 +354,12 @@
             })
           )
         );
+        const run = actions.querySelector('.run-button');
+        run.disabled = blocked || running;
+        if (blocked)
+          run.title = definitionMissing
+            ? 'The shared report definition has been removed.'
+            : 'Open this report and save your settings before running it.';
         card.append(content, actions);
         list.append(card);
       }
@@ -487,33 +553,41 @@
         );
       }
       updateConditionalFields(inline, credentialFields(source));
-      refreshCredentialChoices(connection);
+      refreshCredentialChoices(connection, true);
       renderAccountDiscovery();
     }
-    function refreshCredentialChoices(connection) {
+    function refreshCredentialChoices(connection, reset = false) {
       const source = provider($('connection-provider').value);
       const fam = familyFor(source);
       const select = $('connection-credential');
+      const previous = select.value;
+      const current =
+        connection || state.connections.find((item) => item.id === state.connectionId);
+      const embedded = Boolean(current && !current.credentialId);
       select.replaceChildren();
       const saved = state.credentials.filter((item) => item.family === fam?.id);
       for (const credential of saved) select.append(option(credential.id, credential.label));
-      if (connection && !connection.credentialId)
-        select.append(option('__embedded', 'Stored with this connection'));
-      select.append(option('__new', saved.length ? 'Add a new credential…' : 'New credential'));
-      select.value =
-        connection?.credentialId && saved.some((item) => item.id === connection.credentialId)
-          ? connection.credentialId
-          : connection && !connection.credentialId
-            ? '__embedded'
-            : saved[0]?.id || '__new';
+      if (embedded) select.append(option('__embedded', 'Stored with this connection'));
+      select.append(
+        option('__new', saved.length ? 'Add a new credential\u2026' : 'New credential')
+      );
+      const preferred = reset
+        ? current?.credentialId || (embedded ? '__embedded' : saved[0]?.id || '__new')
+        : previous;
+      select.value = Array.from(select.options).some((item) => item.value === preferred)
+        ? preferred
+        : embedded
+          ? '__embedded'
+          : '__new';
       $('connection-credential-help').textContent = fam
         ? saved.length
           ? 'One ' + fam.label + ' credential can serve every ' + fam.label + ' connection.'
           : 'No ' + fam.label + ' credential saved yet; add one here or under Settings.'
         : '';
-      $('inline-credential-label').value =
-        connection && !connection.credentialId ? connection.label + ' credential' : '';
+      if (reset) $('inline-credential-label').value = embedded ? current.label + ' credential' : '';
       renderCredentialInline();
+      // Both a changed selection and a rotated saved credential invalidate discovered accounts.
+      invalidateAccounts();
     }
     function credentialChoice() {
       return $('connection-credential').value;
@@ -792,6 +866,8 @@
     }
     function resetConnection(connectorId) {
       state.connectionId = null;
+      state.connectionReturnTo = 'connections';
+      $('cancel-connection').textContent = '\u2190 Connections';
       $('connection-form').reset();
       fillProviders($('connection-provider'), connectorId || $('report-provider').value);
       $('connection-provider').disabled = false;
@@ -799,13 +875,18 @@
       $('save-connection').textContent = 'Save connection';
       renderAuth();
     }
-    function openConnectionEditor(connectorId) {
+    function openConnectionEditor(connectorId, returnTo = 'connections') {
       resetConnection(connectorId);
+      state.connectionReturnTo = returnTo;
+      $('cancel-connection').textContent =
+        returnTo === 'compose' ? '\u2190 Report' : '\u2190 Connections';
       tab('connect');
       $('connection-label').focus();
     }
     function editConnection(connection) {
       state.connectionId = connection.id;
+      state.connectionReturnTo = 'connections';
+      $('cancel-connection').textContent = '\u2190 Connections';
       fillProviders($('connection-provider'), connection.connectorId);
       $('connection-provider').disabled = true;
       $('connection-label').value = connection.label;
@@ -817,6 +898,9 @@
     }
     function resetReport(connectorId) {
       state.reportId = null;
+      state.reportDefinitionId = null;
+      state.reportDefinitionFingerprint = null;
+      $('report-access-note').hidden = true;
       $('report-form').reset();
       $('data-preview').hidden = true;
       $('report-editor-title').textContent = 'Build a report';
@@ -831,7 +915,7 @@
       updateSchedule();
     }
     function changeProvider(selectedType) {
-      refreshConnections();
+      refreshConnections('');
       $('report-type').replaceChildren();
       const reports = currentProvider()?.reports || [];
       reports.forEach((report) => $('report-type').append(option(report.id, report.label)));
@@ -857,7 +941,8 @@
           state.columns.push({ key, label: key, type: 'string' });
       }
       renderColumns(selectedFields);
-      if (!state.reportId && !$('report-name').value) $('report-name').value = report?.label || '';
+      if (!state.reportId && !state.reportDefinitionId && !$('report-name').value)
+        $('report-name').value = report?.label || '';
       updateDates();
     }
     function selectedColumnKeys() {
@@ -939,6 +1024,10 @@
       }
       return {
         ...(state.reportId ? { id: state.reportId } : {}),
+        ...(state.reportDefinitionId ? { definitionId: state.reportDefinitionId } : {}),
+        ...(state.reportDefinitionFingerprint
+          ? { definitionFingerprint: state.reportDefinitionFingerprint }
+          : {}),
         name: $('report-name').value.trim(),
         connectorId: $('report-provider').value,
         connectionId: $('report-connection').value,
@@ -955,22 +1044,39 @@
       };
     }
     function editReport(report) {
-      state.reportId = report.id;
+      state.reportId = report.id || null;
+      state.reportDefinitionId = report.definitionId || null;
+      state.reportDefinitionFingerprint = report.definitionFingerprint || null;
       $('data-preview').hidden = true;
       fillProviders($('report-provider'), report.connectorId);
       changeProvider(report.reportType);
-      refreshConnections(report.connectionId);
+      refreshConnections(report.connectionRequired ? '' : report.connectionId || '');
       renderReportFields(report.config || {}, report.fields);
       $('report-name').value = report.name;
       $('target-sheet').value = report.target?.sheetName || '';
       $('target-cell').value = report.target?.startCell || 'A1';
       $('row-limit').value = report.maxRows || state.limits.defaultRows;
-      $('report-schedule').value = report.schedule || 'manual';
+      $('report-schedule').value =
+        report.connectionRequired || report.approvalRequired
+          ? 'manual'
+          : report.schedule || 'manual';
       $('date-preset').value = report.dateRange?.preset || 'last30';
       $('start-date').value = report.dateRange?.startDate || '';
       $('end-date').value = report.dateRange?.endDate || '';
-      $('report-editor-title').textContent = 'Edit report';
-      $('save-report').textContent = 'Save changes';
+      $('report-editor-title').textContent = report.connectionRequired
+        ? 'Set up shared report'
+        : report.approvalRequired
+          ? 'Review shared report'
+          : 'Edit report';
+      $('save-report').textContent =
+        report.connectionRequired || report.approvalRequired
+          ? 'Save for my account'
+          : 'Save changes';
+      const note = $('report-access-note');
+      note.hidden = !(report.connectionRequired || report.approvalRequired);
+      note.textContent = report.connectionRequired
+        ? 'Choose your connection, refresh schedule and an empty output area or new tab. Existing copied output stays in place; this account cannot refresh it automatically.'
+        : 'Review the updated report settings, then save to use them with your connection. Choose a refresh schedule to restart automatic updates.';
       updateDates();
       updateSchedule();
       tab('compose');
@@ -1118,7 +1224,7 @@
       changeProvider();
     });
     $('report-type').addEventListener('change', () => {
-      if (!state.reportId) $('report-name').value = '';
+      if (!state.reportId && !state.reportDefinitionId) $('report-name').value = '';
       renderReportFields();
     });
     $('date-preset').addEventListener('change', updateDates);
@@ -1128,7 +1234,7 @@
       updateConditionalFields($('report-config'), currentReport()?.configFields || [])
     );
     $('connect-source').addEventListener('click', () =>
-      openConnectionEditor($('report-provider').value)
+      openConnectionEditor($('report-provider').value, 'compose')
     );
     $('new-connection').addEventListener('click', () => openConnectionEditor());
     $('new-credential').addEventListener('click', () => {
@@ -1187,7 +1293,7 @@
         resetCredential(saved.family);
         notice(
           saved.verified
-            ? 'Credential saved and verified with Google.'
+            ? 'Credential saved and verified with the provider.'
             : 'Credential saved. It is checked when you connect an account with it.'
         );
       });
@@ -1205,8 +1311,9 @@
         (discovery?.label || 'Account') + ' filled in above. Save the connection to continue.';
     });
     $('cancel-connection').addEventListener('click', () => {
+      const returnTo = state.connectionReturnTo;
       resetConnection();
-      tab('connections');
+      tab(returnTo);
     });
     $('connection-form').addEventListener('submit', (event) => {
       event.preventDefault();
@@ -1222,7 +1329,8 @@
           ...(credentialChoice() === '__embedded' ? chosen.inline : {}),
         },
       };
-      formBusy('connection-fields', 'save-connection', 'Saving…', async () => {
+      const returnTo = state.connectionReturnTo;
+      formBusy('connection-fields', 'save-connection', 'Saving\u2026', async () => {
         if (chosen.newCredential) {
           // The new credential is saved first so it can be reused even if the connection fails.
           const credential = await api('dmvSaveCredential', chosen.newCredential);
@@ -1239,7 +1347,7 @@
         renderCredentials();
         refreshConnections(saved.id);
         resetConnection(saved.connectorId);
-        tab('connections');
+        tab(returnTo);
         notice(
           saved.verified
             ? 'Connection saved and verified with the provider.'
@@ -1259,11 +1367,11 @@
       if (!report) return;
       formBusy('report-fields', 'save-report', 'Saving…', async () => {
         const saved = await api('dmvSaveReport', report);
-        upsert(state.reports, saved);
+        upsertReport(saved);
         renderReports();
         resetReport();
         tab('reports');
-        notice('Report saved. Run it to refresh your sheet.');
+        notice('Report saved. Your connection and refresh schedule stay private to your account.');
       });
     });
     $('discover-fields').addEventListener('click', (event) =>

@@ -148,6 +148,9 @@ export function previewFixture(catalog, aiProviders = [], families = []) {
     const report = source.reports[0];
     return {
       id: 'demo-report-' + index,
+      definitionId: 'demo-definition-' + index,
+      connectionRequired: false,
+      approvalRequired: false,
       name: ['Campaign performance', 'Website acquisition', 'Sales pipeline'][index],
       connectorId: source.id,
       connectionId: 'demo-' + source.id,
@@ -193,6 +196,36 @@ function installPreview(initial) {
   const data = structuredClone(initial);
   const copy = (value) => structuredClone(value);
   let nextId = 1;
+  function reportFingerprint(report) {
+    return JSON.stringify(
+      [
+        'name',
+        'connectorId',
+        'reportType',
+        'fields',
+        'config',
+        'dateRange',
+        'target',
+        'maxRows',
+      ].map((key) => report[key] ?? null)
+    );
+  }
+  data.reports.forEach((report) => {
+    report.definitionId ||= report.id;
+    report.definitionFingerprint = reportFingerprint(report);
+    report.connectionRequired = Boolean(report.connectionRequired || !report.connectionId);
+    report.approvalRequired = Boolean(report.approvalRequired || report.definitionMissing);
+    if (report.connectionRequired) {
+      report.id = null;
+      report.connectionId = '';
+    }
+    if (report.connectionRequired || report.approvalRequired) report.schedule = 'manual';
+  });
+  function findReport(input) {
+    return data.reports.find((report) =>
+      input.definitionId ? report.definitionId === input.definitionId : report.id === input.id
+    );
+  }
   function definition(report) {
     return data.catalog
       .find((source) => source.id === report.connectorId)
@@ -352,14 +385,40 @@ function installPreview(initial) {
     }),
     dmvSaveReport(report) {
       if (!report.fields?.length) throw new Error('Choose at least one column.');
-      const saved = { ...copy(report), id: report.id || 'preview-report-' + nextId++ };
-      const index = data.reports.findIndex((item) => item.id === saved.id);
+      const connection = data.connections.find((item) => item.id === report.connectionId);
+      if (!connection || connection.connectorId !== report.connectorId)
+        throw new Error('Choose one of your connections for this source.');
+      const previous = findReport(report);
+      if ((report.id || report.definitionId) && (!previous || previous.definitionMissing))
+        throw new Error('This shared report was removed. Refresh the report list.');
+      if (previous && report.definitionFingerprint !== previous.definitionFingerprint)
+        throw new Error('This shared report changed. Refresh the report list and open it again.');
+      const saved = {
+        ...previous,
+        ...copy(report),
+        id: previous?.id || 'preview-report-' + nextId++,
+        definitionId: previous?.definitionId || 'preview-definition-' + nextId++,
+        connectionRequired: false,
+        approvalRequired: false,
+        schedule: report.schedule || 'manual',
+      };
+      saved.definitionFingerprint = reportFingerprint(saved);
+      const index = previous ? data.reports.indexOf(previous) : -1;
       if (index < 0) data.reports.push(saved);
-      else data.reports[index] = { ...data.reports[index], ...saved };
-      return copy(index < 0 ? saved : data.reports[index]);
+      else data.reports[index] = saved;
+      return copy(saved);
     },
-    dmvDeleteReport(id) {
-      data.reports = data.reports.filter((item) => item.id !== id);
+    dmvDeleteReport(input) {
+      const request = typeof input === 'string' ? { id: input } : input;
+      const report = findReport(request);
+      if (!report) throw new Error('Report not found.');
+      if (
+        !report.definitionMissing &&
+        typeof input !== 'string' &&
+        request.definitionFingerprint !== report.definitionFingerprint
+      )
+        throw new Error('This shared report changed. Refresh the report list before removing it.');
+      data.reports = data.reports.filter((item) => item.definitionId !== report.definitionId);
       return { ok: true };
     },
     dmvDiscoverFields(input) {
@@ -470,6 +529,8 @@ function installPreview(initial) {
     dmvRunReport(id) {
       const report = data.reports.find((item) => item.id === id);
       if (!report) throw new Error('Report not found.');
+      if (report.definitionMissing || report.connectionRequired || report.approvalRequired)
+        throw new Error('Open the shared report and save your connection and schedule first.');
       if (window.DATAMOOV_PREVIEW_PENDING_NEXT) {
         const result = copy(window.DATAMOOV_PREVIEW_PENDING_NEXT);
         delete window.DATAMOOV_PREVIEW_PENDING_NEXT;

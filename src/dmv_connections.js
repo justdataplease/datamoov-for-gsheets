@@ -64,14 +64,29 @@ function dmvDiscoverAccounts(input) {
   if (previous && previous.connectorId !== connector.id)
     throw new Error('Choose a connection for this source.');
   var keys = dmvAccountSelectionKeys_(connector);
-  var credentials = dmvConnectionCredentials_(connector, input, previous);
+  var credentials;
+  var discoveryConnection = {};
   if (input.credentialId) {
-    // Discovery with a saved credential: its values under the form's per-connection values.
-    var stored = dmvRead_('credential', input.credentialId).values;
-    Object.keys(stored).forEach(function (key) {
-      if (credentials[key] === undefined || credentials[key] === '') credentials[key] = stored[key];
-    });
-  } else if (previous) credentials = Object.assign({}, dmvConnectionValues_(previous), credentials);
+    // The selected credential is authoritative; an older embedded connection cannot override
+    // it with its retained secrets, and a credential from another provider is never consulted.
+    var credential = dmvRead_('credential', input.credentialId);
+    if (credential.family !== dmvFamilyId_(connector))
+      throw new Error('This credential is for another type of source.');
+    credentials = Object.assign(
+      {},
+      credential.values,
+      dmvConnectionCredentials_(connector, input, previous, dmvConnectionFields_(connector))
+    );
+    discoveryConnection.credentialId = credential.id;
+    discoveryConnection.credentialRevision = credential.revision || 0;
+  } else {
+    var stored = previous ? dmvConnectionValues_(previous) : null;
+    credentials = Object.assign(
+      {},
+      stored || {},
+      dmvConnectionCredentials_(connector, input, stored ? { credentials: stored } : null)
+    );
+  }
   credentials = dmvFieldsInput_(
     (connector.authFields || []).filter(function (field) {
       return keys.indexOf(field.key) === -1;
@@ -80,14 +95,10 @@ function dmvDiscoverAccounts(input) {
   );
   if (!dmvVisible_(connector.accountDiscovery, credentials))
     throw new Error('Choose the supported authorization method to find accounts.');
+  discoveryConnection.credentials = credentials;
   try {
     var accounts = connector.discoverAccounts(
-      dmvContext_(
-        connector,
-        { credentials: credentials },
-        { config: {}, fields: [], maxRows: 1000 },
-        {}
-      )
+      dmvContext_(connector, discoveryConnection, { config: {}, fields: [], maxRows: 1000 }, {})
     );
     if (!Array.isArray(accounts) || accounts.length > 1000)
       throw new Error('The account list is incomplete or too large.');
@@ -221,23 +232,25 @@ function dmvRotateCredentials_(connection, patch) {
   var kind = connection.credentialId ? 'credential' : 'connection';
   var id = connection.credentialId || connection.id;
   if (!id) return;
-  var raw = dmvStore_().getProperty(dmvKey_(kind, id));
-  if (!raw) return;
-  var saved = JSON.parse(raw);
-  var expected = connection.credentialId ? connection.credentialRevision : connection.revision;
-  if ((saved.revision || 0) !== (expected || 0)) return;
-  var fields = connection.credentialId
-    ? dmvCredentialFamily_(saved.family).fields
-    : dmvConnector_(saved.connectorId).authFields || [];
-  var secrets = dmvSecretKeys_(fields);
-  var target = connection.credentialId ? saved.values : saved.credentials;
-  var changed = false;
-  Object.keys(patch).forEach(function (key) {
-    if (secrets.indexOf(key) < 0 || typeof patch[key] !== 'string') return;
-    target[key] = patch[key];
-    changed = true;
+  return dmvLocked_(function () {
+    var raw = dmvStore_().getProperty(dmvKey_(kind, id));
+    if (!raw) return;
+    var saved = JSON.parse(raw);
+    var expected = connection.credentialId ? connection.credentialRevision : connection.revision;
+    if ((saved.revision || 0) !== (expected || 0)) return;
+    var fields = connection.credentialId
+      ? dmvCredentialFamily_(saved.family).fields
+      : dmvConnector_(saved.connectorId).authFields || [];
+    var secrets = dmvSecretKeys_(fields);
+    var target = connection.credentialId ? saved.values : saved.credentials;
+    var changed = false;
+    Object.keys(patch).forEach(function (key) {
+      if (secrets.indexOf(key) < 0 || typeof patch[key] !== 'string') return;
+      target[key] = patch[key];
+      changed = true;
+    });
+    if (changed) dmvSave_(kind, saved);
   });
-  if (changed) dmvSave_(kind, saved);
 }
 
 function dmvDeleteConnection(id) {

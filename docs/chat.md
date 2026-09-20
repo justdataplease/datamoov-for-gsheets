@@ -17,8 +17,8 @@ network destination is the AI provider you configure.
    **Instructions for the assistant** is optional standing context sent with every question:
    your business, currency, naming conventions, preferred tabs or chart styles (up to 4,000
    characters).
-3. Add at least one connection in **Connections**. The chat uses connections; it never asks
-   for provider credentials itself.
+3. Add at least one connection in **Connections**. The chat uses your own private connections;
+   sharing or copying report definitions does not supply another user's connection or credentials.
 
 Usage is billed by the AI provider to your key. A question typically costs a few model calls
 plus one report fetch.
@@ -54,9 +54,10 @@ summarized, what was written where, which chart was added.
   Aggregates from **summarize** are returned in full up to the requested limit.
 - Data you read with **read_sheet** is sampled the same way.
 
-The model never sees credentials, API keys, full result sets or anything outside the
-spreadsheet it runs in. Values that come back from providers are framed as data, not
-instructions.
+Provider credentials and AI keys are not included in model messages. Large results are
+sampled; results of 20 rows or fewer may be sent whole. Your prompts, conversation context,
+saved instructions and the metadata described above also go to the chosen AI provider.
+Values that come back from providers are framed as data, not instructions.
 
 ## Guarantees
 
@@ -80,6 +81,10 @@ instructions.
   as such; the chat offers no total for them and `summarize` refuses to sum them.
 - Text read from your own tabs is kept whole when written elsewhere; only the samples shown
   to the model are shortened.
+- The hidden `DataMoovReports` configuration tab is excluded from chat tab listings and
+  cannot be read, written or charted through chat tools. Manage shared definitions through
+  the sidebar or **Manage report definitions** in the DataMoov menu. See
+  [report storage](report-storage.md).
 
 ## Tools (for developers)
 

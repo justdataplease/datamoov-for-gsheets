@@ -185,13 +185,29 @@
     margin-top: 5px;
   }
   .icon-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 32px;
+    width: 32px;
+    height: 32px;
     border: 1px solid var(--line);
     border-radius: 7px;
     background: #fff;
-    padding: 2px 8px;
+    padding: 0;
     color: var(--muted);
-    font-size: 20px;
-    line-height: 1.25;
+    line-height: 1;
+  }
+  .icon {
+    display: block;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
   .icon-button:hover {
     background: var(--wash);
@@ -721,8 +737,6 @@
     background: var(--primary);
     color: #fff;
     border-color: var(--primary);
-    font-size: 18px;
-    line-height: 1;
   }
   .icon-button.primary:hover {
     background: var(--primary-dark);

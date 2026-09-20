@@ -31,6 +31,14 @@ function dmvGridSizes_(spreadsheetId) {
 }
 
 function dmvWriteReport_(spreadsheet, report, result) {
+  return dmvWorkbookLocked_(function () {
+    dmvSheetName_(report.target.sheetName);
+    dmvCheckReportDefinition_(report, spreadsheet);
+    return dmvWriteReportUnlocked_(spreadsheet, report, result);
+  });
+}
+
+function dmvWriteReportUnlocked_(spreadsheet, report, result) {
   var sheet = spreadsheet.getSheetByName(report.target.sheetName);
   var anchor = dmvCell_(report.target.startCell);
   var properties = dmvStore_();
