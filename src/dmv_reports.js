@@ -12,7 +12,7 @@ function dmvBootstrap() {
   return {
     branding: { name: 'DataMoov', version: '1.0 beta' },
     catalog: dmvCatalog_(),
-    connections: dmvList_('connection').map(dmvConnectionSummary_),
+    connections: dmvConnections_().map(dmvConnectionSummary_),
     credentials: dmvCredentialSummaries_(),
     credentialFamilies: dmvFamilyCatalog_(),
     reports: dmvListReports_(spreadsheet),

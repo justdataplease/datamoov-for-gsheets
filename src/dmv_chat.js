@@ -187,7 +187,7 @@ function dmvChatSession_(spreadsheet) {
       return sheet.getName();
     }),
     catalog: catalog,
-    connections: dmvList_('connection')
+    connections: dmvConnections_()
       .map(dmvConnectionSummary_)
       .filter(function (connection) {
         return !!catalog[connection.connectorId];

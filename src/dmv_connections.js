@@ -24,6 +24,13 @@ function dmvConnectionInUse_(id, activeOnly) {
 
 /* Saved connections: a saved credential (or, for older connections, embedded secrets) plus the
    per-connection values. Secrets stay private to the Google user who entered them. */
+// Connections of a source that is no longer offered stay stored but are not listed.
+function dmvConnections_() {
+  return dmvList_('connection').filter(function (connection) {
+    return !!(DMV_CONNECTORS && DMV_CONNECTORS[connection.connectorId]);
+  });
+}
+
 function dmvConnectionSummary_(connection) {
   var fields = dmvConnector_(connection.connectorId).authFields || [];
   var merged,

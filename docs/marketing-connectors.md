@@ -11,10 +11,48 @@ All requests originate in Apps Script; there is no DataMoov backend. Tests use o
 | `facebook_ads / insights`       | Date, currency, campaign, spend, impressions, clicks, link clicks, purchases, purchase value           | Level, period and breakdowns follow the selected columns; delivery, reach, video and action metrics; field discovery adds the account's own action types and custom conversions |
 | `ga4 / acquisition_daily`       | Date, session source/medium/campaign, sessions, active users, page views, key events, revenue           | Property metadata includes custom dimensions/metrics; selected fields must pass GA4 compatibility checks                                                                   |
 | `google_ads / youtube_campaign_daily` | Date, account, currency, campaign, spend, impressions, video views, view rate, average CPV, clicks, conversions, conversion value | Video (YouTube) campaigns only; optional quartile completion rates, subtype, status, CTR and CPM                                                                  |
-| `tiktok_ads / campaign_daily`   | Date, campaign ID/name, spend, impressions, clicks, CTR, conversions                                    | Optional CPC, CPM, reach, cost per conversion, conversion rate, video plays and engagement counts                                                                          |
 | `linkedin_ads / campaign_daily` | Date, campaign ID/name, impressions, clicks, spend, conversions                                          | Optional landing-page clicks, conversion value, lead-form leads, likes, comments, shares, follows, engagements, video views and completions (at most 18 metrics)           |
 | `microsoft_ads / campaign_daily` | Date, account ID, currency, campaign ID/name, spend, impressions, clicks, conversions, revenue          | Optional account name, status, CTR, average CPC and return on ad spend                                                                                                     |
 | `search_console / search_performance` | Date, query, clicks, impressions, CTR, position                                                    | Optional page, country and device dimensions; selected dimensions define the grouping                                                                                      |
+
+### Microsoft Ads report levels
+
+Beside the daily campaign report there is one report per Microsoft Advertising report type:
+account, campaign, ad group, ad, keyword, search term, geography, user location, age and gender,
+professional demographics, audience, landing page, Shopping product, Performance Max asset
+group, conversions by goal, goals and funnels, keyword impression share and website placements.
+
+- **Period:** Date, Week (from Monday), Month, Day of week or Hour of day; only one. With none,
+  rows are totals for the date range, ranked by spend, and the row limit keeps the top of the
+  ranking. Microsoft reports whole weeks and months, so the first and last period can include
+  days outside the range; the report notes say so.
+- **Columns:** each level starts with its usual dimensions and metrics. **Load columns** reads
+  the report type's column list from the service's own schema (its public WSDL), so every column
+  Microsoft defines is offered. Columns are typed by name: money, rates, counts, scores, text.
+- **Restrictions:** impression share and top impression rate columns cannot be combined with
+  match type (bid), device OS, goal, top vs. other or budget columns. Microsoft refuses the
+  request and the message says which side to remove.
+- **Find accounts** lists the accounts the signed-in user can reach and fills the account ID and
+  customer ID. An app registered for one organisation only needs its **Tenant ID**.
+- Reports are downloaded from `bingadsappsstorageprod.blob.core.windows.net`, the storage
+  account Microsoft's download URLs point to (checked against the live API), beside the two
+  documented download hosts.
+
+### LinkedIn Ads Analytics
+
+The **Analytics (any level and audience)** report takes its grouping from the selected columns:
+campaign group, campaign or creative, and the audience columns (company, company size,
+industry, seniority, job title, job function, country, region, placement, device). LinkedIn
+groups by at most three. Date gives daily rows, Month monthly rows; with neither, rows are totals
+ranked by spend. CTR, CPC and CPM are computed from the counts LinkedIn returns.
+
+- Campaign and campaign group names come from the account; audience values arrive as URNs and
+  are named through `adTargetingEntities`. A value LinkedIn does not name keeps its id.
+- Audience rows are approximate, need at least 3 events, keep the top 100 values per creative
+  per day, lag up to a day and reach back two years. Conversion value and reach are not
+  available by audience.
+- A request holds at most 18 metrics and LinkedIn returns at most 15,000 rows without paging; a
+  report that hits the ceiling fails instead of being cut. There is no weekly grain in the API.
 
 ### Facebook Ads Insights
 
@@ -71,7 +109,6 @@ rather than downloading a report that would be refused anyway.
 
 YouTube Ads has no API of its own: video campaigns are bought and reported through Google Ads, so the YouTube report uses the Google Ads connection and adds `campaign.advertising_channel_type = 'VIDEO'` to the same daily campaign query. View rate and quartile rates are ratios; CPV is converted from micros.
 
-**TikTok Ads** uses the Marketing API `v1.3` integrated report at `AUCTION_CAMPAIGN` level with `stat_time_day` and `campaign_id` dimensions, paged at 1,000 rows and checked against the reported total; the campaign name is requested as a metric, as TikTok defines it. Rates such as CTR and conversion rate are percentages in the API and are divided by 100. The advertiser profile supplies currency and timezone. Supply the numeric advertiser ID and a long-lived access token authorized for it. [Reporting](https://business-api.tiktok.com/portal/docs?id=1738864739862530)
 
 **LinkedIn Ads** uses `adAnalytics` (`q=analytics`, `pivot=CAMPAIGN`, `timeGranularity=DAILY`) with the versioned REST API (`Linkedin-Version` `202606`) and the Rest.li 2.0 protocol header, requesting only the selected metrics plus `dateRange` and `pivotValues`. LinkedIn returns at most 15,000 elements without pagination; the report fails if that ceiling is reached. Campaign names come from the account's campaign search, paged by `pageToken`, and the currency from the ad account. Supply the numeric sponsored account ID and either an access token with `r_ads` and `r_ads_reporting` (the account and campaign-name lookups need `r_ads`; 60-day lifetime) or your own client ID, client secret and refresh token; the refresh exchange uses LinkedIn's fixed token endpoint and the replacement refresh token LinkedIn issues is stored on the connection. [Ads reporting](https://learn.microsoft.com/en-us/linkedin/marketing/integrations/ads-reporting/ads-reporting)
 
@@ -124,4 +161,4 @@ All reports retain source currency/time-zone metadata, preserve string IDs, zero
 
 ## Verification
 
-`node --test tests/marketing-connectors.test.mjs tests/ad-connectors.test.mjs` covers provider payload mapping, the YouTube filter, TikTok paging and rate scaling, LinkedIn request shape and name resolution, the Microsoft submit/poll/download/unzip path, Search Console discovery and overflow, zeros/false/fractional values, complete paging, empty results, bad fields and dates, row/time limits, unsafe or repeated cursors, GA4 custom fields/blocked metrics/compatibility, and incomplete or lossy GA4 responses. `npm run check` validates Apps Script source syntax. These are offline checks with fake transports. They do not certify actual account permissions, provider response availability, Google authorization screens, or live Sheets writes.
+`node --test tests/marketing-connectors.test.mjs tests/ad-connectors.test.mjs` covers provider payload mapping, the YouTube filter, LinkedIn request shape and name resolution, the Microsoft submit/poll/download/unzip path, Search Console discovery and overflow, zeros/false/fractional values, complete paging, empty results, bad fields and dates, row/time limits, unsafe or repeated cursors, GA4 custom fields/blocked metrics/compatibility, and incomplete or lossy GA4 responses. `npm run check` validates Apps Script source syntax. These are offline checks with fake transports. They do not certify actual account permissions, provider response availability, Google authorization screens, or live Sheets writes.

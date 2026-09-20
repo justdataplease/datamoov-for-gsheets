@@ -388,7 +388,10 @@ export function createDatamoovSandbox() {
       if (reply instanceof Error) throw reply;
       return { getResponseCode: () => reply.code ?? 200, getContentText: () => typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body ?? {}),
         getAllHeaders: () => reply.headers || {},
-        getBlob: () => ({ getBytes: () => [...(reply.bytes || Buffer.from(typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body ?? {})))] }) };
+        getBlob: () => {
+          const bytes = Buffer.from(reply.bytes || (typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body ?? {})));
+          return { getBytes: () => [...bytes], getDataAsString: () => bytes.toString('utf8') };
+        } };
     } },
   };
   const context = vm.createContext(fakeServices, { codeGeneration: { strings: false, wasm: false } });

@@ -39,7 +39,7 @@ source fetches; multi-account and period comparisons can require several fetches
 
 - **Answer with numbers**: "How much did we spend on Google Ads last month?"
 - **Rank and compare**: "Which campaign had the highest cost per conversion in the last 30
-  days?", "Compare TikTok spend this month with last month."
+  days?", "Compare LinkedIn spend this month with last month."
 - **Write tables**: "Put daily GA4 sessions for September in a new tab called Sessions."
 - **Chart**: "Chart weekly spend by campaign" adds a native Sheets chart beside the table.
 - **Use existing tabs**: "Summarize the Orders tab by month" reads your own data (header row

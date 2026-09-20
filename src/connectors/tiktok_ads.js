@@ -158,6 +158,8 @@ function dmvTiktokFetch_(ctx) {
 dmvRegisterConnector_({
   id: 'tiktok_ads',
   label: 'TikTok Ads',
+  // Not offered for now; remove this line to bring the source back.
+  hidden: true,
   description: 'Daily campaign spend, delivery, engagement and conversions.',
   category: 'Marketing',
   color: '#ff0050',

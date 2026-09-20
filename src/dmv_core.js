@@ -17,6 +17,8 @@ function dmvRegisterConnector_(definition) {
   if (!definition || !/^[a-z][a-z0-9_]+$/.test(definition.id) || !Array.isArray(definition.reports))
     throw new Error('Invalid connector declaration.');
   if (DMV_CONNECTORS[definition.id]) throw new Error('Duplicate connector: ' + definition.id);
+  // A source kept in the code but not offered yet: it is not registered, so no list shows it.
+  if (definition.hidden) return;
   DMV_CONNECTORS[definition.id] = definition;
 }
 

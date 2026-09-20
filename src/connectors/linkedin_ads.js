@@ -1,5 +1,34 @@
-/** LinkedIn Marketing API adAnalytics, campaign pivot at daily granularity. Read-only. */
+/** LinkedIn Marketing API adAnalytics: any pivot and period, names resolved. Read-only. */
 var DMV_LINKEDIN_VERSION = '202606';
+
+// Columns that become adAnalytics pivots. LinkedIn groups by at most three of them.
+var DMV_LINKEDIN_PIVOTS = {
+  campaign_group_id: 'CAMPAIGN_GROUP',
+  campaign_group_name: 'CAMPAIGN_GROUP',
+  campaign_id: 'CAMPAIGN',
+  campaign_name: 'CAMPAIGN',
+  creative_id: 'CREATIVE',
+  company: 'MEMBER_COMPANY',
+  company_size: 'MEMBER_COMPANY_SIZE',
+  industry: 'MEMBER_INDUSTRY',
+  seniority: 'MEMBER_SENIORITY',
+  job_title: 'MEMBER_JOB_TITLE',
+  job_function: 'MEMBER_JOB_FUNCTION',
+  country: 'MEMBER_COUNTRY_V2',
+  region: 'MEMBER_REGION_V2',
+  placement: 'PLACEMENT_NAME',
+  device: 'IMPRESSION_DEVICE_TYPE',
+};
+
+// Computed here from the counts LinkedIn returns; the API has no such fields.
+var DMV_LINKEDIN_RATIOS = {
+  ctr: ['clicks', 'impressions', 1],
+  cpc: ['costInLocalCurrency', 'clicks', 1],
+  cpm: ['costInLocalCurrency', 'impressions', 1000],
+};
+
+// LinkedIn leaves these out of professional demographic (MEMBER_) reports.
+var DMV_LINKEDIN_NOT_DEMOGRAPHIC = ['conversionValueInLocalCurrency', 'approximateMemberReach'];
 
 function dmvLinkedinFields_() {
   var f = dmvField_;
@@ -23,6 +52,70 @@ function dmvLinkedinFields_() {
     f('totalEngagements', 'Total engagements', 'number', false, { role: 'metric' }),
     f('videoViews', 'Video views', 'number', false, { role: 'metric' }),
     f('videoCompletions', 'Video completions', 'number', false, { role: 'metric' }),
+  ];
+}
+
+function dmvLinkedinAnalyticsFields_() {
+  var f = dmvField_,
+    dimension = { role: 'dimension' },
+    metric = { role: 'metric' },
+    single = { role: 'metric', additive: false };
+  return [
+    f('date', 'Date', 'date', true, dimension),
+    f('month', 'Month', 'date', false, dimension),
+    f('campaign_group_name', 'Campaign group', 'text', false, dimension),
+    f('campaign_name', 'Campaign', 'text', true, dimension),
+    f('creative_id', 'Creative ID', 'text', false, dimension),
+    f('campaign_group_id', 'Campaign group ID', 'text', false, dimension),
+    f('campaign_id', 'Campaign ID', 'text', false, dimension),
+    f('company', 'Company', 'text', false, dimension),
+    f('company_size', 'Company size', 'text', false, dimension),
+    f('industry', 'Industry', 'text', false, dimension),
+    f('seniority', 'Seniority', 'text', false, dimension),
+    f('job_title', 'Job title', 'text', false, dimension),
+    f('job_function', 'Job function', 'text', false, dimension),
+    f('country', 'Country', 'text', false, dimension),
+    f('region', 'Region', 'text', false, dimension),
+    f('placement', 'Placement', 'text', false, dimension),
+    f('device', 'Device', 'text', false, dimension),
+    f('impressions', 'Impressions', 'number', true, metric),
+    f('clicks', 'Clicks', 'number', true, metric),
+    f('costInLocalCurrency', 'Spend', 'currency', true, metric),
+    f('costInUsd', 'Spend (USD)', 'number', false, metric),
+    f('ctr', 'CTR', 'percent', false, single),
+    f('cpc', 'CPC', 'currency', false, single),
+    f('cpm', 'CPM', 'currency', false, single),
+    f('approximateMemberReach', 'Reach (approximate)', 'number', false, single),
+    f('landingPageClicks', 'Landing page clicks', 'number', false, metric),
+    f('externalWebsiteConversions', 'Conversions', 'number', true, metric),
+    f('externalWebsitePostClickConversions', 'Post-click conversions', 'number', false, metric),
+    f('externalWebsitePostViewConversions', 'View-through conversions', 'number', false, metric),
+    f('conversionValueInLocalCurrency', 'Conversion value', 'currency', false, metric),
+    f('oneClickLeads', 'Lead form leads', 'number', false, metric),
+    f('oneClickLeadFormOpens', 'Lead form opens', 'number', false, metric),
+    f('qualifiedLeads', 'Qualified leads', 'number', false, metric),
+    f('totalEngagements', 'Total engagements', 'number', false, metric),
+    f('reactions', 'Reactions', 'number', false, metric),
+    f('likes', 'Likes', 'number', false, metric),
+    f('comments', 'Comments', 'number', false, metric),
+    f('shares', 'Shares', 'number', false, metric),
+    f('follows', 'Follows', 'number', false, metric),
+    f('companyPageClicks', 'Company page clicks', 'number', false, metric),
+    f('otherEngagements', 'Other engagements', 'number', false, metric),
+    f('videoStarts', 'Video starts', 'number', false, metric),
+    f('videoViews', 'Video views', 'number', false, metric),
+    f('videoFirstQuartileCompletions', 'Video plays at 25%', 'number', false, metric),
+    f('videoMidpointCompletions', 'Video plays at 50%', 'number', false, metric),
+    f('videoThirdQuartileCompletions', 'Video plays at 75%', 'number', false, metric),
+    f('videoCompletions', 'Video completions', 'number', false, metric),
+    f('sends', 'Message sends', 'number', false, metric),
+    f('opens', 'Message opens', 'number', false, metric),
+    f('actionClicks', 'Message button clicks', 'number', false, metric),
+    f('documentCompletions', 'Document completions', 'number', false, metric),
+    f('jobApplications', 'Job applications', 'number', false, metric),
+    f('registrations', 'Event registrations', 'number', false, metric),
+    f('viralImpressions', 'Viral impressions', 'number', false, metric),
+    f('viralClicks', 'Viral clicks', 'number', false, metric),
   ];
 }
 
@@ -74,7 +167,8 @@ function dmvLinkedinAccount_(ctx, connection) {
   return account;
 }
 
-function dmvLinkedinCampaignNames_(ctx, connection) {
+// Names of the account's campaigns ("adCampaigns") or campaign groups ("adCampaignGroups") by id.
+function dmvLinkedinNames_(ctx, connection, collection) {
   var names = Object.create(null),
     token = '',
     pages = 0,
@@ -83,14 +177,18 @@ function dmvLinkedinCampaignNames_(ctx, connection) {
     ctx.checkDeadline();
     if (++pages > 50) throw new Error('LinkedIn returned too many campaign pages.');
     var url =
-      connection.base + 'adAccounts/' + connection.id + '/adCampaigns?q=search&pageSize=1000';
+      connection.base +
+      'adAccounts/' +
+      connection.id +
+      '/' +
+      (collection || 'adCampaigns') +
+      '?q=search&pageSize=1000';
     if (token) url += '&pageToken=' + encodeURIComponent(token);
     var payload = ctx.http({ url: url, headers: connection.headers });
     if (!payload || !Array.isArray(payload.elements))
       throw new Error('LinkedIn returned an invalid campaign list.');
-    payload.elements.forEach(function (campaign) {
-      if (campaign && campaign.id !== undefined)
-        names[String(campaign.id)] = dmvTextValue_(campaign.name);
+    payload.elements.forEach(function (item) {
+      if (item && item.id !== undefined) names[String(item.id)] = dmvTextValue_(item.name);
     });
     token = (payload.metadata && payload.metadata.nextPageToken) || '';
     if (typeof token !== 'string' || (token && seen[token]))
@@ -100,23 +198,82 @@ function dmvLinkedinCampaignNames_(ctx, connection) {
   return names;
 }
 
-function dmvLinkedinFetch_(ctx) {
-  var columns = dmvSelectFields_(ctx.fields, dmvLinkedinFields_());
+// Names of companies, industries, titles, places and other targeting values, by URN.
+function dmvLinkedinEntityNames_(ctx, connection, urns) {
+  var names = Object.create(null);
+  for (var start = 0; start < urns.length; start += 50) {
+    ctx.checkDeadline();
+    var payload = ctx.http({
+      url:
+        connection.base +
+        'adTargetingEntities?q=urns&urns=List(' +
+        urns
+          .slice(start, start + 50)
+          .map(encodeURIComponent)
+          .join(',') +
+        ')',
+      headers: connection.headers,
+    });
+    ((payload && payload.elements) || []).forEach(function (item) {
+      if (item && item.urn && item.name) names[String(item.urn)] = String(item.name);
+    });
+  }
+  return names;
+}
+
+// One engine for both reports. "fixed" is the original daily campaign report; otherwise the
+// selected columns decide the pivots and the period.
+function dmvLinkedinAnalytics_(ctx, available, fixed) {
+  var columns = dmvSelectFields_(ctx.fields, available);
   var connection = dmvLinkedinConnection_(ctx);
   var account = dmvLinkedinAccount_(ctx, connection);
-  var metrics = columns
-    .filter(function (field) {
-      return field.role === 'metric';
-    })
-    .map(function (field) {
-      return field.key;
+  var has = function (key) {
+    return columns.some(function (field) {
+      return field.key === key;
     });
+  };
+  if (has('date') && has('month')) throw new Error('Choose Date or Month, not both.');
+  var granularity = fixed || has('date') ? 'DAILY' : has('month') ? 'MONTHLY' : 'ALL';
+  var pivots = fixed ? ['CAMPAIGN'] : [];
+  columns.forEach(function (field) {
+    var pivot = DMV_LINKEDIN_PIVOTS[field.key];
+    if (pivot && pivots.indexOf(pivot) < 0) pivots.push(pivot);
+  });
+  if (pivots.length > 3)
+    throw new Error(
+      'LinkedIn groups a report by at most three of campaign group, campaign, creative and the audience columns. Select fewer.'
+    );
+  var demographic = pivots.some(function (pivot) {
+    return pivot.indexOf('MEMBER_') === 0;
+  });
+  var blocked = DMV_LINKEDIN_NOT_DEMOGRAPHIC.filter(has);
+  if (demographic && blocked.length)
+    throw new Error(
+      'LinkedIn does not report ' +
+        blocked.join(' or ') +
+        ' by company, industry, job or location. Remove it or the audience column.'
+    );
+  var metrics = [];
+  columns.forEach(function (field) {
+    (DMV_LINKEDIN_RATIOS[field.key]
+      ? DMV_LINKEDIN_RATIOS[field.key].slice(0, 2)
+      : field.role === 'metric'
+        ? [field.key]
+        : []
+    ).forEach(function (name) {
+      if (metrics.indexOf(name) < 0) metrics.push(name);
+    });
+  });
   if (!metrics.length) metrics.push('impressions');
-  var fields = ['dateRange', 'pivotValues'].concat(metrics);
-  if (fields.length > 20) throw new Error('LinkedIn reports support at most 18 metrics.');
+  if (metrics.length > 18) throw new Error('LinkedIn reports support at most 18 metrics.');
   var url =
     connection.base +
-    'adAnalytics?q=analytics&pivot=CAMPAIGN&timeGranularity=DAILY' +
+    'adAnalytics?q=' +
+    (pivots.length > 1
+      ? 'statistics&pivots=List(' + pivots.join(',') + ')'
+      : 'analytics&pivot=' + (pivots[0] || 'ACCOUNT')) +
+    '&timeGranularity=' +
+    granularity +
     '&dateRange=(start:' +
     dmvLinkedinDate_(ctx.startDate) +
     ',end:' +
@@ -126,7 +283,7 @@ function dmvLinkedinFetch_(ctx) {
     encodeURIComponent('urn:li:sponsoredAccount:' + connection.id) +
     ')' +
     '&fields=' +
-    fields.join(',');
+    ['dateRange', 'pivotValues'].concat(metrics).join(',');
   var payload = ctx.http({ url: url, headers: connection.headers });
   if (!payload || !Array.isArray(payload.elements))
     throw new Error('LinkedIn returned an invalid analytics response.');
@@ -134,54 +291,128 @@ function dmvLinkedinFetch_(ctx) {
     throw new Error(
       'LinkedIn returned its 15,000-element maximum; the report may be incomplete. Narrow the date range.'
     );
-  var wantNames = columns.some(function (field) {
-    return field.key === 'campaign_name';
-  });
-  var names = wantNames ? dmvLinkedinCampaignNames_(ctx, connection) : null;
+  var campaigns = has('campaign_name') ? dmvLinkedinNames_(ctx, connection, 'adCampaigns') : {};
+  var groups = has('campaign_group_name')
+    ? dmvLinkedinNames_(ctx, connection, 'adCampaignGroups')
+    : {};
+  // Audience values arrive as URNs; their names come from one lookup per fifty values.
+  var urns = [],
+    listed = Object.create(null),
+    note = '';
+  if (demographic)
+    payload.elements.forEach(function (element) {
+      (element.pivotValues || []).forEach(function (value, position) {
+        value = String(value);
+        if (
+          String(pivots[position]).indexOf('MEMBER_') === 0 &&
+          /^urn:li:/.test(value) &&
+          !listed[value]
+        ) {
+          listed[value] = true;
+          urns.push(value);
+        }
+      });
+    });
+  var entities = {};
+  try {
+    if (urns.length) entities = dmvLinkedinEntityNames_(ctx, connection, urns.slice(0, 2000));
+  } catch (error) {
+    note = 'LinkedIn did not return names for the audience values, so their IDs are shown.';
+  }
   var seen = Object.create(null),
     rows = [];
   var mapped = payload.elements.map(function (element) {
     var start = element.dateRange && element.dateRange.start;
-    if (!start || !start.year) throw new Error('LinkedIn returned a row without a date.');
-    var date = start.year + '-' + ('0' + start.month).slice(-2) + '-' + ('0' + start.day).slice(-2);
-    var pivot = Array.isArray(element.pivotValues) ? String(element.pivotValues[0] || '') : '';
-    var match = /^urn:li:sponsoredCampaign:(\d+)$/.exec(pivot);
-    if (!match) throw new Error('LinkedIn returned a row without a campaign.');
-    var id = match[1];
-    if (seen[id + ':' + date]) throw new Error('LinkedIn returned duplicate campaign days.');
-    seen[id + ':' + date] = true;
+    if (granularity !== 'ALL' && (!start || !start.year))
+      throw new Error('LinkedIn returned a row without a date.');
+    var date =
+      start && start.year
+        ? start.year +
+          '-' +
+          ('0' + start.month).slice(-2) +
+          '-' +
+          ('0' + (start.day || 1)).slice(-2)
+        : '';
+    var values = Array.isArray(element.pivotValues) ? element.pivotValues.map(String) : [];
+    if (fixed && !/^urn:li:sponsoredCampaign:\d+$/.test(values[0] || ''))
+      throw new Error('LinkedIn returned a row without a campaign.');
+    var key = date + '|' + values.join('|');
+    if (seen[key]) throw new Error('LinkedIn returned duplicate rows.');
+    seen[key] = true;
     var row = {};
     columns.forEach(function (field) {
+      var pivot = DMV_LINKEDIN_PIVOTS[field.key],
+        ratio = DMV_LINKEDIN_RATIOS[field.key];
       if (field.key === 'date') row.date = date;
-      else if (field.key === 'campaign_id') row.campaign_id = id;
-      else if (field.key === 'campaign_name')
-        row.campaign_name = names[id] === undefined ? null : names[id];
-      else
+      else if (field.key === 'month') row.month = date.slice(0, 7) + '-01';
+      else if (pivot) {
+        var value = values[pivots.indexOf(pivot)];
+        var id = value === undefined ? null : value.replace(/^urn:li:[A-Za-z]+:/, '');
+        row[field.key] =
+          id === null
+            ? null
+            : field.key === 'campaign_name'
+              ? campaigns[id] === undefined
+                ? null
+                : campaigns[id]
+              : field.key === 'campaign_group_name'
+                ? groups[id] === undefined
+                  ? null
+                  : groups[id]
+                : entities[value] || id;
+      } else if (ratio) {
+        var top = dmvNumber_(element[ratio[0]] === undefined ? null : element[ratio[0]]),
+          bottom = dmvNumber_(element[ratio[1]] === undefined ? null : element[ratio[1]]);
+        row[field.key] = bottom ? ((top || 0) / bottom) * ratio[2] : null;
+      } else
         row[field.key] = dmvNumber_(element[field.key] === undefined ? null : element[field.key]);
     });
     return row;
   });
+  // Without a period the rows are a ranking, so the biggest spenders come first.
+  if (granularity === 'ALL' && has('costInLocalCurrency'))
+    mapped.sort(function (a, b) {
+      return (b.costInLocalCurrency || 0) - (a.costInLocalCurrency || 0);
+    });
   dmvAppendPage_(rows, mapped, ctx.maxRows);
-  return {
-    columns: columns,
-    rows: rows,
-    metadata: {
-      apiVersion: DMV_LINKEDIN_VERSION,
-      accountId: connection.id,
-      currency: account.currency || '',
-      timeZone: 'UTC',
-      attribution: 'LinkedIn campaign attribution; approximate metrics per LinkedIn privacy rules.',
-      grain: 'Daily campaign',
-      note: 'Days without delivery are omitted by LinkedIn.',
-      complete: true,
-    },
+  var metadata = {
+    apiVersion: DMV_LINKEDIN_VERSION,
+    accountId: connection.id,
+    currency: account.currency || '',
+    timeZone: 'UTC',
+    attribution: 'LinkedIn campaign attribution; approximate metrics per LinkedIn privacy rules.',
+    grain: fixed
+      ? 'Daily campaign'
+      : (granularity === 'DAILY'
+          ? 'Daily'
+          : granularity === 'MONTHLY'
+            ? 'Monthly'
+            : 'Whole period') +
+        ' by ' +
+        (pivots
+          .join(', ')
+          .toLowerCase()
+          .replace(/member_|_v2/g, '')
+          .replace(/_/g, ' ') || 'account'),
+    note:
+      note ||
+      (demographic
+        ? 'Audience values are approximate, need at least 3 events and keep the top 100 values per creative per day.'
+        : 'Days without delivery are omitted by LinkedIn.'),
+    complete: true,
   };
+  return { columns: columns, rows: rows, metadata: metadata };
+}
+
+function dmvLinkedinFetch_(ctx) {
+  return dmvLinkedinAnalytics_(ctx, dmvLinkedinFields_(), true);
 }
 
 dmvRegisterConnector_({
   id: 'linkedin_ads',
   label: 'LinkedIn Ads',
-  description: 'Daily campaign impressions, clicks, spend, conversions and engagement.',
+  description:
+    'Campaign group, campaign and creative performance, and the companies, jobs and places behind it.',
   category: 'Marketing',
   color: '#0a66c2',
   allowedHosts: ['api.linkedin.com'],
@@ -264,6 +495,18 @@ dmvRegisterConnector_({
       configFields: [],
       dateRange: true,
       fetch: dmvLinkedinFetch_,
+    },
+    {
+      id: 'analytics',
+      label: 'Analytics (any level and audience)',
+      description:
+        'One row per combination of the dimensions you select: campaign group, campaign or creative, and the companies, industries, job titles, seniorities, countries or devices reached (at most three). Date or Month sets the period; with none, rows are totals ranked by spend.',
+      fields: dmvLinkedinAnalyticsFields_(),
+      configFields: [],
+      dateRange: true,
+      fetch: function (ctx) {
+        return dmvLinkedinAnalytics_(ctx, dmvLinkedinAnalyticsFields_(), false);
+      },
     },
   ],
 });
