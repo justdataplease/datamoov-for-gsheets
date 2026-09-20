@@ -44,6 +44,9 @@ source fetches; multi-account and period comparisons can require several fetches
 - **Chart**: "Chart weekly spend by campaign" adds a native Sheets chart beside the table.
 - **Use existing tabs**: "Summarize the Orders tab by month" reads your own data (header row
   plus up to 500 rows × 30 columns).
+- **Facebook Ads below the campaign**: the **Insights** report answers ad set and ad questions,
+  weekly or monthly reach, and splits by age, gender, country, platform or placement; the
+  selected fields decide the level, the period and the breakdowns.
 - **Any Google Ads resource**: beyond daily campaign performance, the **Custom query (GAQL)**
   report lets chat read ad groups, ads, keywords, search terms, negative keywords, asset groups,
   geography or account totals with one GAQL query. `discover_fields` lists the resources and the

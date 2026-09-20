@@ -417,6 +417,26 @@ test('a long column list can be searched, and loading columns keeps the choices 
   expect(checked.sort()).toEqual(['metrics.added', 'metrics.field_1', 'metrics.field_7']);
 });
 
+test('Facebook Ads Insights offers levels, breakdowns and actions in a searchable list and previews them', async ({ page }) => {
+  await startReport(page, 'facebook_ads');
+  await page.locator('#report-type').selectOption('insights');
+  await expect(page.locator('#report-description')).toContainText('One row per combination');
+  await expect(page.locator('#column-search')).toBeVisible();
+  await expect(page.locator('#column-list .column-group')).toHaveText(['Dimensions', 'Metrics']);
+  await expect(page.locator('#column-list input[value="date_start"]')).toBeChecked();
+  await page.locator('#column-search').fill('placement');
+  await expect(page.locator('#column-list .column-option:visible')).toHaveText(['Placement']);
+  await page.locator('#column-list input[value="platform_position"]').check();
+  await page.locator('#column-search').fill('lead');
+  await page.locator('#column-list input[value="actions:lead"]').check();
+  await page.locator('#column-search').fill('');
+  await noOverflow(page);
+  await page.locator('#preview-report').click();
+  await expect(page.locator('#preview-table thead th')).toContainText(['Placement']);
+  await expect(page.locator('#preview-table thead th')).toContainText(['Leads']);
+  await noOverflow(page);
+});
+
 test('Find accounts works with a saved credential, fills the ID, and saving never requires it', async ({ page }) => {
   await page.locator('#tab-connections').click();
   await page.locator('#new-connection').click();

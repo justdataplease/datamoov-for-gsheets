@@ -8,12 +8,40 @@ All requests originate in Apps Script; there is no DataMoov backend. Tests use o
 | ------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `google_ads / campaign_daily`   | Date, account ID, currency, campaign ID/name, spend, impressions, clicks, conversions, conversion value | A curated campaign-compatible field list, checked against Google Ads field metadata; optional device/network segmentation, status, account metadata and additional metrics |
 | `facebook_ads / campaign_daily` | Date, account ID, currency, campaign ID/name, spend, impressions, clicks, purchases, purchase value     | Supported report fields plus one explicitly selected purchase action type; field discovery returns this curated list                                                       |
+| `facebook_ads / insights`       | Date, currency, campaign, spend, impressions, clicks, link clicks, purchases, purchase value           | Level, period and breakdowns follow the selected columns; delivery, reach, video and action metrics; field discovery adds the account's own action types and custom conversions |
 | `ga4 / acquisition_daily`       | Date, session source/medium/campaign, sessions, active users, page views, key events, revenue           | Property metadata includes custom dimensions/metrics; selected fields must pass GA4 compatibility checks                                                                   |
 | `google_ads / youtube_campaign_daily` | Date, account, currency, campaign, spend, impressions, video views, view rate, average CPV, clicks, conversions, conversion value | Video (YouTube) campaigns only; optional quartile completion rates, subtype, status, CTR and CPM                                                                  |
 | `tiktok_ads / campaign_daily`   | Date, campaign ID/name, spend, impressions, clicks, CTR, conversions                                    | Optional CPC, CPM, reach, cost per conversion, conversion rate, video plays and engagement counts                                                                          |
 | `linkedin_ads / campaign_daily` | Date, campaign ID/name, impressions, clicks, spend, conversions                                          | Optional landing-page clicks, conversion value, lead-form leads, likes, comments, shares, follows, engagements, video views and completions (at most 18 metrics)           |
 | `microsoft_ads / campaign_daily` | Date, account ID, currency, campaign ID/name, spend, impressions, clicks, conversions, revenue          | Optional account name, status, CTR, average CPC and return on ad spend                                                                                                     |
 | `search_console / search_performance` | Date, query, clicks, impressions, CTR, position                                                    | Optional page, country and device dimensions; selected dimensions define the grouping                                                                                      |
+
+### Facebook Ads Insights
+
+The **Insights (any level and breakdown)** report returns one row per combination of the
+dimensions selected, so the columns decide the request:
+
+- **Level:** Ad or Ad ID asks Meta for ad rows; otherwise Ad set, then Campaign (or Objective,
+  Buying type); with none of them the rows are account totals.
+- **Period:** Date gives daily rows, Month calendar months, Week calendar weeks from Monday cut
+  to the requested dates (the same rule as the chat's weekly buckets; at most 60 weeks). With
+  none, each row covers the whole date range. Only one of the three can be selected. Reach,
+  frequency and unique clicks come from Meta at the selected period, which is why Week and
+  Month are requested from Meta instead of being added up from days.
+- **Breakdowns:** Age, Gender, Country, Region, DMA region, Platform, Placement, Impression
+  device, Device platform and Hour of day are sent as `breakdowns`. Meta supports only some
+  combinations (age with gender; platform with placement and impression device); a refused
+  combination is reported in Meta's words. Hourly rows have no reach or frequency.
+- **Actions:** Leads, landing page views, adds to cart, checkouts, registrations, app installs,
+  messaging conversations, post engagement and video plays are listed. Any other action type is
+  a column named `actions:<type>`, `action_values:<type>` or `cost_per_action_type:<type>`.
+  **Load columns** reads the action types the account reported in the last 90 days and lists
+  them, custom conversions under their own names. An action that did not happen is 0; a cost
+  per action that Meta did not report stays empty.
+
+Purchases, purchase value and ROAS keep using the one purchase action type set on the report.
+Reach, frequency, unique clicks, rates and costs per result are marked as not additive, so Chat
+and dashboards never sum them. The daily campaign report is unchanged.
 
 ### Google Ads report levels
 
@@ -51,7 +79,7 @@ YouTube Ads has no API of its own: video campaigns are bought and reported throu
 
 **Search Console** uses the Search Analytics `query` method for web search with the selected dimensions and one request of up to `maxRows + 1` rows (the API allows 25,000). Its own tokens carry the `https://www.googleapis.com/auth/webmasters.readonly` scope; the add-on manifest declares no Search Console scope. **Find accounts** lists the properties the entered credentials can read, or enter `sc-domain:example.com` or `https://example.com/` yourself. Search Console reports in Pacific time and omits anonymized queries. [Search Analytics](https://developers.google.com/webmaster-tools/v1/searchanalytics/query)
 
-The Google Ads report retains daily campaign grain when output columns are deselected. Optional segments add to that grain. Facebook Ads remains daily campaign grain. In GA4, selected dimensions define grouping; removing the date dimension requests a period aggregate directly from GA4.
+The Google Ads report retains daily campaign grain when output columns are deselected. Optional segments add to that grain. The Facebook Ads daily campaign report remains daily campaign grain; its Insights report takes the grain from the selected columns. In GA4, selected dimensions define grouping; removing the date dimension requests a period aggregate directly from GA4.
 
 ## Authentication and setup
 
