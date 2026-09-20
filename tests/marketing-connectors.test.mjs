@@ -38,7 +38,7 @@ test('marketing declarations expose small reports and Google authorization choic
   const {connectors} = load();
   assert.deepEqual(Object.keys(connectors).sort(), ['facebook_ads','ga4','google_ads']);
   for (const id of Object.keys(connectors)) {
-    assert.equal(connectors[id].reports.length, id === 'google_ads' ? 3 : 1);
+    assert.equal(connectors[id].reports.length, id === 'google_ads' ? 20 : 1);
     assert.ok(connectors[id].allowedHosts.length);
     for (const report of connectors[id].reports) assert.ok(report.fields.filter(f=>f.default).length <= 13);
   }

@@ -68,6 +68,7 @@ function dmvValidateDashboard_(input, spreadsheet) {
     tabs = Object.create(null),
     queries = Object.create(null);
   tabs[target.sheetName.toLowerCase()] = true;
+  tabs[dmvDashboardChartTab_(target).toLowerCase()] = true;
   var datasets = input.datasets.map(function (dataset, index) {
     dmvDashboardObject_(dataset, [
       'id',
@@ -414,8 +415,36 @@ function dmvSaveDashboard(input) {
     if (!previous && dmvList_('dashboard').length >= DMV_LIMITS.maxReports)
       throw new Error('Keep at most 30 private dashboards.');
     var plan = dmvValidateDashboard_(input, spreadsheet);
+    var id = previous ? previous.id : dmvId_();
+    // A tab someone else filled would only fail after every dataset was fetched; say so now,
+    // with its name. Tabs this dashboard wrote earlier are its own.
+    var fresh = dmvReopen_(spreadsheet),
+      store = dmvStore_();
+    plan.datasets
+      .map(function (dataset) {
+        return { sheetName: dataset.sheetName, output: id + '-d-' + dataset.id };
+      })
+      .concat([
+        { sheetName: plan.target.sheetName, output: id + '-report' },
+        { sheetName: dmvDashboardChartTab_(plan.target), output: id + '-charts' },
+      ])
+      .forEach(function (tab) {
+        var sheet = fresh.getSheetByName(tab.sheetName);
+        if (
+          sheet &&
+          sheet.getLastRow() > 0 &&
+          !store.getProperty(dmvOutputKey_(fresh.getId(), tab.output))
+        )
+          throw new Error(
+            'The tab "' +
+              tab.sheetName +
+              '" already exists and has content. Give this dashboard tab names that are not in the spreadsheet yet, for example "' +
+              tab.sheetName +
+              ' 2".'
+          );
+      });
     var dashboard = {
-      id: previous ? previous.id : dmvId_(),
+      id: id,
       spreadsheetId: spreadsheet.getId(),
       revision: previous ? previous.revision + 1 : 1,
       name: plan.name,
@@ -479,24 +508,60 @@ function dmvSaveDashboard(input) {
   });
 }
 
-// Like a report, removing a dashboard keeps its tabs and releases their ownership receipts.
-function dmvDeleteDashboard(id) {
+// Removing a dashboard cleans up after it: the tabs it wrote (data tabs, the hidden chart data
+// tab, the dashboard tab with its charts) are deleted with the plan. Ownership is the receipt,
+// which records the sheet id, so a tab that merely shares a name is never touched. Pass
+// keepTabs to remove only the plan.
+function dmvDeleteDashboard(id, keepTabs) {
   return dmvLocked_(function () {
     var dashboard = dmvDashboardHere_(id);
     if (dashboard.runToken && Date.now() - dashboard.startedAt < 300000)
       throw new Error('Wait for this dashboard refresh to finish.');
     var store = dmvStore_();
-    store.deleteProperty(dmvKey_('dashboard', dashboard.id));
-    ['-report', '-data']
+    var keys = ['-report', '-charts', '-data']
       .concat(
         (dashboard.outputs || []).map(function (output) {
           return '-d-' + output.id;
         })
       )
-      .forEach(function (suffix) {
-        store.deleteProperty(dmvOutputKey_(dashboard.spreadsheetId, dashboard.id + suffix));
+      .map(function (suffix) {
+        return dmvOutputKey_(dashboard.spreadsheetId, dashboard.id + suffix);
       });
-    return { ok: true };
+    var deleted = 0;
+    if (keepTabs !== true)
+      deleted = dmvWorkbookLocked_(function () {
+        var owned = Object.create(null);
+        keys.forEach(function (key) {
+          var receipt = JSON.parse(store.getProperty(key) || 'null');
+          if (receipt && Number.isInteger(receipt.sheetId)) owned[receipt.sheetId] = true;
+        });
+        var live = (
+          Sheets.Spreadsheets.get(dashboard.spreadsheetId, {
+            fields: 'sheets.properties.sheetId',
+          }).sheets || []
+        ).map(function (item) {
+          return item.properties.sheetId;
+        });
+        var requests = live
+          .filter(function (sheetId) {
+            return owned[sheetId];
+          })
+          .map(function (sheetId) {
+            return { deleteSheet: { sheetId: sheetId } };
+          });
+        if (!requests.length) return 0;
+        // A spreadsheet must keep one tab.
+        if (requests.length === live.length) requests.unshift({ addSheet: { properties: {} } });
+        Sheets.Spreadsheets.batchUpdate({ requests: requests }, dashboard.spreadsheetId);
+        return requests.filter(function (request) {
+          return request.deleteSheet;
+        }).length;
+      });
+    store.deleteProperty(dmvKey_('dashboard', dashboard.id));
+    keys.forEach(function (key) {
+      store.deleteProperty(key);
+    });
+    return { ok: true, deletedTabs: deleted };
   });
 }
 
@@ -726,8 +791,14 @@ function dmvDashboardTable_(session, resultId, tile) {
   };
 }
 
+// The tab that holds the numbers behind the charts. It is created hidden: a refresh can then
+// return any number of rows without moving anything on the dashboard itself.
+function dmvDashboardChartTab_(target) {
+  return target.sheetName.slice(0, 86) + ' (chart data)';
+}
+
 // The dashboard tab is one owned page: title, scorecards, a band reserved for the charts, the
-// data sources, then the table behind every chart and table tile.
+// data sources, then the table tiles. The table behind each chart goes to the chart data tab.
 function dmvDashboardPage_(dashboard, stamp, cards, blocks, sources) {
   cards = cards.slice(0, DMV_DASHBOARD.maxKpis);
   var width = Math.max(
@@ -735,10 +806,26 @@ function dmvDashboardPage_(dashboard, stamp, cards, blocks, sources) {
     cards.length,
     Math.max.apply(
       null,
-      blocks.map(function (block) {
+      blocks
+        .filter(function (block) {
+          return !block.chart;
+        })
+        .map(function (block) {
+          return block.columns.length;
+        })
+        .concat([0])
+    )
+  );
+  var data = { matrix: [], tables: [], styles: [] };
+  data.width = Math.max.apply(
+    null,
+    blocks
+      .filter(function (block) {
+        return block.chart;
+      })
+      .map(function (block) {
         return block.columns.length;
       })
-    )
   );
   var matrix = [],
     tables = [],
@@ -794,46 +881,54 @@ function dmvDashboardPage_(dashboard, stamp, cards, blocks, sources) {
   });
   sources.forEach(push);
   blocks.forEach(function (block) {
-    push([]);
-    styles.push({
-      row: push([block.title + (block.note ? ' (' + block.note + ')' : '')]),
-      style: 'section',
+    var title = block.title + (block.note ? ' (' + block.note + ')' : '');
+    if (!block.chart) {
+      push([]);
+      styles.push({ row: push([title]), style: 'section' });
+      tables.push({ row: matrix.length, rows: block.matrix.length, columns: block.columns });
+      block.matrix.forEach(push);
+      return;
+    }
+    if (data.matrix.length) data.matrix.push(dmvDashboardPad_([], data.width));
+    data.styles.push({ row: data.matrix.length, style: 'section' });
+    data.matrix.push(dmvDashboardPad_([title], data.width));
+    var top = data.matrix.length;
+    block.matrix.forEach(function (row) {
+      data.matrix.push(dmvDashboardPad_(row, data.width));
     });
-    var top = matrix.length;
-    block.matrix.forEach(push);
-    tables.push({ row: top, rows: block.matrix.length, columns: block.columns });
-    if (block.chart)
-      charts.push({
-        type: block.type,
-        title: block.title,
-        row: top,
-        rows: block.matrix.length,
-        columns: block.columns.length,
-        anchorRow:
-          chartTop +
-          Math.floor(charts.length / DMV_DASHBOARD.chartsPerRow) * DMV_DASHBOARD.chartBandRows,
-        anchorColumn: (charts.length % DMV_DASHBOARD.chartsPerRow) * DMV_DASHBOARD.chartColumnSpan,
-      });
+    data.tables.push({ row: top, rows: block.matrix.length, columns: block.columns });
+    charts.push({
+      type: block.type,
+      title: block.title,
+      row: top,
+      rows: block.matrix.length,
+      columns: block.columns.length,
+      anchorRow:
+        chartTop +
+        Math.floor(charts.length / DMV_DASHBOARD.chartsPerRow) * DMV_DASHBOARD.chartBandRows,
+      anchorColumn: (charts.length % DMV_DASHBOARD.chartsPerRow) * DMV_DASHBOARD.chartColumnSpan,
+    });
   });
   return {
     matrix: matrix,
     layout: { tables: tables, styles: styles },
+    data: { matrix: data.matrix, layout: { tables: data.tables, styles: data.styles } },
     charts: charts,
     width: width,
   };
 }
 
-function dmvDashboardChartSpec_(chart, area) {
+function dmvDashboardChartSpec_(chart, source) {
   function column(offset, skipHeader) {
     return {
       sourceRange: {
         sources: [
           {
-            sheetId: area.sheetId,
-            startRowIndex: area.row - 1 + chart.row + (skipHeader ? 1 : 0),
-            endRowIndex: area.row - 1 + chart.row + chart.rows,
-            startColumnIndex: area.column - 1 + offset,
-            endColumnIndex: area.column + offset,
+            sheetId: source.sheetId,
+            startRowIndex: source.row - 1 + chart.row + (skipHeader ? 1 : 0),
+            endRowIndex: source.row - 1 + chart.row + chart.rows,
+            startColumnIndex: source.column - 1 + offset,
+            endColumnIndex: source.column + offset,
           },
         ],
       },
@@ -848,8 +943,10 @@ function dmvDashboardChartSpec_(chart, area) {
     };
   else {
     var series = [];
+    // Sheets draws a bar chart sideways and rejects bar series on any axis but the bottom one.
+    var axis = chart.type === 'bar' ? 'BOTTOM_AXIS' : 'LEFT_AXIS';
     for (var offset = 1; offset < chart.columns; offset++)
-      series.push({ series: column(offset, false), targetAxis: 'LEFT_AXIS' });
+      series.push({ series: column(offset, false), targetAxis: axis });
     spec.basicChart = {
       chartType: DMV_CHART_TYPES[chart.type],
       legendPosition: series.length > 1 ? 'BOTTOM_LEGEND' : 'NO_LEGEND',
@@ -866,16 +963,18 @@ function dmvDashboardChartSpec_(chart, area) {
 // The runtime chooses the ids of new charts itself (outcome.chartIds) so the caller can record
 // them before the batch is sent: a retry after an interrupted refresh then finds its charts
 // instead of stacking a second set on top.
-function dmvDashboardChartRequests_(spreadsheetId, charts, area, width, savedIds, outcome) {
+function dmvDashboardChartRequests_(spreadsheetId, charts, area, source, width, savedIds, outcome) {
   var response = Sheets.Spreadsheets.get(spreadsheetId, {
     fields: 'sheets(properties.sheetId,charts.chartId)',
   });
   var sheet = null,
+    sourceExists = false,
     existing = Object.create(null),
     taken = Object.create(null);
   ((response && response.sheets) || []).forEach(function (item) {
     var here = item.properties && item.properties.sheetId === area.sheetId;
     if (here) sheet = item;
+    if (item.properties && item.properties.sheetId === source.sheetId) sourceExists = true;
     (item.charts || []).forEach(function (chart) {
       taken[chart.chartId] = true;
       if (here) existing[chart.chartId] = true;
@@ -906,8 +1005,16 @@ function dmvDashboardChartRequests_(spreadsheetId, charts, area, width, savedIds
       },
     });
   }
+  // Hidden only when first created, so a tab the user chose to show stays shown.
+  if (!sourceExists)
+    add({
+      updateSheetProperties: {
+        properties: { sheetId: source.sheetId, hidden: true },
+        fields: 'hidden',
+      },
+    });
   charts.forEach(function (chart, index) {
-    var spec = dmvDashboardChartSpec_(chart, area);
+    var spec = dmvDashboardChartSpec_(chart, source);
     var saved = savedIds[index];
     if (saved !== undefined && saved !== null && existing[saved]) {
       outcome.chartIds[index] = saved;
@@ -1132,13 +1239,21 @@ function dmvRunDashboard(id, requestedDeadline) {
       throw new Error('The dashboard tab is too large. Use fewer or smaller tiles.');
     outputs.push({
       report: {
+        id: dashboard.id + '-charts',
+        spreadsheetId: spreadsheet.getId(),
+        target: { sheetName: dmvDashboardChartTab_(dashboard.target), startCell: 'A1' },
+      },
+      result: { columns: [], matrix: page.data.matrix, layout: page.data.layout },
+    });
+    outputs.push({
+      report: {
         id: dashboard.id + '-report',
         spreadsheetId: spreadsheet.getId(),
         target: dashboard.target,
       },
       result: { columns: [], matrix: page.matrix, layout: page.layout },
     });
-    phase('Updating ' + outputs.length + ' tabs and ' + page.charts.length + ' charts');
+    phase('Updating ' + (outputs.length - 1) + ' tabs and ' + page.charts.length + ' charts');
     return dmvLocked_(function () {
       var current = currentRun();
       function check() {
@@ -1166,6 +1281,7 @@ function dmvRunDashboard(id, requestedDeadline) {
             spreadsheet.getId(),
             page.charts,
             areas[areas.length - 1],
+            areas[areas.length - 2],
             page.width,
             current.chartIds || [],
             outcome

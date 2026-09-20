@@ -200,7 +200,14 @@ export function createDatamoovSandbox() {
     const originals = new Map(book.sheets.map((sheet) => [sheet.id, sheet]));
     const staged = new Map(book.sheets.map((sheet) => [sheet.id, { ...sheet, cells: new Map(sheet.cells) }]));
     const stagedCharts = [];
-    const updatedCharts = new Map(), removedCharts = new Set();
+    const updatedCharts = new Map(), removedCharts = new Set(), deletedSheets = new Set();
+    const checkChartSpec = (spec) => {
+      const basic = spec?.basicChart;
+      if (basic?.chartType === 'BAR' && (basic.series || []).some((series) => series.targetAxis !== 'BOTTOM_AXIS'))
+        throw new Error('Bar charts series may only target the BOTTOM_AXIS.');
+      if (basic && basic.chartType !== 'BAR' && (basic.series || []).some((series) => series.targetAxis === 'BOTTOM_AXIS'))
+        throw new Error('Only bar chart series may target the BOTTOM_AXIS.');
+    };
     const replies = [];
     let nextSheetId = sheetSerial;
     const findSheet = (id) => {
@@ -233,6 +240,7 @@ export function createDatamoovSandbox() {
         const columns = props.gridProperties?.columnCount ?? 26;
         const frozenRows = props.gridProperties?.frozenRowCount ?? 0;
         if (!Number.isInteger(id) || id < 0 || staged.has(id)) throw new Error('Invalid or duplicate sheet ID');
+        if (props.title === undefined) props.title = 'Sheet' + id;
         if (typeof props.title !== 'string' || !props.title || [...staged.values()].some((sheet) => sheet.name === props.title))
           throw new Error('Invalid or duplicate sheet title');
         if (!Number.isInteger(rows) || rows < 1 || !Number.isInteger(columns) || columns < 1 ||
@@ -276,6 +284,7 @@ export function createDatamoovSandbox() {
           throw new Error('Invalid sheet grid properties');
       } else if (request.addChart) {
         const chart = request.addChart.chart;
+        checkChartSpec(chart.spec);
         findSheet(chart.position.overlayPosition.anchorCell.sheetId);
         for (const source of JSON.stringify(chart.spec).matchAll(/"sheetId":(\d+)/g)) findSheet(Number(source[1]));
         const chartId = chart.chartId ?? Math.max(state.chartSerial || 0, ...state.charts.map((item) => item.chartId), 0) + stagedCharts.length + 1;
@@ -285,6 +294,7 @@ export function createDatamoovSandbox() {
         reply = { addChart: { chart: { chartId } } };
       } else if (request.updateChartSpec) {
         const { chartId, spec } = request.updateChartSpec;
+        checkChartSpec(spec);
         if (!state.charts.some((chart) => chart.spreadsheetId === spreadsheetId && chart.chartId === chartId && !removedCharts.has(chartId)))
           throw new Error(`No chart with id ${chartId}`);
         for (const source of JSON.stringify(spec).matchAll(/"sheetId":(\d+)/g)) findSheet(Number(source[1]));
@@ -294,6 +304,10 @@ export function createDatamoovSandbox() {
         if (!state.charts.some((chart) => chart.spreadsheetId === spreadsheetId && chart.chartId === chartId && !removedCharts.has(chartId)))
           throw new Error(`No embedded object with id ${chartId}`);
         removedCharts.add(chartId);
+      } else if (request.deleteSheet) {
+        findSheet(request.deleteSheet.sheetId);
+        staged.delete(request.deleteSheet.sheetId);
+        deletedSheets.add(request.deleteSheet.sheetId);
       } else if (request.updateDimensionProperties) {
         findSheet(request.updateDimensionProperties.range.sheetId);
       } else throw new Error(`Unsupported batch request: ${Object.keys(request)}`);
@@ -304,6 +318,9 @@ export function createDatamoovSandbox() {
       if (existing) Object.assign(existing, sheet);
       else book.sheets.push(sheet);
     }
+    if (!staged.size) throw new Error('A spreadsheet must keep at least one sheet');
+    book.sheets = book.sheets.filter((sheet) => !deletedSheets.has(sheet.id));
+    state.charts = state.charts.filter((chart) => chart.spreadsheetId !== spreadsheetId || !deletedSheets.has(chart.position.overlayPosition.anchorCell.sheetId));
     sheetSerial = nextSheetId;
     for (const chart of state.charts) if (updatedCharts.has(chart.chartId) && chart.spreadsheetId === spreadsheetId) chart.spec = updatedCharts.get(chart.chartId);
     state.chartSerial = Math.max(state.chartSerial || 0, ...state.charts.map((chart) => chart.chartId), ...stagedCharts.map((chart) => chart.chartId), 0);

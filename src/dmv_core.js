@@ -61,6 +61,7 @@ function dmvCatalog_() {
               dateRange: !!report.dateRange,
               supportsDiscovery: typeof report.discoverFields === 'function',
               help: report.help || '',
+              chat: report.chat !== false,
             };
           }),
         })

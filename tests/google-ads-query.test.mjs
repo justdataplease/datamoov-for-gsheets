@@ -10,7 +10,7 @@ function load() {
   scope.dmvRegisterConnector_ = (connector) => { connectors[connector.id] = connector; };
   for (const name of ['dmv_connector_helpers.js', 'connectors/google_ads.js'])
     vm.runInContext(fs.readFileSync(new URL('../src/' + name, import.meta.url), 'utf8'), scope, { filename: name });
-  return connectors.google_ads.reports.find((report) => report.id === 'custom_query');
+  return connectors.google_ads.reports.find((report) => report.id === (load.report || 'custom_query'));
 }
 
 function context(gaql, responses, overrides = {}) {
@@ -87,7 +87,7 @@ test('a query that filters dates itself keeps them, unknown metrics get honest t
     ]
   );
   const result = plain(load().fetch(ctx));
-  assert.match(ctx.calls[0].body.query, /WHERE segments\.date DURING LAST_MONTH$/);
+  assert.match(ctx.calls[0].body.query, /WHERE segments\.date DURING LAST_MONTH LIMIT 101$/, 'one row past the limit is enough to notice an oversized report');
   const [month, share, cost, urls] = result.columns;
   assert.deepEqual([month.type, share.type, share.additive, cost.type, cost.additive, urls.type], ['date', 'percent', false, 'currency', false, 'text']);
   assert.deepEqual(result.rows[0], { 'segments.month': '2026-08-01', 'metrics.search_impression_share': 0.42, 'metrics.cost_per_conversion': 2.5, 'ad_group_ad.ad.final_urls': '["https://example.com/a"]' });
@@ -109,15 +109,107 @@ test('discovery lists resources, then the attributes, metrics and segments one r
   assert.equal(resources.calls[0].body.query, "SELECT name WHERE category = 'RESOURCE'");
 
   const fields = context('FROM keyword_view', [
+    { results: [{ name: 'keyword_view', selectableWith: ['metrics.clicks', 'metrics.cost_micros', 'segments.date', 'ad_group', 'campaign'], attributeResources: ['ad_group', 'ad_group_criterion'] }] },
     { results: [{ name: 'keyword_view.resource_name', selectable: true }, { name: 'keyword_view.internal', selectable: false }] },
-    { results: [{ name: 'keyword_view', selectableWith: ['metrics.clicks', 'metrics.cost_micros', 'segments.date', 'ad_group', 'campaign'] }] },
+    { results: [{ name: 'ad_group.name', selectable: true }] },
   ]);
   assert.deepEqual(plain(report.discoverFields(fields)).map((field) => [field.key, field.type]), [
     ['keyword_view.resource_name', 'text'],
+    ['ad_group.name', 'text'],
     ['metrics.clicks', 'number'],
     ['metrics.cost_micros', 'currency'],
     ['segments.date', 'date'],
   ]);
-  assert.equal(fields.calls[0].body.query, "SELECT name, selectable, is_repeated WHERE name LIKE 'keyword_view.%'");
-  assert.throws(() => report.discoverFields(context('FROM nothing_here', [{ results: [] }, { results: [] }])), /no resource named nothing_here/);
+  assert.deepEqual(fields.calls.map((call) => call.body.query), [
+    "SELECT name, selectable_with, attribute_resources WHERE name = 'keyword_view'",
+    "SELECT name, selectable, is_repeated WHERE name LIKE 'keyword_view.%'",
+    "SELECT name, selectable, is_repeated WHERE name LIKE 'ad_group.%'",
+  ], 'parent attributes come only from the parents worth listing');
+  assert.throws(() => report.discoverFields(context('FROM nothing_here', [{ results: [] }])), /no resource named nothing_here/);
+
+  // The report form's Load columns lists the columns of a complete query, without a request.
+  const own = context('SELECT campaign.name, metrics.clicks FROM campaign', []);
+  assert.deepEqual(plain(report.discoverFields(own)).map((field) => [field.key, field.default]), [['campaign.name', true], ['metrics.clicks', true]]);
+});
+
+const level = (id) => {
+  load.report = id;
+  try {
+    return load();
+  } finally {
+    load.report = null;
+  }
+};
+
+test('every report level is a plain dimension-and-metric picker over one Google Ads resource', () => {
+  const keyword = level('keyword');
+  assert.equal(keyword.label, 'Keyword performance');
+  assert.equal(keyword.chat, false, 'chat reaches every level through the custom query instead');
+  const fields = plain(keyword.fields);
+  assert.deepEqual(fields.filter((field) => field.default).map((field) => field.label), ['Campaign', 'Ad group', 'Keyword', 'Match type', 'Impressions', 'Clicks', 'Spend', 'Conversions']);
+  assert.ok(['segments.date', 'segments.week', 'segments.month', 'segments.device'].every((key) => fields.some((field) => field.key === key && !field.default)));
+  const quality = fields.find((field) => field.key === 'ad_group_criterion.quality_info.quality_score');
+  assert.deepEqual([quality.label, quality.type, quality.additive], ['Quality score', 'number', false]);
+
+  const ctx = context(undefined, [
+    { results: [{ campaign: { name: 'Brand' }, adGroupCriterion: { keyword: { text: 'shoes', matchType: 'EXACT' } }, metrics: { clicks: '7', costMicros: '3500000' } }] },
+    { results: [{ customer: { currencyCode: 'EUR' } }] },
+  ], { fields: ['campaign.name', 'ad_group_criterion.keyword.text', 'ad_group_criterion.keyword.match_type', 'metrics.clicks', 'metrics.cost_micros'], config: {} });
+  const result = plain(keyword.fetch(ctx));
+  assert.equal(ctx.calls[0].body.query, "SELECT campaign.name, ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type, metrics.clicks, metrics.cost_micros FROM keyword_view WHERE metrics.impressions > 0 AND segments.date BETWEEN '2026-06-22' AND '2026-09-19' ORDER BY metrics.cost_micros DESC LIMIT 100", 'a ranking keeps its top rows by spend');
+  assert.deepEqual(result.columns.map((column) => column.label), ['Campaign', 'Keyword', 'Match type', 'Clicks', 'Spend']);
+  assert.deepEqual(result.rows, [{ 'campaign.name': 'Brand', 'ad_group_criterion.keyword.text': 'shoes', 'ad_group_criterion.keyword.match_type': 'EXACT', 'metrics.clicks': 7, 'metrics.cost_micros': 3.5 }]);
+  assert.equal(result.metadata.grain, 'Keyword performance');
+});
+
+test('dated levels order by date, lists have no period, and conversions by action avoid the metrics Google forbids', () => {
+  const daily = context(undefined, [{ results: [] }, { results: [{ customer: { currencyCode: 'EUR' } }] }], { fields: [], config: {} });
+  level('account').fetch(daily);
+  assert.equal(daily.calls[0].body.query, "SELECT segments.date, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions FROM customer WHERE metrics.impressions > 0 AND segments.date BETWEEN '2026-06-22' AND '2026-09-19' ORDER BY segments.date LIMIT 101", 'a trend needs every row, so it fails over the limit instead');
+
+  const negatives = level('negative_keyword');
+  assert.equal(negatives.dateRange, false);
+  assert.ok(!plain(negatives.fields).some((field) => /^(metrics|segments)\./.test(field.key)));
+  const list = context(undefined, [{ results: [] }], { fields: [], config: {} });
+  negatives.fetch(list);
+  assert.equal(list.calls[0].body.query, "SELECT campaign.name, campaign_criterion.keyword.text, campaign_criterion.keyword.match_type FROM campaign_criterion WHERE campaign_criterion.negative = TRUE AND campaign_criterion.type = 'KEYWORD' LIMIT 101");
+
+  const actions = level('conversion_action');
+  // Conversion value is money, so the account currency is looked up as well.
+  const split = context(undefined, [{ results: [] }, { results: [{ customer: { currencyCode: 'EUR' } }] }], { fields: [], config: {} });
+  actions.fetch(split);
+  assert.equal(split.calls[0].body.query, "SELECT campaign.name, segments.conversion_action_name, metrics.conversions, metrics.conversions_value FROM campaign WHERE segments.date BETWEEN '2026-06-22' AND '2026-09-19' LIMIT 101");
+  assert.ok(!plain(actions.fields).some((field) => ['metrics.clicks', 'metrics.impressions', 'metrics.cost_micros'].includes(field.key)));
+});
+
+test('Load columns on a level keeps the starting set first and adds everything else Google offers, unselected', () => {
+  const adGroup = level('ad_group');
+  const ctx = context(undefined, [
+    { results: [{ name: 'ad_group', selectableWith: ['metrics.clicks', 'metrics.search_impression_share', 'segments.hour'], attributeResources: ['campaign', 'customer'] }] },
+    { results: [{ name: 'ad_group.name', selectable: true }, { name: 'ad_group.cpc_bid_micros', selectable: true }] },
+    { results: [{ name: 'campaign.name', selectable: true }, { name: 'campaign.start_date', selectable: true }] },
+    { results: [{ name: 'customer.descriptive_name', selectable: true }] },
+  ], { fields: [], config: {} });
+  const fields = plain(adGroup.discoverFields(ctx));
+  const curated = plain(adGroup.fields).length;
+  assert.deepEqual(fields.slice(0, curated).map((field) => field.key), plain(adGroup.fields).map((field) => field.key));
+  assert.deepEqual(fields.slice(curated).map((field) => [field.key, field.type, field.default]), [
+    ['ad_group.cpc_bid_micros', 'currency', false],
+    ['campaign.start_date', 'text', false],
+    ['customer.descriptive_name', 'text', false],
+    ['metrics.search_impression_share', 'percent', false],
+    ['segments.hour', 'text', false],
+  ]);
+});
+
+test('metrics Google rejects at a level are offered neither in its starting set nor by Load columns', () => {
+  const shopping = level('shopping');
+  const skipped = ['metrics.average_cpm', 'metrics.interactions', 'metrics.view_through_conversions'];
+  assert.ok(!plain(shopping.fields).some((field) => skipped.includes(field.key)));
+  const ctx = context(undefined, [
+    { results: [{ name: 'shopping_performance_view', selectableWith: ['metrics.average_cpm', 'metrics.interactions', 'metrics.search_impression_share'], attributeResources: [] }] },
+    { results: [] },
+  ], { fields: [], config: {} });
+  const added = plain(shopping.discoverFields(ctx)).slice(plain(shopping.fields).length).map((field) => field.key);
+  assert.deepEqual(added, ['metrics.search_impression_share']);
 });

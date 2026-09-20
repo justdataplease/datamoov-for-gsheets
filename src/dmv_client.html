@@ -554,11 +554,17 @@
     }
     async function removeDashboard(dashboard) {
       if (dashboardRunning(dashboard) || dashboardView.removals.has(dashboard.id)) return;
+      // Removing cleans up: the tabs the dashboard wrote go with it, so name them first.
+      const tabs = [dashboardTarget(dashboard.target)].concat(
+        (dashboard.datasets || []).map((dataset) => dataset.sheetName)
+      );
       if (
         !window.confirm(
           'Remove your dashboard "' +
             dashboard.name +
-            '"? Its data and dashboard tabs stay in place.'
+            '" and delete the tabs it created?\n\n' +
+            tabs.join('\n') +
+            '\nand its hidden chart data tab.\n\nYour other tabs are not touched.'
         )
       )
         return;
@@ -567,10 +573,14 @@
       dashboardView.removals.set(dashboard.id, token);
       renderDashboards();
       try {
-        await api('dmvDeleteDashboard', dashboard.id);
+        const removed = await api('dmvDeleteDashboard', dashboard.id);
         if (dashboardView.disposed || dashboardView.removals.get(dashboard.id) !== token) return;
         state.dashboards = state.dashboards.filter((item) => item.id !== dashboard.id);
-        notice('Dashboard setup removed. Its data and dashboard tabs were kept.');
+        const count = Number(removed?.deletedTabs || 0);
+        notice(
+          'Dashboard removed' +
+            (count ? ' with its ' + count + (count === 1 ? ' tab.' : ' tabs.') : '.')
+        );
       } catch (error) {
         if (!dashboardView.disposed && dashboardView.removals.get(dashboard.id) === token)
           notice(error.message || 'The dashboard could not be removed.', 'error');
@@ -1358,6 +1368,8 @@
       $('discover-fields').hidden = !report?.supportsDiscovery;
       $('column-help').hidden = !report?.supportsDiscovery;
       state.columns = (report?.fields || []).slice();
+      // A saved selection is a choice; a fresh list is still on its defaults.
+      state.columnsChosen = Boolean(selectedFields);
       for (const key of selectedFields || []) {
         if (!state.columns.some((field) => field.key === key))
           state.columns.push({ key, label: key, type: 'string' });
@@ -1371,13 +1383,14 @@
         (input) => input.value
       );
     }
-    function renderColumns(selected) {
+    function defaultColumnKeys() {
       const marked = state.columns.some((field) => typeof field.default === 'boolean');
-      const choices =
-        selected ||
-        state.columns
-          .filter((field) => (marked ? field.default === true : field.default !== false))
-          .map((field) => field.key);
+      return state.columns
+        .filter((field) => (marked ? field.default === true : field.default !== false))
+        .map((field) => field.key);
+    }
+    function renderColumns(selected) {
+      const choices = selected || defaultColumnKeys();
       const container = $('column-list');
       container.replaceChildren();
       const roles = ['dimension', 'metric', 'other'];
@@ -1402,6 +1415,7 @@
           input.type = 'checkbox';
           input.value = field.key;
           input.checked = choices.includes(field.key);
+          label.dataset.search = ((field.label || '') + ' ' + field.key).toLowerCase();
           label.append(
             input,
             el('span', '', field.label || field.key),
@@ -1418,7 +1432,30 @@
         container.append(
           el('p', 'field-help', 'Load columns to choose what appears in your report.')
         );
+      // A provider can offer hundreds of columns, so a long list gets a search box.
+      $('column-search').hidden = state.columns.length <= 12;
+      $('column-search').value = '';
       updateColumnCount();
+    }
+    function filterColumns() {
+      const words = $('column-search').value.toLowerCase().split(/\s+/).filter(Boolean);
+      const container = $('column-list');
+      let group = null,
+        shown = 0;
+      container.querySelector('.column-empty')?.remove();
+      for (const node of Array.from(container.children)) {
+        if (node.classList.contains('column-group')) {
+          group = node;
+          group.hidden = true;
+        } else if (node.classList.contains('column-option')) {
+          node.hidden = !words.every((word) => node.dataset.search.includes(word));
+          if (node.hidden) continue;
+          shown++;
+          if (group) group.hidden = false;
+        }
+      }
+      if (!shown && words.length)
+        container.append(el('p', 'field-help column-empty', 'No columns match your search.'));
     }
     function updateColumnCount() {
       $('selected-count').textContent = '(' + selectedColumnKeys().length + ')';
@@ -1635,7 +1672,11 @@
     });
     $('date-preset').addEventListener('change', updateDates);
     $('report-schedule').addEventListener('change', updateSchedule);
-    $('column-list').addEventListener('change', updateColumnCount);
+    $('column-list').addEventListener('change', () => {
+      state.columnsChosen = true;
+      updateColumnCount();
+    });
+    $('column-search').addEventListener('input', filterColumns);
     $('report-config').addEventListener('change', () =>
       updateConditionalFields($('report-config'), currentReport()?.configFields || [])
     );
@@ -1835,8 +1876,18 @@
           reportType: $('report-type').value,
           config: readFields($('report-config'), currentReport()?.configFields || [], false),
         });
+        // Once columns were picked by hand, those already listed keep their choice and new
+        // ones start from their default. An untouched list takes the loaded defaults.
+        const listed = new Set(state.columns.map((field) => field.key));
+        const chosen = selectedColumnKeys();
         state.columns = Array.isArray(fields) ? fields : fields.fields || [];
-        renderColumns();
+        renderColumns(
+          state.columnsChosen
+            ? chosen
+                .filter((key) => state.columns.some((field) => field.key === key))
+                .concat(defaultColumnKeys().filter((key) => !listed.has(key)))
+            : undefined
+        );
         notice('Columns loaded. Choose the fields you need.');
       })
     );

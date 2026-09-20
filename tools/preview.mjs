@@ -607,8 +607,10 @@ function installPreview(initial) {
       };
     },
     dmvDeleteDashboard(id) {
+      const removed = (data.dashboards || []).find((item) => item.id === id);
       data.dashboards = (data.dashboards || []).filter((item) => item.id !== id);
-      return { ok: true };
+      // Tabs exist only once the dashboard has run: its data tabs, chart data tab and page.
+      return { ok: true, deletedTabs: removed?.lastRun ? removed.datasets.length + 2 : 0 };
     },
     dmvAiSettings() {
       return {

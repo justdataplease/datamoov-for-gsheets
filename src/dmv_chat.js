@@ -229,6 +229,8 @@ function dmvChatCatalogText_(session) {
             : ''),
       ];
       connector.reports.forEach(function (report) {
+        // Reports a connector keeps for the report form; chat reaches the same data otherwise.
+        if (report.chat === false) return;
         var fields = (report.fields || []).map(function (field) {
           return (
             field.key +

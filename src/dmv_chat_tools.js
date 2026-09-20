@@ -1330,15 +1330,20 @@ function dmvChatCreateChart_(session, input) {
       chartType: type,
       legendPosition: 'BOTTOM_LEGEND',
       headerCount: 1,
+      // Sheets draws a bar chart sideways: values run along the bottom axis, categories up the
+      // left one, and it rejects bar series on any other axis.
       axis: [
-        { position: 'BOTTOM_AXIS', title: x.label },
-        { position: 'LEFT_AXIS', title: series.length === 1 ? series[0].label : '' },
+        { position: type === 'BAR' ? 'LEFT_AXIS' : 'BOTTOM_AXIS', title: x.label },
+        {
+          position: type === 'BAR' ? 'BOTTOM_AXIS' : 'LEFT_AXIS',
+          title: series.length === 1 ? series[0].label : '',
+        },
       ],
       domains: [{ domain: { sourceRange: { sources: [gridRange(x, false)] } } }],
       series: series.map(function (column) {
         return {
           series: { sourceRange: { sources: [gridRange(column, false)] } },
-          targetAxis: 'LEFT_AXIS',
+          targetAxis: type === 'BAR' ? 'BOTTOM_AXIS' : 'LEFT_AXIS',
         };
       }),
     };

@@ -216,7 +216,9 @@ test('one chat turn builds every data tab, the scorecards, the charts and their 
   const writes = f.state.batches.filter((entry) => entry.body.requests.some((request) => request.updateCells));
   assert.equal(writes.length, 1, 'all tabs and charts are committed together');
   assert.equal(f.state.batches.length, 1, 'no separate chart call is needed');
-  assert.deepEqual(writes[0].body.requests.filter((request) => request.addSheet).map((request) => request.addSheet.properties.title), ['Google Ads Data', 'Facebook Ads Data', 'Ad groups Data', 'Paid media Dashboard']);
+  assert.deepEqual(writes[0].body.requests.filter((request) => request.addSheet).map((request) => request.addSheet.properties.title), ['Google Ads Data', 'Facebook Ads Data', 'Ad groups Data', 'Paid media Dashboard (chart data)', 'Paid media Dashboard']);
+  assert.equal(f.tab('Paid media Dashboard (chart data)').hidden, true, 'the numbers behind the charts stay out of the way');
+  assert.equal(f.tab('Paid media Dashboard').hidden, false);
 
   // Data tabs: provenance block, then the dataset as fetched.
   const gads = rowsOf(f, 'Google Ads Data');
@@ -240,29 +242,37 @@ test('one chat turn builds every data tab, the scorecards, the charts and their 
   assert.deepEqual(page[sources + 2].slice(0, 4).concat(page[sources + 2].slice(5)), ['Google Ads campaigns', 'gads fixture', 'gads account', 'campaign_daily report', 3, 'Google Ads Data']);
   assert.equal(page[sources + 4][4], 'No date range');
 
-  const clicks = find(page, 'Weekly clicks by platform');
-  assert.deepEqual(page[clicks + 1], ['Date', 'Google Ads campaigns', 'Facebook Ads campaigns']);
-  assert.deepEqual(page[clicks + 2], ['2026-08-31', 15, 8]);
-  assert.deepEqual(page[clicks + 3], ['2026-09-07', 4, 9]);
-  const spend = find(page, 'Weekly spend');
-  assert.deepEqual(page[spend + 1], ['Date', 'AED', 'USD'], 'a money chart over two currencies splits into one series per currency');
-  assert.deepEqual(page[spend + 2], ['2026-08-31', 150, 40]);
-  const groups = find(page, 'Clicks by ad group');
-  assert.deepEqual(page.slice(groups + 1, groups + 4), [['Ad group', 'Clicks'], ['Shoes', 12], ['Hats', 7]]);
+  // The dashboard shows charts, not the numbers behind them: those live on the hidden tab.
+  assert.equal(find(page, 'Weekly clicks by platform'), -1);
+  const data = rowsOf(f, 'Paid media Dashboard (chart data)');
+  const clicks = find(data, 'Weekly clicks by platform');
+  assert.equal(clicks, 0);
+  assert.deepEqual(data[clicks + 1], ['Date', 'Google Ads campaigns', 'Facebook Ads campaigns']);
+  assert.deepEqual(data[clicks + 2], ['2026-08-31', 15, 8]);
+  assert.deepEqual(data[clicks + 3], ['2026-09-07', 4, 9]);
+  const spend = find(data, 'Weekly spend');
+  assert.deepEqual(data[spend + 1], ['Date', 'AED', 'USD'], 'a money chart over two currencies splits into one series per currency');
+  assert.deepEqual(data[spend + 2], ['2026-08-31', 150, 40]);
+  const groups = find(data, 'Clicks by ad group');
+  assert.deepEqual(data.slice(groups + 1, groups + 4), [['Ad group', 'Clicks'], ['Shoes', 12], ['Hats', 7]]);
   const table = find(page, 'Campaigns');
   assert.deepEqual(page[table + 1], ['Source', 'Campaign name', 'Currency', 'Spend', 'Clicks']);
   assert.deepEqual(page[table + 2], ['Google Ads campaigns', 'Brand', 'AED', 150, 15]);
 
-  // Native charts sit in the reserved band and read the tables on the same tab.
-  const dashboardId = f.tab('Paid media Dashboard').getSheetId();
+  // Native charts sit in the reserved band of the dashboard and read the hidden chart data tab.
+  const dashboardId = f.tab('Paid media Dashboard').getSheetId(),
+    dataId = f.tab('Paid media Dashboard (chart data)').getSheetId();
+  assert.ok(f.state.charts.every((chart) => chart.position.overlayPosition.anchorCell.sheetId === dashboardId));
+  assert.equal(f.state.charts[2].spec.basicChart.chartType, 'BAR');
+  assert.ok(f.state.charts[2].spec.basicChart.series.every((series) => series.targetAxis === 'BOTTOM_AXIS'), 'Sheets rejects bar series on any other axis');
   assert.equal(f.state.charts.length, 3);
   assert.deepEqual(f.state.charts.map((chart) => chart.spec.title), ['Weekly clicks by platform', 'Weekly spend', 'Clicks by ad group']);
   assert.deepEqual(f.state.charts.map((chart) => [chart.position.overlayPosition.anchorCell.rowIndex, chart.position.overlayPosition.anchorCell.columnIndex]), [[6, 0], [6, 5], [23, 0]]);
   const line = f.state.charts[0].spec.basicChart;
   assert.equal(line.chartType, 'LINE');
   assert.equal(line.series.length, 2);
-  assert.deepEqual(line.domains[0].domain.sourceRange.sources[0], { sheetId: dashboardId, startRowIndex: clicks + 1, endRowIndex: clicks + 4, startColumnIndex: 0, endColumnIndex: 1 });
-  assert.deepEqual(line.series[1].series.sourceRange.sources[0], { sheetId: dashboardId, startRowIndex: clicks + 1, endRowIndex: clicks + 4, startColumnIndex: 2, endColumnIndex: 3 });
+  assert.deepEqual(line.domains[0].domain.sourceRange.sources[0], { sheetId: dataId, startRowIndex: clicks + 1, endRowIndex: clicks + 4, startColumnIndex: 0, endColumnIndex: 1 });
+  assert.deepEqual(line.series[1].series.sourceRange.sources[0], { sheetId: dataId, startRowIndex: clicks + 1, endRowIndex: clicks + 4, startColumnIndex: 2, endColumnIndex: 3 });
 
   // What the user sees: each fetch, then the dashboard with links to every tab.
   assert.deepEqual(reply.events.map((event) => event.kind), ['dashboard', 'report', 'report', 'report', 'dashboard']);
@@ -310,11 +320,34 @@ test('Refresh dashboard rebuilds everything without AI, updates its charts in pl
   assert.equal(again.filter((request) => request.updateChartSpec).length, 2);
   assert.equal(again.filter((request) => request.addChart).length, 1);
 
+  // A later refresh returns more weeks (the range now runs to today): every chart follows.
+  const rangeEnd = () => f.state.charts.find((chart) => chart.spec.title === 'Weekly clicks by platform').spec.basicChart.domains[0].domain.sourceRange.sources[0].endRowIndex;
+  const before = rangeEnd();
+  f.rows['gads.campaign_daily'] = SOURCES.gads.reports.campaign_daily.rows.concat([
+    { 'segments.date': '2026-09-15', 'campaign.name': 'Brand', 'metrics.cost': 10, 'metrics.clicks': 1 },
+    { 'segments.date': '2026-09-22', 'campaign.name': 'Brand', 'metrics.cost': 12, 'metrics.clicks': 2 },
+  ]);
+  plain(f.api.dmvRunDashboard(id));
+  assert.equal(rangeEnd(), before + 2, 'two more weekly points, two more rows in the chart range');
+  assert.equal(f.state.charts.length, 3);
+  assert.equal(find(rowsOf(f, 'Paid media Dashboard'), 'Data sources'), 6 + 2 * 17, 'the dashboard page itself does not move');
+
   const card = plain(f.api.dmvListDashboards())[0];
   assert.equal(card.status, 'success');
   assert.equal(card.statusMessage, 'Updated 3 data tabs and 3 charts');
-  assert.deepEqual(card.datasets.map((dataset) => [dataset.sheetName, dataset.rowCount]), [['Google Ads Data', 3], ['Facebook Ads Data', 1], ['Ad groups Data', 2]]);
+  assert.deepEqual(card.datasets.map((dataset) => [dataset.sheetName, dataset.rowCount]), [['Google Ads Data', 5], ['Facebook Ads Data', 1], ['Ad groups Data', 2]]);
   assert.ok(card.datasets.every((dataset) => /#gid=\d+/.test(dataset.url)));
+  assert.deepEqual(card.datasets.map((dataset) => [dataset.sheetName, dataset.rowCount])[0], ['Google Ads Data', 5]);
+
+  // Removing the dashboard cleans up everything it created, the hidden tab included, and
+  // nothing else: a tab the user made stays.
+  const mine = f.reopen().insertSheet('My notes');
+  f.setCell(mine, 1, 1, 'keep me');
+  assert.deepEqual(plain(f.api.dmvDeleteDashboard(id)), { ok: true, deletedTabs: 5 });
+  assert.deepEqual(f.book.sheets.map((sheet) => sheet.name), ['Output', 'My notes']);
+  assert.equal(f.state.charts.length, 0);
+  assert.equal(f.api.dmvListDashboards().length, 0);
+  assert.ok(!Object.keys(f.state.user.getProperties()).some((key) => key.includes(':output:')), 'no ownership receipt is left behind');
 });
 
 test('a failing dataset names itself, reaches the model as a tool error and leaves no tab behind', () => {

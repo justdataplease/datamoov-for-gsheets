@@ -221,17 +221,20 @@ test('dashboard refresh failure preserves previous output counts and removal pre
     return dialog.accept();
   });
   await card(page).getByRole('button', { name: 'Remove', exact: true }).click();
-  expect(confirmation).toContain('Its data and dashboard tabs stay in place');
+  expect(confirmation).toContain('delete the tabs it created');
+  expect(confirmation).toContain('Marketing Dashboard');
+  expect(confirmation).toContain('Facebook Ads Data');
+  expect(confirmation).toContain('Your other tabs are not touched');
   await expect(card(page).getByRole('button', { name: 'Refresh dashboard' })).toBeDisabled();
   expect(await page.evaluate(() => window.dashboardProbe.removals[0].args)).toEqual([
     'dashboard-fixture',
   ]);
   await page.evaluate(() => {
     window.dashboardProbe.items = [];
-    window.dashboardProbe.removals[0].succeed({ ok: true });
+    window.dashboardProbe.removals[0].succeed({ ok: true, deletedTabs: 4 });
   });
   await expect(card(page)).toHaveCount(0);
-  await expect(page.locator('#notice')).toContainText('data and dashboard tabs were kept');
+  await expect(page.locator('#notice')).toContainText('Dashboard removed with its 4 tabs.');
 });
 
 test('resetting the report list ignores late dashboard run and poll responses', async ({

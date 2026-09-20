@@ -373,6 +373,50 @@ test('field discovery selects only declared defaults and retains unmarked-schema
   await expect(page.locator('#column-list input:checked')).toHaveCount(2);
 });
 
+test('a long column list can be searched, and loading columns keeps the choices already made', async ({ page }) => {
+  await startReport(page, 'ga4');
+  await expect(page.locator('#column-search')).toBeHidden();
+  const many = Array.from({ length: 40 }, (_, index) => ({
+    key: 'metrics.field_' + index,
+    label: index === 7 ? 'Conversion value' : 'Field ' + index,
+    type: 'number',
+    role: index < 5 ? 'dimension' : 'metric',
+    default: index < 2,
+  }));
+  await page.evaluate((fields) => { window.DATAMOOV_PREVIEW_DISCOVERY_FIELDS = fields; }, many);
+  await page.locator('#discover-fields').click();
+  await expect(page.locator('#column-list input')).toHaveCount(40);
+  await expect(page.locator('#column-search')).toBeVisible();
+  // Words match the label or the provider key, in any order; groups with no match are hidden.
+  await page.locator('#column-search').fill('value conv');
+  await expect(page.locator('#column-list .column-option:visible')).toHaveCount(1);
+  await expect(page.locator('#column-list .column-group:visible')).toHaveText(['Metrics']);
+  await page.locator('#column-list input[value="metrics.field_7"]').check();
+  await page.locator('#column-search').fill('field_3');
+  await expect(page.locator('#column-list .column-option:visible')).toHaveCount(11);
+  await page.locator('#column-search').fill('nothing like this');
+  await expect(page.locator('#column-list .column-empty')).toHaveText('No columns match your search.');
+  await noOverflow(page);
+  // Hidden columns stay selected.
+  await expect(page.locator('#selected-count')).toHaveText('(3)');
+  await page.locator('#column-search').fill('');
+  await expect(page.locator('#column-list .column-option:visible')).toHaveCount(40);
+  await expect(page.locator('#column-list .column-empty')).toHaveCount(0);
+  // Loading again keeps what was chosen and checks only new default columns.
+  await page.locator('#column-list input[value="metrics.field_0"]').uncheck();
+  await page.evaluate((fields) => {
+    window.DATAMOOV_PREVIEW_DISCOVERY_FIELDS = fields.concat([
+      { key: 'metrics.added', label: 'Added', type: 'number', role: 'metric', default: true },
+      { key: 'metrics.extra', label: 'Extra', type: 'number', role: 'metric', default: false },
+    ]);
+  }, many);
+  await page.locator('#discover-fields').click();
+  await expect(page.locator('#column-list input')).toHaveCount(42);
+  await expect(page.locator('#column-search')).toHaveValue('');
+  const checked = await page.locator('#column-list input:checked').evaluateAll((inputs) => inputs.map((input) => input.value));
+  expect(checked.sort()).toEqual(['metrics.added', 'metrics.field_1', 'metrics.field_7']);
+});
+
 test('Find accounts works with a saved credential, fills the ID, and saving never requires it', async ({ page }) => {
   await page.locator('#tab-connections').click();
   await page.locator('#new-connection').click();

@@ -181,7 +181,9 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
     .forEach(function (other) {
       if (dmvRectanglesOverlap_(area, JSON.parse(all[other])))
         throw new Error(
-          'This output overlaps another DataMoov report. Choose another starting cell.'
+          'The output on tab "' +
+            report.target.sheetName +
+            '" overlaps another DataMoov report or dashboard. Choose another tab name or starting cell.'
         );
     });
   plan.areas.forEach(function (other) {
@@ -210,7 +212,11 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
       for (var c = 0; c < readColumns; c++) {
         var owned = old && r < old.rows && c < old.columns;
         if (!owned && (existing[r][c] !== '' || formulas[r][c] !== ''))
-          throw new Error('The output contains existing data. Choose an empty area or a new tab.');
+          throw new Error(
+            'The tab "' +
+              report.target.sheetName +
+              '" contains existing data where this output goes. Choose an empty area or a new tab name.'
+          );
       }
   }
   var range = function (row, column, rows, columns) {

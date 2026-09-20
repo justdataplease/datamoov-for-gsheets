@@ -125,8 +125,8 @@ function fixture() {
       },
     ],
   };
-  f.tabs = ['Source 1 data', 'Source 2 data', 'Dashboard report'];
-  f.receipts = (id) => ['-d-source0', '-d-source1', '-report'].map((suffix) => f.readOutput(id + suffix));
+  f.tabs = ['Source 1 data', 'Source 2 data', 'Dashboard report (chart data)', 'Dashboard report'];
+  f.receipts = (id) => ['-d-source0', '-d-source1', '-charts', '-report'].map((suffix) => f.readOutput(id + suffix));
   f.setRows = (account, rows) => {
     outputs[account] = rows;
   };
@@ -237,8 +237,12 @@ test('private dashboard saves two dataset queries and refreshes every data tab, 
     ['Source 1', 'Fixture source', 'one', 'Daily', '2026-08-01 to 2026-08-31', 1, 'Source 1 data'],
     ['Source 2', 'Fixture source', 'two', 'Daily', '2026-08-01 to 2026-08-31', 1, 'Source 2 data'],
   ]);
-  const monthly = find(page, 'Monthly spend');
-  assert.deepEqual(page.slice(monthly + 1, monthly + 3), [['Date', 'Spend'], ['2026-08', 10]]);
+  // The numbers behind a chart live on the hidden chart data tab, not under the chart.
+  assert.equal(find(page, 'Monthly spend'), -1);
+  const chartData = rowsOf(f, 'Dashboard report (chart data)');
+  assert.equal(f.tab('Dashboard report (chart data)').hidden, true);
+  const monthly = find(chartData, 'Monthly spend');
+  assert.deepEqual(chartData.slice(monthly + 1, monthly + 3), [['Date', 'Spend'], ['2026-08', 10]]);
   const campaigns = find(page, 'Campaigns');
   assert.deepEqual(page.slice(campaigns + 1), [
     ['Source', 'Campaign', 'Spend', 'Clicks'],
@@ -247,14 +251,14 @@ test('private dashboard saves two dataset queries and refreshes every data tab, 
   ]);
   assert.equal(f.formula(report, campaigns + 4, 2), '');
 
-  // The chart sits in the reserved band and reads its table on the same tab.
+  // The chart sits in the reserved band of the dashboard and reads the chart data tab.
   assert.equal(f.state.charts.length, 1);
   const chart = f.state.charts[0];
   assert.equal(chart.spec.title, 'Monthly spend');
   assert.deepEqual(chart.position.overlayPosition.anchorCell, { sheetId: report.getSheetId(), rowIndex: 6, columnIndex: 0 });
   assert.equal(chart.spec.basicChart.chartType, 'COLUMN');
   assert.deepEqual(chart.spec.basicChart.series[0].series.sourceRange.sources[0], {
-    sheetId: report.getSheetId(),
+    sheetId: f.tab('Dashboard report (chart data)').getSheetId(),
     startRowIndex: monthly + 1,
     endRowIndex: monthly + 3,
     startColumnIndex: 1,
@@ -279,6 +283,7 @@ test('private dashboard saves two dataset queries and refreshes every data tab, 
   assert.deepEqual(f.receipts(saved.id).map((receipt) => [receipt.sheetId, receipt.rows]), [
     [one.getSheetId(), 5],
     [f.tab('Source 2 data').getSheetId(), 5],
+    [f.tab('Dashboard report (chart data)').getSheetId(), chartData.length],
     [report.getSheetId(), page.length],
   ]);
   assert.equal(f.readOutput(saved.id + '-data'), null);
@@ -313,7 +318,7 @@ test('refresh fetches fresh datasets again, preserves stable tabs and charts, an
   assert.equal(requests.filter((request) => request.addSheet || request.addChart).length, 0);
   assert.deepEqual(requests.filter((request) => request.updateChartSpec).map((request) => request.updateChartSpec.chartId), [chartId]);
   assert.deepEqual(f.state.charts.map((chart) => chart.chartId), [chartId], 'the chart is updated in place, not duplicated');
-  assert.deepEqual(f.receipts(saved.id).map((receipt) => receipt.rows), [5, 4, page.length]);
+  assert.deepEqual(f.receipts(saved.id).map((receipt) => receipt.rows), [5, 4, rowsOf(f, 'Dashboard report (chart data)').length, page.length]);
 });
 
 test('a failed later dataset names itself, preserves every previous output and stores only sanitized errors', () => {
@@ -344,13 +349,19 @@ test('destination occupancy or edited ownership on any tab blocks all writes and
   const f = fixture();
   const report = f.book.insertSheet('Dashboard report');
   f.setCell(report, 1, 1, 'Keep');
+  // A taken tab is refused by name before anything is fetched...
+  assert.throws(() => f.save(), /The tab "Dashboard report" already exists and has content.*"Dashboard report 2"/);
+  assert.equal(f.fetched.length, 0);
+  f.setCell(report, 1, 1, '');
   const saved = f.save();
-  assert.throws(() => f.run(saved.id), /existing data/);
+  // ...and one that fills up after the plan was saved still blocks the whole refresh.
+  f.setCell(report, 1, 1, 'Keep');
+  assert.throws(() => f.run(saved.id), /The tab "Dashboard report" contains existing data/);
   assert.equal(f.tab('Source 1 data'), null);
   assert.equal(f.tab('Source 2 data'), null);
   assert.equal(f.state.batches.length, 0);
   assert.equal(f.state.charts.length, 0);
-  assert.deepEqual(f.receipts(saved.id), [null, null, null]);
+  assert.deepEqual(f.receipts(saved.id), [null, null, null, null]);
   f.setCell(report, 1, 1, '');
   f.run(saved.id);
   assert.equal(f.tab('Dashboard report').id, report.id, 'an empty existing tab is reused');
@@ -377,7 +388,7 @@ test('atomic batch failure creates no output tab, chart or ownership receipt and
   f.state.failBatch = true;
   assert.throws(() => f.run(saved.id), /atomic batch failure/);
   for (const name of f.tabs) assert.equal(f.tab(name), null);
-  assert.deepEqual(f.receipts(saved.id), [null, null, null]);
+  assert.deepEqual(f.receipts(saved.id), [null, null, null, null]);
   assert.equal(f.state.charts.length, 0);
   assert.equal(f.record(saved.id).status, 'error');
   assert.equal(f.record(saved.id).statusMessage, 'Refresh stopped');
@@ -407,7 +418,7 @@ test('source connection and plan changes during fetch abort before any destinati
     assert.throws(() => f.run(saved.id), /changed/);
     assert.equal(f.state.batches.length, 0);
     for (const name of f.tabs) assert.equal(f.tab(name), null);
-    assert.deepEqual(f.receipts(saved.id), [null, null, null]);
+    assert.deepEqual(f.receipts(saved.id), [null, null, null, null]);
   }
 });
 
@@ -459,11 +470,10 @@ test('dashboard plans and deletion stay isolated to the owning user and workbook
   assert.deepEqual(plain(fixture().api.dmvListDashboards()), []);
   f.setActive(f.book);
   assert.ok(f.receipts(saved.id).every(Boolean));
-  const before = f.snapshot();
-  f.api.dmvDeleteDashboard(saved.id);
-  assert.deepEqual(f.snapshot().tabs, before.tabs, 'removing a dashboard keeps its tabs');
-  assert.deepEqual(f.snapshot().charts, before.charts);
-  assert.deepEqual(f.receipts(saved.id), [null, null, null]);
+  assert.deepEqual(plain(f.api.dmvDeleteDashboard(saved.id)), { ok: true, deletedTabs: 4 });
+  assert.deepEqual(f.book.sheets.map((sheet) => sheet.name), ['Output'], 'removing a dashboard removes the tabs it created and nothing else');
+  assert.deepEqual(f.snapshot().charts, []);
+  assert.deepEqual(f.receipts(saved.id), [null, null, null, null]);
   assert.deepEqual(plain(f.api.dmvListDashboards()), []);
 });
 
@@ -658,8 +668,9 @@ test('money stays split by currency on scorecards, charts and tables, and a limi
   ]);
   const page = rowsOf(f, 'Dashboard report');
   assert.deepEqual(page.slice(3, 5), [['Spend (EUR)', 'Spend (USD)', 'Clicks'], [7, 3, 6]]);
-  const monthly = find(page, 'Monthly spend');
-  assert.deepEqual(page.slice(monthly + 1, monthly + 3), [['Date', 'EUR', 'USD'], ['2026-08', 7, 3]]);
+  const chartData = rowsOf(f, 'Dashboard report (chart data)'),
+    monthly = find(chartData, 'Monthly spend');
+  assert.deepEqual(chartData.slice(monthly + 1, monthly + 3), [['Date', 'EUR', 'USD'], ['2026-08', 7, 3]]);
   assert.equal(f.state.charts[0].spec.basicChart.series.length, 2, 'one chart series per currency');
   // The table keeps its limit and names it instead of silently dropping groups.
   const campaigns = find(page, 'Campaigns (top 1 of 2)');
@@ -733,7 +744,7 @@ test('ownership journals recover every committed tab after a receipt-storage fai
   assert.equal(f.record(saved.id).statusMessage, 'Tabs updated; completion needs recovery');
   const journalKey = 'dmv:v1:write-journal:' + f.book.id;
   assert.ok(f.state.user.getProperty(journalKey));
-  assert.equal(JSON.parse(f.state.user.getProperty(journalKey)).receipts.length, 3);
+  assert.equal(JSON.parse(f.state.user.getProperty(journalKey)).receipts.length, 4);
   assert.ok(!f.state.user.getProperty(journalKey).includes('private-dashboard-token'));
   assert.ok(!f.state.user.getProperty(journalKey).includes('=literal'));
   fail = false;
@@ -957,9 +968,9 @@ test('datasets with different columns each get their own tab, and a tile reads o
   assert.deepEqual(result.datasets.map((dataset) => [dataset.id, dataset.rowCount]), [['source0', 1], ['channels', 2]]);
   assert.equal(result.rowCount, 3);
   assert.deepEqual(result.scorecards, [{ label: 'Spend (EUR)', value: 3 }]);
-  const page = rowsOf(f, 'Dashboard report'),
-    pie = find(page, 'Sessions by channel');
-  assert.deepEqual(page.slice(pie + 1), [['Channel', 'Sessions'], ['Organic', 30], ['Paid', 12]]);
+  const chartData = rowsOf(f, 'Dashboard report (chart data)'),
+    pie = find(chartData, 'Sessions by channel');
+  assert.deepEqual(chartData.slice(pie + 1), [['Channel', 'Sessions'], ['Organic', 30], ['Paid', 12]]);
   assert.ok(f.state.charts[0].spec.pieChart);
   assert.ok(f.readOutput(saved.id + '-d-channels'));
 
@@ -984,7 +995,7 @@ test('a dataset dropped from the plan releases its receipt, keeps its tab, and t
   const edited = f.save({ ...f.input, id: saved.id, revision: saved.revision, datasets: [f.input.datasets[0]] });
   assert.deepEqual(edited.datasets.map((dataset) => dataset.id), ['source0']);
   assert.equal(f.state.batches.length, 1, 'saving a plan writes nothing');
-  assert.deepEqual(f.receipts(saved.id).map(Boolean), [true, false, true]);
+  assert.deepEqual(f.receipts(saved.id).map(Boolean), [true, false, true, true]);
   assert.deepEqual(plain(f.record(saved.id).connectionIds), [f.connections[0].id]);
   assert.deepEqual(plain([...f.tab('Source 2 data').cells]), dropped);
 
@@ -1002,27 +1013,31 @@ test('a second dashboard cannot take over tabs another dashboard owns', () => {
   const f = fixture(),
     first = f.save();
   f.run(first.id);
-  const second = f.save({ ...f.input, name: 'Copy of the overview' });
-  assert.notEqual(second.id, first.id);
+  // Tabs another dashboard filled are refused by name as soon as the plan is saved.
   const before = f.snapshot();
-  assert.throws(() => f.run(second.id), /overlaps another DataMoov report/);
+  assert.throws(() => f.save({ ...f.input, name: 'Copy of the overview' }), /The tab "Source 1 data" already exists and has content/);
   assert.deepEqual(f.snapshot(), before);
-  assert.equal(f.state.batches.length, 1);
-  // Its own tabs are fine, and removing the first dashboard does not hand over its cells either.
+  assert.equal(f.api.dmvListDashboards().length, 1);
+  // Its own tabs are fine.
   const moved = f.save({
     ...f.input,
-    id: second.id,
-    revision: second.revision,
     name: 'Copy of the overview',
     target: { sheetName: 'Copy report' },
     datasets: f.input.datasets.map((dataset) => ({ ...dataset, sheetName: 'Copy of ' + dataset.sheetName })),
   });
   assert.equal(f.run(moved.id).ok, true);
   assert.equal(f.state.charts.length, 2);
-  f.api.dmvDeleteDashboard(first.id);
+  // Removing the first dashboard removes its tabs and charts, which frees their names; the
+  // copy is untouched.
+  assert.equal(f.api.dmvDeleteDashboard(first.id).deletedTabs, 4);
+  assert.equal(f.state.charts.length, 1);
+  assert.ok(f.tab('Copy report'));
   const third = f.save({ ...f.input, name: 'Third' });
-  assert.throws(() => f.run(third.id), /existing data/);
-  assert.equal(f.state.batches.length, 2);
+  assert.equal(f.run(third.id).ok, true);
+  // Keeping the tabs is still possible, and then their names stay taken.
+  f.api.dmvDeleteDashboard(third.id, true);
+  assert.ok(f.tab('Dashboard report'));
+  assert.throws(() => f.save({ ...f.input, name: 'Fourth' }), /already exists and has content/);
 });
 
 test('a plan edited to fewer chart tiles removes its surplus chart in the same batch and keeps the others', () => {

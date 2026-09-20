@@ -373,7 +373,8 @@ test('a Gemini tool round saves and runs a two-dataset dashboard with underscore
     ['Account 2', 'meadow', 7],
     ['Account 1', 'canopy', 3],
   ]);
-  assert.deepEqual(rowsUnder(f, 'Gemini Dashboard', 'Spend by campaign', 2), [
+  // The numbers behind the chart live on the hidden chart data tab.
+  assert.deepEqual(rowsUnder(f, 'Gemini Dashboard (chart data)', 'Spend by campaign', 2), [
     ['Campaign', 'Spend'],
     ['meadow', 7],
     ['canopy', 3],

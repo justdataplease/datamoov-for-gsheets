@@ -615,6 +615,9 @@ function dmvChatEditSheet_(session, input) {
               dashboard.spreadsheetId === session.spreadsheetId &&
               [dashboard.target, dashboard.dataTarget]
                 .concat(dashboard.outputs || [])
+                .concat(
+                  dashboard.plan ? [{ sheetName: dmvDashboardChartTab_(dashboard.target) }] : []
+                )
                 .some(function (target) {
                   return target && target.sheetName === sheet.getName();
                 })

@@ -291,6 +291,7 @@ function dmvGoogleAdsQueryColumn_(name) {
       name
     );
   var rate = /(^metrics\.ctr$|_rate$|_share$|_percentage$|percent)/.test(name);
+  var score = /quality_score$/.test(name);
   var label = name
     .replace(/^(metrics|segments)\./, '')
     .replace(/_micros$/, '')
@@ -302,7 +303,7 @@ function dmvGoogleAdsQueryColumn_(name) {
       ? 'currency'
       : rate
         ? 'percent'
-        : metric
+        : metric || score
           ? 'number'
           : /^segments\.(date|week|month|quarter)$/.test(name)
             ? 'date'
@@ -310,14 +311,22 @@ function dmvGoogleAdsQueryColumn_(name) {
     role: metric ? 'metric' : 'dimension',
   };
   if (micros) column.micros = true;
-  if (metric && (rate || /(average_|_per_|score|position)/.test(name))) column.additive = false;
+  if (score || (metric && (rate || /(average_|_per_|score|position)/.test(name))))
+    column.additive = false;
   return column;
 }
 
 function dmvGoogleAdsQueryFetch_(ctx) {
   var parsed = dmvGoogleAdsParseQuery_(ctx.config.gaql);
   var connection = dmvGoogleAdsConnection_(ctx);
-  var columns = parsed.names.map(dmvGoogleAdsQueryColumn_);
+  var labels = ctx.labels || {};
+  var columns = parsed.names.map(function (name) {
+    var column = dmvGoogleAdsQueryColumn_(name);
+    if (labels[name]) column.label = labels[name];
+    return column;
+  });
+  // The query decides what is fetched; a column selection only narrows what is written.
+  if (ctx.fields && ctx.fields.length) columns = dmvSelectFields_(ctx.fields, columns);
   // Metrics and segments cover a period, so the report's date range applies to them unless
   // the query already filters dates itself. Attribute-only resources (negative keywords,
   // settings) have no period.
@@ -340,7 +349,10 @@ function dmvGoogleAdsQueryFetch_(ctx) {
     parsed.resource +
     (where ? ' WHERE ' + where : '') +
     (parsed.orderBy ? ' ORDER BY ' + parsed.orderBy : '') +
-    (parsed.limit ? ' LIMIT ' + parsed.limit : '') +
+    // Google Ads pages hold 10,000 rows whatever is asked. One row past the limit is enough
+    // to notice an oversized report without downloading all of it.
+    ' LIMIT ' +
+    (parsed.limit ? Math.min(Number(parsed.limit), ctx.maxRows + 1) : ctx.maxRows + 1) +
     (parsed.parameters ? ' PARAMETERS ' + parsed.parameters : '');
   var path = 'customers/' + connection.id + '/googleAds:search';
   var raw = dmvGoogleAdsPages_(ctx, connection, path, query, ctx.maxRows);
@@ -393,8 +405,13 @@ function dmvGoogleAdsQueryFetch_(ctx) {
 // discover_fields for a custom query: "resources" lists what can follow FROM; "FROM x" (or a
 // whole query) lists that resource's attributes plus the metrics and segments it supports.
 function dmvGoogleAdsQueryDiscover_(ctx) {
-  var connection = dmvGoogleAdsConnection_(ctx);
   var text = String(ctx.config.gaql || '');
+  // A complete query lists its own columns, which is what the report form's Load columns needs.
+  if (/^\s*SELECT\s/i.test(text))
+    return dmvGoogleAdsParseQuery_(text).names.map(function (name) {
+      return Object.assign(dmvGoogleAdsQueryColumn_(name), { default: true });
+    });
+  var connection = dmvGoogleAdsConnection_(ctx);
   var from = /\bFROM\s+([a-z_]+)/i.exec(text) || /^\s*([a-z_]+)\s*$/i.exec(text);
   var resource = from && from[1].toLowerCase() !== 'resources' ? from[1].toLowerCase() : '';
   function search(query) {
@@ -404,16 +421,30 @@ function dmvGoogleAdsQueryDiscover_(ctx) {
     return search("SELECT name WHERE category = 'RESOURCE'").map(function (row) {
       return { key: String(row.name), label: 'Resource for FROM', type: 'text' };
     });
-  var attributes = search(
-    "SELECT name, selectable, is_repeated WHERE name LIKE '" + resource + ".%'"
-  ).filter(function (row) {
-    return row.selectable === true;
-  });
-  var related = search("SELECT name, selectable_with WHERE name = '" + resource + "'")[0];
+  var related = search(
+    "SELECT name, selectable_with, attribute_resources WHERE name = '" + resource + "'"
+  )[0];
   if (!related)
     throw new Error(
       'Google Ads has no resource named ' + resource + '. Discover "resources" to list them.'
     );
+  // The resource's own attributes, then those of the parents whose fields it may also select.
+  var attributes = [];
+  [resource]
+    .concat(
+      (related.attributeResources || []).filter(function (name) {
+        return ['campaign', 'ad_group', 'customer', 'campaign_budget'].indexOf(name) >= 0;
+      })
+    )
+    .forEach(function (name) {
+      attributes = attributes.concat(
+        search("SELECT name, selectable, is_repeated WHERE name LIKE '" + name + ".%'").filter(
+          function (row) {
+            return row.selectable === true;
+          }
+        )
+      );
+    });
   return attributes
     .map(function (row) {
       return String(row.name);
@@ -424,6 +455,371 @@ function dmvGoogleAdsQueryDiscover_(ctx) {
       })
     )
     .map(dmvGoogleAdsQueryColumn_);
+}
+
+/* Report levels: one report per Google Ads resource, the way reporting add-ons present them.
+   Each lists a starting set of dimensions and metrics; Load columns adds every field Google's
+   field service says fits that resource. All of them run through the custom query engine. */
+var DMV_GOOGLE_ADS_SEGMENTS = [
+  'segments.date',
+  'segments.week',
+  'segments.month',
+  'segments.quarter',
+  'segments.year',
+  'segments.day_of_week',
+  'segments.device',
+  'segments.ad_network_type|Network',
+];
+var DMV_GOOGLE_ADS_METRICS = [
+  'metrics.impressions',
+  'metrics.clicks',
+  'metrics.cost_micros',
+  'metrics.conversions',
+  'metrics.conversions_value',
+  'metrics.ctr',
+  'metrics.average_cpc',
+  'metrics.average_cpm',
+  'metrics.cost_per_conversion',
+  'metrics.all_conversions',
+  'metrics.all_conversions_value',
+  'metrics.interactions',
+  'metrics.view_through_conversions',
+];
+var DMV_GOOGLE_ADS_CORE = [
+  'metrics.impressions',
+  'metrics.clicks',
+  'metrics.cost_micros',
+  'metrics.conversions',
+];
+var DMV_GOOGLE_ADS_LEVELS = [
+  {
+    id: 'account',
+    label: 'Account performance',
+    resource: 'customer',
+    note: 'Totals for the whole account; split by date, device or network.',
+    dims: ['customer.descriptive_name|Account', 'customer.id', 'customer.currency_code'],
+    defaults: ['segments.date'],
+  },
+  {
+    id: 'campaign',
+    label: 'Campaign performance',
+    resource: 'campaign',
+    note: 'One row per campaign for the period, or per day, week or month when you add one.',
+    dims: [
+      'campaign.name',
+      'campaign.id',
+      'campaign.status',
+      'campaign.advertising_channel_type|Campaign type',
+      'campaign.bidding_strategy_type|Bidding strategy',
+      'campaign_budget.amount_micros|Daily budget',
+    ],
+    defaults: ['campaign.name'],
+  },
+  {
+    id: 'ad_group',
+    label: 'Ad group performance',
+    resource: 'ad_group',
+    dims: [
+      'campaign.name',
+      'ad_group.name|Ad group',
+      'ad_group.id|Ad group ID',
+      'ad_group.status|Ad group status',
+      'ad_group.type|Ad group type',
+    ],
+    defaults: ['campaign.name', 'ad_group.name'],
+  },
+  {
+    id: 'ad',
+    label: 'Ad performance',
+    resource: 'ad_group_ad',
+    dims: [
+      'campaign.name',
+      'ad_group.name|Ad group',
+      'ad_group_ad.ad.id|Ad ID',
+      'ad_group_ad.ad.name|Ad name',
+      'ad_group_ad.ad.type|Ad type',
+      'ad_group_ad.status|Ad status',
+      'ad_group_ad.ad.final_urls|Final URLs',
+    ],
+    defaults: ['campaign.name', 'ad_group.name', 'ad_group_ad.ad.id', 'ad_group_ad.ad.type'],
+  },
+  {
+    id: 'keyword',
+    label: 'Keyword performance',
+    resource: 'keyword_view',
+    dims: [
+      'campaign.name',
+      'ad_group.name|Ad group',
+      'ad_group_criterion.keyword.text|Keyword',
+      'ad_group_criterion.keyword.match_type|Match type',
+      'ad_group_criterion.status|Keyword status',
+      'ad_group_criterion.quality_info.quality_score|Quality score',
+    ],
+    defaults: [
+      'campaign.name',
+      'ad_group.name',
+      'ad_group_criterion.keyword.text',
+      'ad_group_criterion.keyword.match_type',
+    ],
+  },
+  {
+    id: 'search_term',
+    label: 'Search terms',
+    resource: 'search_term_view',
+    dims: [
+      'campaign.name',
+      'ad_group.name|Ad group',
+      'search_term_view.search_term|Search term',
+      'search_term_view.status|Search term status',
+    ],
+    defaults: ['campaign.name', 'search_term_view.search_term'],
+  },
+  {
+    id: 'negative_keyword',
+    label: 'Negative keywords (campaign)',
+    resource: 'campaign_criterion',
+    where: "campaign_criterion.negative = TRUE AND campaign_criterion.type = 'KEYWORD'",
+    dated: false,
+    note: 'The current campaign-level negative keywords. A list, so it has no date range.',
+    dims: [
+      'campaign.name',
+      'campaign_criterion.keyword.text|Negative keyword',
+      'campaign_criterion.keyword.match_type|Match type',
+      'campaign.status',
+    ],
+    defaults: [
+      'campaign.name',
+      'campaign_criterion.keyword.text',
+      'campaign_criterion.keyword.match_type',
+    ],
+  },
+  {
+    id: 'negative_keyword_ad_group',
+    label: 'Negative keywords (ad group)',
+    resource: 'ad_group_criterion',
+    where: "ad_group_criterion.negative = TRUE AND ad_group_criterion.type = 'KEYWORD'",
+    dated: false,
+    note: 'The current ad-group-level negative keywords. A list, so it has no date range.',
+    dims: [
+      'campaign.name',
+      'ad_group.name|Ad group',
+      'ad_group_criterion.keyword.text|Negative keyword',
+      'ad_group_criterion.keyword.match_type|Match type',
+    ],
+    defaults: [
+      'campaign.name',
+      'ad_group.name',
+      'ad_group_criterion.keyword.text',
+      'ad_group_criterion.keyword.match_type',
+    ],
+  },
+  {
+    id: 'conversion_action',
+    label: 'Conversions by action',
+    resource: 'campaign',
+    filter: '',
+    note: 'Conversions split by conversion action. Google does not allow clicks, impressions or cost beside this split.',
+    dims: [
+      'campaign.name',
+      'segments.conversion_action_name|Conversion action',
+      'segments.conversion_action_category|Conversion category',
+    ],
+    metrics: [
+      'metrics.conversions',
+      'metrics.conversions_value',
+      'metrics.all_conversions',
+      'metrics.all_conversions_value',
+      'metrics.view_through_conversions',
+    ],
+    defaults: [
+      'campaign.name',
+      'segments.conversion_action_name',
+      'metrics.conversions',
+      'metrics.conversions_value',
+    ],
+  },
+  {
+    id: 'geographic',
+    label: 'Geographic performance',
+    resource: 'geographic_view',
+    note: 'Locations arrive as Google geo target IDs (2840 is the United States).',
+    dims: [
+      'campaign.name',
+      'geographic_view.country_criterion_id|Country ID',
+      'geographic_view.location_type|Location type',
+      'segments.geo_target_region|Region ID',
+      'segments.geo_target_city|City ID',
+    ],
+    defaults: ['campaign.name', 'geographic_view.country_criterion_id'],
+  },
+  {
+    id: 'age',
+    label: 'Age performance',
+    resource: 'age_range_view',
+    dims: ['campaign.name', 'ad_group.name|Ad group', 'ad_group_criterion.age_range.type|Age'],
+    defaults: ['campaign.name', 'ad_group_criterion.age_range.type'],
+  },
+  {
+    id: 'gender',
+    label: 'Gender performance',
+    resource: 'gender_view',
+    dims: ['campaign.name', 'ad_group.name|Ad group', 'ad_group_criterion.gender.type|Gender'],
+    defaults: ['campaign.name', 'ad_group_criterion.gender.type'],
+  },
+  {
+    id: 'audience',
+    label: 'Audience performance',
+    resource: 'ad_group_audience_view',
+    dims: [
+      'campaign.name',
+      'ad_group.name|Ad group',
+      'ad_group_criterion.display_name|Audience',
+      'ad_group_criterion.type|Audience type',
+    ],
+    defaults: ['campaign.name', 'ad_group_criterion.display_name'],
+  },
+  {
+    id: 'landing_page',
+    label: 'Landing pages',
+    resource: 'landing_page_view',
+    skip: ['metrics.view_through_conversions'],
+    dims: ['campaign.name', 'landing_page_view.unexpanded_final_url|Landing page'],
+    defaults: ['landing_page_view.unexpanded_final_url'],
+  },
+  {
+    id: 'placement',
+    label: 'Placements',
+    resource: 'group_placement_view',
+    dims: [
+      'campaign.name',
+      'group_placement_view.display_name|Placement',
+      'group_placement_view.placement_type|Placement type',
+      'group_placement_view.target_url|Placement URL',
+    ],
+    defaults: ['campaign.name', 'group_placement_view.display_name'],
+  },
+  {
+    id: 'asset_group',
+    label: 'Performance Max asset groups',
+    resource: 'asset_group',
+    skip: ['metrics.average_cpm'],
+    dims: [
+      'campaign.name',
+      'asset_group.name|Asset group',
+      'asset_group.status|Asset group status',
+    ],
+    defaults: ['campaign.name', 'asset_group.name'],
+  },
+  {
+    id: 'shopping',
+    label: 'Shopping products',
+    resource: 'shopping_performance_view',
+    skip: ['metrics.average_cpm', 'metrics.interactions', 'metrics.view_through_conversions'],
+    dims: [
+      'campaign.name',
+      'segments.product_title|Product',
+      'segments.product_item_id|Product ID',
+      'segments.product_brand|Brand',
+      'segments.product_type_l1|Product type',
+    ],
+    defaults: ['segments.product_title'],
+  },
+];
+
+function dmvGoogleAdsLevelFields_(level) {
+  var dated = level.dated !== false;
+  return (dated ? DMV_GOOGLE_ADS_SEGMENTS : [])
+    .concat(level.dims)
+    .concat(dated ? level.metrics || DMV_GOOGLE_ADS_METRICS : [])
+    .filter(function (entry) {
+      // Metrics Google rejects at this level, found by running each against the live API.
+      return (level.skip || []).indexOf(entry) < 0;
+    })
+    .map(function (entry) {
+      var parts = entry.split('|');
+      var column = dmvGoogleAdsQueryColumn_(parts[0]);
+      if (parts[1]) column.label = parts[1];
+      column.default =
+        level.defaults.indexOf(parts[0]) >= 0 ||
+        (!level.metrics && DMV_GOOGLE_ADS_CORE.indexOf(parts[0]) >= 0);
+      return column;
+    });
+}
+
+function dmvGoogleAdsLevelReport_(level) {
+  var curated = dmvGoogleAdsLevelFields_(level);
+  return {
+    id: level.id,
+    label: level.label,
+    description:
+      (level.note || 'One row per combination of the dimensions you select.') +
+      ' Load columns lists every dimension and metric Google Ads offers at this level.',
+    // The chat reaches every level through the custom query instead of listing them all.
+    chat: false,
+    fields: curated,
+    configFields: [],
+    dateRange: level.dated !== false,
+    fetch: function (ctx) {
+      var names = ctx.fields && ctx.fields.length ? ctx.fields : dmvDefaultFields_(curated);
+      var metrics = names.some(function (name) {
+        return name.indexOf('metrics.') === 0;
+      });
+      // Entities that never served would otherwise fill a performance report with empty rows.
+      var filter = level.filter === undefined ? 'metrics.impressions > 0' : level.filter;
+      var where = [level.where, metrics ? filter : ''].filter(Boolean).join(' AND ');
+      var order =
+        names.indexOf('segments.date') >= 0
+          ? 'segments.date'
+          : names.indexOf('metrics.cost_micros') >= 0
+            ? 'metrics.cost_micros DESC'
+            : '';
+      // Without a date column the report is a ranking, so the row limit keeps the top rows
+      // by spend, as reporting tools do for search terms. A trend needs every row and fails
+      // instead when it is over the limit.
+      var ranked = order === 'metrics.cost_micros DESC';
+      var labels = {};
+      curated.forEach(function (column) {
+        labels[column.key] = column.label;
+      });
+      var query = Object.create(ctx);
+      query.fields = [];
+      query.labels = labels;
+      query.config = {
+        gaql:
+          'SELECT ' +
+          names.join(', ') +
+          ' FROM ' +
+          level.resource +
+          (where ? ' WHERE ' + where : '') +
+          (order ? ' ORDER BY ' + order : '') +
+          (ranked ? ' LIMIT ' + ctx.maxRows : ''),
+      };
+      var result = dmvGoogleAdsQueryFetch_(query);
+      result.metadata.grain = level.label;
+      if (ranked && result.rows.length === ctx.maxRows)
+        result.metadata.note =
+          'Top ' + ctx.maxRows.toLocaleString() + ' rows by spend; raise the row limit for more.';
+      return result;
+    },
+    discoverFields: function (ctx) {
+      var query = Object.create(ctx);
+      query.config = { gaql: 'FROM ' + level.resource };
+      var known = {};
+      curated.forEach(function (column) {
+        known[column.key] = true;
+      });
+      return curated.concat(
+        dmvGoogleAdsQueryDiscover_(query).filter(function (column) {
+          column.default = false;
+          return (
+            !known[column.key] &&
+            (level.skip || []).indexOf(column.key) < 0 &&
+            (level.dated !== false || !/^(metrics|segments)\./.test(column.key))
+          );
+        })
+      );
+    },
+  };
 }
 
 function dmvGoogleAdsTest_(ctx) {
@@ -527,12 +923,13 @@ function dmvGoogleAdsErrorMessage_(code, body) {
           );
       });
   });
+  // The transport shows at most 400 characters of guidance.
   if (queryErrors.length)
     return (
       'Google Ads rejected the query. ' +
-      queryErrors.slice(0, 3).join(' | ') +
-      ' GAQL joins conditions with AND only (no parentheses or OR); use discover_fields with "FROM <resource>" to see which fields fit together.'
-    );
+      queryErrors.slice(0, 2).join(' | ').slice(0, 250) +
+      ' Conditions join with AND only; Load columns or discover_fields lists the fields that fit.'
+    ).slice(0, 400);
   // Otherwise only fixed guidance is returned: other provider messages can contain secrets.
   var guidance = {
     ACCESS_TOKEN_SCOPE_INSUFFICIENT:
@@ -676,5 +1073,5 @@ dmvRegisterConnector_({
       fetch: dmvGoogleAdsQueryFetch_,
       discoverFields: dmvGoogleAdsQueryDiscover_,
     },
-  ],
+  ].concat(DMV_GOOGLE_ADS_LEVELS.map(dmvGoogleAdsLevelReport_)),
 });

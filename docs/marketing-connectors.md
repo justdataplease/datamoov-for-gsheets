@@ -15,6 +15,32 @@ All requests originate in Apps Script; there is no DataMoov backend. Tests use o
 | `microsoft_ads / campaign_daily` | Date, account ID, currency, campaign ID/name, spend, impressions, clicks, conversions, revenue          | Optional account name, status, CTR, average CPC and return on ad spend                                                                                                     |
 | `search_console / search_performance` | Date, query, clicks, impressions, CTR, position                                                    | Optional page, country and device dimensions; selected dimensions define the grouping                                                                                      |
 
+### Google Ads report levels
+
+Beside the daily campaign report, the report builder lists one report per Google Ads level:
+account, campaign, ad group, ad, keyword, search term, negative keywords (campaign and ad group),
+conversion action, geography, age, gender, audience, landing page, placement, Performance Max
+asset group and Shopping product. Each level starts with its usual dimensions and the core
+metrics selected. **Load columns** asks `GoogleAdsFieldService` for every attribute, segment and
+metric compatible with that level's resource and appends them unselected; the search box above
+the list finds a field by label or GAQL name. The builder keeps choices already made when columns
+are loaded again.
+
+- Levels are built on the custom query path, so typing, micros conversion, currency and the date
+  range behave the same way. Rows without impressions are left out.
+- Choosing **Date** (or week, month) makes the report a trend, ordered by date; it must fit the
+  row limit. Without a date column the report is a ranking ordered by spend, and the row limit
+  keeps the top rows ("Top 10,000 rows by spend" appears in the report notes).
+- Negative keyword levels have no metrics or period; their notes say "No date range".
+- A few metrics are not offered at levels where Google rejects them (for example average CPM on
+  Shopping products). These were found by running every curated field against the live API.
+- The levels are for the manual builder. Chat uses the custom query instead, which can express
+  any of them.
+
+One request returns at most the row limit plus one row: Google Ads pages hold 10,000 rows
+whatever the client asks, and a response is capped at 8 MB, so the query carries a `LIMIT`
+rather than downloading a report that would be refused anyway.
+
 YouTube Ads has no API of its own: video campaigns are bought and reported through Google Ads, so the YouTube report uses the Google Ads connection and adds `campaign.advertising_channel_type = 'VIDEO'` to the same daily campaign query. View rate and quartile rates are ratios; CPV is converted from micros.
 
 **TikTok Ads** uses the Marketing API `v1.3` integrated report at `AUCTION_CAMPAIGN` level with `stat_time_day` and `campaign_id` dimensions, paged at 1,000 rows and checked against the reported total; the campaign name is requested as a metric, as TikTok defines it. Rates such as CTR and conversion rate are percentages in the API and are divided by 100. The advertiser profile supplies currency and timezone. Supply the numeric advertiser ID and a long-lived access token authorized for it. [Reporting](https://business-api.tiktok.com/portal/docs?id=1738864739862530)

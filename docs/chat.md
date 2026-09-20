@@ -108,8 +108,8 @@ passed as native date groups. An already prepared month column can be an ordinar
 A report imports one source into a table. A **dashboard** is what you ask Chat for when you want
 to *see* performance: it fetches 1 to 6 datasets, writes each to its own tab, and builds one
 **Dashboard** tab with scorecards on top, native Sheets charts below them, then the data sources
-and the table behind every chart. You do not create reports first; the dashboard carries its own
-queries.
+and any tables. The numbers behind the charts go to a hidden **(chart data)** tab. You do not
+create reports first; the dashboard carries its own queries.
 
 For example: **"Create a performance dashboard for Google Ads and Facebook Ads for the last 3
 months, every week."** Chat saves the plan and runs it once. You get:
@@ -118,8 +118,12 @@ months, every week."** Chat saves the plan and runs it once. You get:
   data came from: dataset, source, connection, report, date range, row count and refresh time.
   The table starts on row 4.
 - **Performance Dashboard**: the title and refresh time, scorecards (spend, clicks, conversions),
-  charts such as weekly spend by platform and top campaigns, a **Data sources** table that lists
-  every dataset with its date range, rows and tab, and the numbers behind each chart.
+  charts such as weekly spend by platform and top campaigns, and a **Data sources** table that
+  lists every dataset with its date range, rows and tab.
+- **Performance Dashboard (chart data)**, hidden: the small table each chart reads. Every refresh
+  rewrites these tables and points each chart at the new range, so a period that grows ("this
+  month", "until today") adds points to the chart instead of being cut off. Unhide the tab from
+  the Sheets tab menu to check a chart's numbers.
 
 Datasets can be different subjects, not only the same report from several accounts. With the
 Google Ads **Custom query (GAQL)** report one dashboard can hold campaigns, ad groups, keywords,
@@ -132,8 +136,9 @@ The saved card appears under **Reports > Dashboards** with a link per tab and th
 last refresh. **Refresh dashboard** fetches every dataset again and rebuilds every tab, scorecard
 and chart from the saved plan: no AI call, no AI key needed. Charts the dashboard created are
 updated in place, so a chart you moved or resized stays where you put it; one you deleted comes
-back. **Create in chat** opens a draft request you can edit. Removing the saved setup keeps its
-tabs.
+back. **Create in chat** opens a draft request you can edit. **Remove** deletes the saved plan
+together with the tabs the dashboard created (the dataset tabs, the Dashboard tab and the hidden
+chart data tab) after listing them for confirmation. Tabs you made yourself are never touched.
 
 A request such as **"Create a marketing performance week vs previous period"** follows the same
 workflow, including after you answer a source-selection question. It saves two datasets per
@@ -157,6 +162,9 @@ Limits and guarantees:
   named in the error, with the limit it used.
 - Every dataset and every tab must pass validation before anything is written. A failed source
   or an occupied destination leaves all previous tabs and charts unchanged.
+- A dashboard writes to tabs of its own. A tab name that already holds content is refused when
+  the plan is saved, before anything is fetched, and the message names the tab and suggests a
+  free name.
 - Money in different currencies is never added: scorecards and chart series split by currency.
   Rates and averages cannot be summed.
 - The tabs belong to the dashboard. Editing values inside its tables, or typing into the blank
