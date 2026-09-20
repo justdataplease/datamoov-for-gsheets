@@ -261,6 +261,7 @@ function installPreview(initial) {
   }
   const handlers = {
     dmvBootstrap: () => copy(data),
+    dmvManageReportDefinitions: () => ({ preview: true }),
     dmvDiscoverAccounts(input) {
       window.DATAMOOV_PREVIEW_LAST_ACCOUNT_REQUEST = copy(input);
       if (Array.isArray(window.DATAMOOV_PREVIEW_ACCOUNTS))

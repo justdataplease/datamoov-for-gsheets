@@ -43,6 +43,22 @@ function dmvAccountSelectionKeys_(connector) {
   return keys;
 }
 
+// Target identity fields can be declared without offering account discovery.
+function dmvConnectionIdentityKeys_(connector) {
+  var declared = connector.connectionKeys || [];
+  if (!Array.isArray(declared)) throw new Error('Invalid connection identity declaration.');
+  var keys = dmvAccountSelectionKeys_(connector).slice();
+  declared.forEach(function (key) {
+    var field = (connector.authFields || []).filter(function (item) {
+      return item.key === key;
+    })[0];
+    if (!field || !field.perConnection || field.secret || field.type === 'password')
+      throw new Error('Connection identity must use non-secret per-connection fields.');
+    if (keys.indexOf(key) < 0) keys.push(key);
+  });
+  return keys;
+}
+
 function dmvConnectionCredentials_(connector, input, previous, fields) {
   var credentials = {};
   (fields || connector.authFields || []).forEach(function (field) {
@@ -176,7 +192,7 @@ function dmvSaveConnection(input) {
       });
     var selectionChanged =
       previous &&
-      dmvAccountSelectionKeys_(connector).some(function (key) {
+      dmvConnectionIdentityKeys_(connector).some(function (key) {
         return String(before[key] || '') !== String(credentials[key] || '');
       });
     if (

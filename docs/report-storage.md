@@ -6,7 +6,7 @@ Spreadsheet collaborators can read these definitions, and a spreadsheet copy ret
 
 ## Using shared definitions
 
-Use **Extensions > DataMoov > Manage report definitions** to show the configuration tab. Normal report creation and editing remain available in the sidebar.
+Use **Reports > Manage report definitions** in the sidebar to show the configuration tab. Normal report creation and editing remain available in the sidebar.
 
 When another user opens a shared report, or when you open a copied spreadsheet, choose your own connection and save the report before running it. New private bindings start on demand; enable a refresh schedule explicitly for your own account. A shared definition never supplies someone else's credentials or turns on their schedule for you.
 
@@ -46,7 +46,7 @@ Cell A1 identifies the format as `DataMoov report definitions v1`. Row 2 contain
 | L | Row limit | Maximum accepted report rows |
 | M | Schema version | Definition schema version |
 
-Keep the generated headers and schema intact. DataMoov rejects formulas, malformed JSON, duplicate definition IDs and invalid rows instead of guessing which configuration to execute. JSON values and all other cells are treated as data, never as instructions. Use the sidebar when unsure how a setting should be represented. If the settings sheet is malformed, refreshes stop until it is repaired; use **Manage report definitions** to open it even when the sidebar cannot load. Unchanged reports do not lose their private approval because another row is malformed.
+Keep the generated headers and schema intact. DataMoov rejects formulas, malformed JSON, duplicate definition IDs and invalid rows instead of guessing which configuration to execute. JSON values and all other cells are treated as data, never as instructions. Use the sidebar when unsure how a setting should be represented. If the settings sheet is malformed, refreshes stop until it is repaired; use **Reports > Manage report definitions** to open it even when the report list cannot load. Unchanged reports do not lose their private approval because another row is malformed.
 
 Do not put access tokens, passwords or service-account keys in report configuration. Those belong in **Settings > Credentials**. Anything entered in this tab is spreadsheet content visible to collaborators.
 

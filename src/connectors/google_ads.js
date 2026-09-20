@@ -41,9 +41,9 @@ function dmvGoogleAdsVideoFields_() {
     f('campaign.name', 'Campaign', 'text', true),
     f('metrics.cost_micros', 'Spend', 'currency', true, { micros: true }),
     f('metrics.impressions', 'Impressions', 'number', true),
-    f('metrics.video_views', 'Video views', 'number', true),
-    f('metrics.video_view_rate', 'View rate', 'percent', true),
-    f('metrics.average_cpv', 'Average CPV', 'currency', true, { micros: true }),
+    f('metrics.video_trueview_views', 'TrueView views', 'number', true),
+    f('metrics.video_trueview_view_rate', 'TrueView view rate', 'percent', true),
+    f('metrics.trueview_average_cpv', 'Average TrueView CPV', 'currency', true, { micros: true }),
     f('metrics.clicks', 'Clicks', 'number', true),
     f('metrics.conversions', 'Conversions', 'number', true),
     f('metrics.conversions_value', 'Conversion value', 'currency', true),
@@ -133,8 +133,28 @@ function dmvGoogleAdsDiscover_(ctx, available) {
   });
 }
 
+// Preserve saved report field keys while querying the current Google Ads API names.
+function dmvGoogleAdsColumns_(selected, available) {
+  var aliases = {
+    'metrics.video_views': 'metrics.video_trueview_views',
+    'metrics.video_view_rate': 'metrics.video_trueview_view_rate',
+    'metrics.average_cpv': 'metrics.trueview_average_cpv',
+  };
+  var compatible = available.slice();
+  Object.keys(aliases).forEach(function (legacy) {
+    var field = available.filter(function (item) {
+      return item.key === aliases[legacy];
+    })[0];
+    if (field)
+      compatible.push(
+        Object.assign({}, field, { key: legacy, apiName: field.key, default: false })
+      );
+  });
+  return dmvSelectFields_(selected, compatible);
+}
+
 function dmvGoogleAdsValue_(row, field) {
-  var value = field.key.split('.').reduce(function (object, key) {
+  var value = (field.apiName || field.key).split('.').reduce(function (object, key) {
     var camel = key.replace(/_([a-z])/g, function (_, letter) {
       return letter.toUpperCase();
     });
@@ -161,10 +181,12 @@ function dmvGoogleAdsVideoFetch_(ctx) {
 }
 
 function dmvGoogleAdsCampaignFetch_(ctx, available, extraWhere, grain) {
-  var columns = dmvSelectFields_(ctx.fields, available);
+  var columns = dmvGoogleAdsColumns_(ctx.fields, available);
   var connection = dmvGoogleAdsConnection_(ctx);
-  var names = columns.map(function (f) {
-    return f.key;
+  var names = [];
+  columns.forEach(function (field) {
+    var name = field.apiName || field.key;
+    if (names.indexOf(name) < 0) names.push(name);
   });
   // Always retain the report's documented daily-campaign grain, even with a smaller output selection.
   [
@@ -289,20 +311,62 @@ function dmvGoogleAdsDiscoverAccounts_(ctx) {
 
 function dmvGoogleAdsErrorMessage_(code, body) {
   var details = body && body.error && body.error.details;
-  if (!Array.isArray(details)) return '';
-  var errors = [];
-  details.slice(0, 20).forEach(function (detail) {
-    if (detail && Array.isArray(detail.errors)) errors = errors.concat(detail.errors.slice(0, 20));
-  });
-  var has = function (value) {
-    return errors.some(function (error) {
-      return error && error.errorCode && error.errorCode.authorizationError === value;
+  var codes = Object.create(null);
+  (Array.isArray(details) ? details : []).slice(0, 20).forEach(function (detail) {
+    if (!detail || typeof detail !== 'object') return;
+    if (detail['@type'] === 'type.googleapis.com/google.rpc.ErrorInfo') codes[detail.reason] = true;
+    if (!Array.isArray(detail.errors)) return;
+    detail.errors.slice(0, 20).forEach(function (error) {
+      var value = error && error.errorCode;
+      if (!value || typeof value !== 'object') return;
+      ['authenticationError', 'authorizationError', 'requestError'].forEach(function (kind) {
+        if (typeof value[kind] === 'string') codes[value[kind]] = true;
+      });
     });
+  });
+  // Only fixed guidance is returned: provider messages and error triggers can contain secrets.
+  var guidance = {
+    ACCESS_TOKEN_SCOPE_INSUFFICIENT:
+      'The Google credential lacks the Google Ads scope. Reauthorize its OAuth client with https://www.googleapis.com/auth/adwords and save the new refresh token. A GA4-only grant cannot read Ads.',
+    NOT_ADS_USER:
+      'The Google identity behind this credential has no Google Ads access. Invite that Google user or the service account email under Google Ads > Admin > Access and security, then retry.',
+    OAUTH_TOKEN_EXPIRED:
+      'The Google Ads access token has expired. Replace a pasted token, or use a service account key or OAuth client with a refresh token for automatic renewal.',
+    OAUTH_TOKEN_INVALID:
+      'Google Ads rejected the access token. Choose the correct saved Google credential. In Access token mode, paste a current access token, not a refresh token, developer token, or API key.',
+    OAUTH_TOKEN_HEADER_INVALID:
+      'The Google Ads access token is malformed. Paste only the token value, without a Bearer prefix, quotes, or line breaks.',
+    OAUTH_TOKEN_REVOKED:
+      'Google Ads access was revoked. Reauthorize the Google identity with the Ads scope and update the saved credential.',
+    OAUTH_TOKEN_DISABLED:
+      'Google Ads access was disabled. Check the Google identity and reauthorize it before updating the saved credential.',
+    CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION:
+      "The credential's Google Cloud project has Google Ads Test access only. Open Google Ads API Overview in that project and apply for Explorer access to use production accounts.",
+    USER_PERMISSION_DENIED:
+      'These credentials cannot access the selected Google Ads account. Use Find accounts, or grant the identity access. For access through a manager, enter its Manager customer ID.',
+    INVALID_LOGIN_CUSTOMER_ID_SERVING_CUSTOMER_ID_COMBINATION:
+      'The selected Google Ads manager cannot access this customer. Use Find accounts or correct the customer and manager IDs.',
+    CUSTOMER_NOT_FOUND:
+      'Google Ads could not find this customer. Check the advertising Customer ID or choose it with Find accounts.',
+    CLIENT_CUSTOMER_ID_INVALID:
+      'Google Ads rejected the customer ID. Enter the 10-digit advertising account ID, with or without hyphens.',
+    CUSTOMER_NOT_ENABLED:
+      'This Google Ads customer is not enabled. Complete account setup or reactivate it in Google Ads before connecting.',
+    PROJECT_DISABLED:
+      "The credential's Google Cloud project cannot access Google Ads API. Enable the API and check its API access level in that project.",
+    SERVICE_DISABLED:
+      'Enable Google Ads API in the Google Cloud project that owns this credential, then retry.',
+    TWO_STEP_VERIFICATION_NOT_ENROLLED:
+      'This Google Ads account requires 2-Step Verification. Enable it for the Google identity that authorized this credential.',
+    ADVANCED_PROTECTION_NOT_ENROLLED:
+      'This Google Ads account requires Advanced Protection. Enroll the Google identity that authorized this credential.',
   };
-  if (has('CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION'))
-    return 'The Google Cloud project used for this Google sign-in has Google Ads Test access only. Open Google Ads API Overview in that project and apply for Explorer access to use production accounts.';
-  if (has('USER_PERMISSION_DENIED'))
-    return 'These credentials cannot access the selected Google Ads account. Use Find accounts to choose an accessible account, or grant the credential access in Google Ads.';
+  var match = Object.keys(guidance).filter(function (key) {
+    return codes[key];
+  })[0];
+  if (match) return 'Google Ads (' + match + '): ' + guidance[match];
+  if (code === 401)
+    return 'Google Ads could not authenticate this credential (HTTP 401). Check the selected Google credential, its authorization mode and Ads access. Use OAuth client credentials with an Ads-authorized refresh token, or a service account invited to Google Ads.';
   return '';
 }
 

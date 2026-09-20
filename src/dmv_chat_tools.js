@@ -8,7 +8,7 @@ var DMV_CHAT_RESULTS = {
   sampleHead: 5,
   sampleTail: 3,
   inlineRows: 20,
-  maxSummaryRows: 500,
+  maxSummaryRows: 20000,
   readMaxRows: 500,
   maxDescribedTables: 60,
   readMaxColumns: 30,
@@ -26,7 +26,12 @@ function dmvChatResultId_() {
 function dmvChatStoreResult_(session, result) {
   var id = dmvChatResultId_();
   session.results[id] = result;
-  var text = JSON.stringify({ columns: result.columns, rows: result.rows, source: result.source });
+  var text = JSON.stringify({
+    columns: result.columns,
+    rows: result.rows,
+    source: result.source,
+    metadata: result.metadata,
+  });
   if (text.length <= DMV_CHAT_RESULTS.maxChars) {
     try {
       var values = {},
@@ -49,7 +54,7 @@ function dmvChatResult_(session, id) {
   id = String(id || '');
   if (!/^r[a-f0-9]{8}$/.test(id))
     throw new Error(
-      'Unknown resultId. Use the resultId returned by run_report, summarize or read_sheet.'
+      'Unknown resultId. Use a resultId returned by run_report, combine_results, summarize or read_sheet.'
     );
   if (session.results[id]) return session.results[id];
   var cache = CacheService.getUserCache();
@@ -58,6 +63,12 @@ function dmvChatResult_(session, id) {
   var keys = [];
   for (var i = 0; i < parts; i++) keys.push('dmv:chat:' + id + ':' + i);
   var chunks = cache.getAll(keys);
+  if (
+    keys.some(function (key) {
+      return typeof chunks[key] !== 'string' || !chunks[key];
+    })
+  )
+    throw new Error('Result ' + id + ' has expired. Run the report again.');
   var text = keys
     .map(function (key) {
       return chunks[key] || '';
@@ -127,7 +138,12 @@ function dmvChatStats_(result) {
         }
       }
     });
-    if (numeric && dmvChatAdditive_(column)) entry.sum = Math.round(sum * 10000) / 10000;
+    if (
+      numeric &&
+      dmvChatAdditive_(column) &&
+      !(column.type === 'currency' && dmvChatCurrencies_(result).length > 1)
+    )
+      entry.sum = Math.round(sum * 10000) / 10000;
     if (!numeric) entry.distinct = distinct >= 1000 ? '1000+' : distinct;
     stats[column.key] = entry;
   });
@@ -404,6 +420,171 @@ function dmvChatDiscoverFields_(session, input) {
   return response;
 }
 
+// Currency totals stay separate when results from different accounts are combined.
+function dmvChatCurrencies_(result, rows) {
+  var metadata = result.metadata || {};
+  var key = metadata.currencyColumn;
+  var scalar = metadata.currency || metadata.currencyCode;
+  if (!key) return scalar && /^[A-Z]{3}$/.test(scalar) ? [scalar] : [];
+  var seen = Object.create(null);
+  (rows || result.rows).forEach(function (row) {
+    if (!/^[A-Z]{3}$/.test(String(row[key] || '')))
+      throw new Error(
+        'This result is missing its currency context. Run the original report again.'
+      );
+    seen[String(row[key])] = true;
+  });
+  return Object.keys(seen).sort();
+}
+
+/* combine_results: append actual fetched rows with an explicit, common column mapping.
+   No joins, user-supplied rows, arithmetic or provider-specific field switches. */
+function dmvChatCombine_(session, input) {
+  var sources = input && input.sources;
+  if (!Array.isArray(sources) || sources.length < 2 || sources.length > 20)
+    throw new Error('Combine between 2 and 20 existing results.');
+  var columns = [],
+    rows = [],
+    seenResults = Object.create(null),
+    labels = Object.create(null);
+  var money = false,
+    shape = null;
+  sources.forEach(function (item) {
+    if (!item || typeof item !== 'object')
+      throw new Error('Each source needs resultId, label and columns.');
+    var result = dmvChatResult_(session, item.resultId);
+    if (result.metadata && result.metadata.limited)
+      throw new Error(
+        'This result is a limited ranking. Combine the original complete reports, or summarize them with a sufficient limit first.'
+      );
+    if (seenResults[item.resultId]) throw new Error('Do not combine the same result twice.');
+    seenResults[item.resultId] = true;
+    var label = dmvText_(item.label, 'Source label', 100, true);
+    if (labels[label]) throw new Error('Use a distinct source label for each account or result.');
+    labels[label] = true;
+    if (!Array.isArray(item.columns) || !item.columns.length || item.columns.length > 78)
+      throw new Error('Map between 1 and 78 columns per source.');
+    var keys = Object.create(null);
+    var mapping = item.columns.map(function (mapping) {
+      if (!mapping || typeof mapping !== 'object')
+        throw new Error('Each mapping needs from and to.');
+      var key = String(mapping.to || '');
+      if (
+        !/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(key) ||
+        ['source', 'constructor', 'prototype', '__proto__'].indexOf(key) >= 0 ||
+        keys[key]
+      )
+        throw new Error('Use unique ordinary output names; source is reserved.');
+      keys[key] = true;
+      var column = dmvChatColumn_(result, mapping.from, 'source column');
+      if (column.type === 'currency') money = true;
+      return { key: key, column: column };
+    });
+    var currentShape = mapping
+      .map(function (entry) {
+        return entry.key + ':' + (entry.column.type || 'text');
+      })
+      .sort()
+      .join('|');
+    if (shape !== null && shape !== currentShape)
+      throw new Error('Every source must map the same output columns with matching types.');
+    if (shape === null) {
+      shape = currentShape;
+      columns = [{ key: 'source', label: 'Source', type: 'text', role: 'dimension' }].concat(
+        mapping.map(function (entry) {
+          return {
+            key: entry.key,
+            label: entry.key.replace(/_/g, ' '),
+            type: entry.column.type || 'text',
+            role: entry.column.role,
+            additive: dmvChatAdditive_(entry.column) ? undefined : false,
+          };
+        })
+      );
+    } else {
+      mapping.forEach(function (entry) {
+        if (!dmvChatAdditive_(entry.column))
+          columns.filter(function (column) {
+            return column.key === entry.key;
+          })[0].additive = false;
+      });
+    }
+    if (rows.length + result.rows.length > DMV_LIMITS.maxRows)
+      throw new Error('Combined results exceed 20,000 rows. Narrow each report first.');
+    result.rows.forEach(function (original) {
+      var row = { source: label };
+      mapping.forEach(function (entry) {
+        row[entry.key] =
+          original[entry.column.key] === undefined ? null : original[entry.column.key];
+      });
+      // A mapped currency wins; otherwise use the connector's account-currency metadata.
+      var sourceMetadata = result.metadata || {};
+      var sourceCurrency = sourceMetadata.currencyColumn
+        ? original[sourceMetadata.currencyColumn]
+        : sourceMetadata.currency || sourceMetadata.currencyCode;
+      if (keys.currency && sourceCurrency && row.currency !== sourceCurrency)
+        throw new Error(
+          'A mapped currency disagrees with the source account currency. Preserve its original currency codes.'
+        );
+      if (!keys.currency) row.currency = sourceCurrency || '';
+      rows.push(row);
+    });
+  });
+  if (money) {
+    if (
+      rows.some(function (row) {
+        return !/^[A-Z]{3}$/.test(String(row.currency || ''));
+      })
+    )
+      throw new Error(
+        'Currency is required to combine money. Fetch each account currency, map it to currency, and retry.'
+      );
+    var currencyColumn = columns.filter(function (column) {
+      return column.key === 'currency';
+    })[0];
+    if (currencyColumn && currencyColumn.type !== 'text')
+      throw new Error('Map currency codes to a text column named currency.');
+    if (!currencyColumn)
+      columns.push({ key: 'currency', label: 'Currency', type: 'text', role: 'dimension' });
+  } else if (
+    !columns.some(function (column) {
+      return column.key === 'currency';
+    })
+  ) {
+    rows.forEach(function (row) {
+      delete row.currency;
+    });
+  }
+  var metadata = {
+    complete: true,
+    grain: 'Rows appended from the selected results',
+    sources: sources.map(function (item) {
+      return {
+        label: item.label,
+        metadata: dmvChatMetadata_(dmvChatResult_(session, item.resultId).metadata),
+      };
+    }),
+  };
+  if (money) metadata.currencyColumn = 'currency';
+  var normalized = dmvNormalizeResult_(
+    { columns: columns, rows: rows, metadata: metadata },
+    DMV_LIMITS.maxRows
+  );
+  var stored = {
+    columns: normalized.columns,
+    rows: normalized.rows,
+    metadata: metadata,
+    source: 'Combined: ' + Object.keys(labels).join(', '),
+  };
+  var id = dmvChatStoreResult_(session, stored);
+  session.events.push({
+    kind: 'summary',
+    text: 'Combined ' + sources.length + ' results into ' + rows.length.toLocaleString() + ' rows',
+    ref: id,
+  });
+  return dmvChatDescribe_(session, stored, id);
+}
+
 /* summarize: the in-memory query planner over a fetched result. */
 function dmvChatDateBucket_(value, bucket) {
   var text = String(value || '');
@@ -505,6 +686,21 @@ function dmvChatSummarize_(session, input) {
       return dmvChatCompare_(row[filter.column.key], filter.op, filter.value, filter.numeric);
     });
   });
+  if (
+    (metrics.some(function (metric) {
+      return metric.column.type === 'currency';
+    }) ||
+      groupBy.some(function (column) {
+        return column.type === 'currency';
+      })) &&
+    dmvChatCurrencies_(result, rows).length > 1 &&
+    !groupBy.some(function (column) {
+      return column.key === result.metadata.currencyColumn;
+    })
+  )
+    throw new Error(
+      'These results use different currencies. Include currency in groupBy or filter to one currency before aggregating money.'
+    );
   var groups = Object.create(null),
     order = [];
   rows.forEach(function (row) {
@@ -568,6 +764,7 @@ function dmvChatSummarize_(session, input) {
       label: column.label || column.key,
       type: column.type === 'date' && bucket !== 'day' ? 'text' : column.type,
       role: 'dimension',
+      additive: column.additive === false ? false : undefined,
     };
   });
   metrics.forEach(function (metric) {
@@ -587,7 +784,8 @@ function dmvChatSummarize_(session, input) {
       type:
         metric.agg === 'count' || metric.agg === 'count_distinct' ? 'number' : metric.column.type,
       role: 'metric',
-      additive: ['avg', 'min', 'max'].indexOf(metric.agg) >= 0 ? false : undefined,
+      additive:
+        ['avg', 'min', 'max', 'count_distinct'].indexOf(metric.agg) >= 0 ? false : undefined,
     });
   });
   var output = order.map(function (id) {
@@ -636,12 +834,32 @@ function dmvChatSummarize_(session, input) {
     DMV_CHAT_RESULTS.maxSummaryRows,
     'limit'
   );
-  var truncated = output.length > limit;
+  var totalGroups = output.length;
+  var truncated = totalGroups > limit;
   output = output.slice(0, limit);
+  var summaryMetadata = Object.assign({}, result.metadata || {});
+  if (
+    summaryMetadata.currencyColumn &&
+    !columns.some(function (column) {
+      return column.key === summaryMetadata.currencyColumn;
+    })
+  ) {
+    var currencies = dmvChatCurrencies_(result, rows);
+    delete summaryMetadata.currencyColumn;
+    delete summaryMetadata.currency;
+    delete summaryMetadata.currencyCode;
+    if (currencies.length === 1) summaryMetadata.currency = currencies[0];
+  }
+  if (truncated) {
+    summaryMetadata.limited = true;
+    summaryMetadata.totalGroups = totalGroups;
+    summaryMetadata.keptGroups = output.length;
+    summaryMetadata.note = 'This is a limited ranking, not the complete report.';
+  }
   var stored = {
     columns: columns,
     rows: output,
-    metadata: {},
+    metadata: summaryMetadata,
     source: 'Summary of ' + (result.source || input.resultId),
   };
   var id = dmvChatStoreResult_(session, stored);

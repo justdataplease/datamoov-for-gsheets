@@ -89,6 +89,39 @@ and repeated values become JSON text cells. Nulls become empty cells; zero and
 false remain distinct values. Harmless schema descriptions/default modes do
 not invalidate a report, but changed columns/types require field refresh.
 
+## Snowflake
+
+The Snowflake connector uses the [SQL API](https://docs.snowflake.com/en/developer-guide/sql-api)
+directly from Apps Script. Save a **Programmatic access token** (recommended) or a pasted
+**OAuth access token** under Settings > Credentials, then create a Snowflake connection
+with the account identifier or exact Snowflake hostname and a read-only role. Warehouse,
+database and schema are optional when the Snowflake user has suitable defaults. Set an
+explicit database and schema for chat table discovery. No Google provider scopes or
+DataMoov backend are required.
+
+Use a dedicated role with USAGE on the warehouse/database/schema and SELECT on only
+needed tables or views. The SQL scanner is not a replacement for read-only database
+grants: functions may have side effects if the role is allowed to execute them. Restrict
+the token to that role. Snowflake network and authentication policies must permit Apps
+Script requests. See [programmatic access tokens](https://docs.snowflake.com/en/user-guide/programmatic-access-tokens)
+and [SQL API authentication](https://docs.snowflake.com/en/developer-guide/sql-api/authenticating).
+PATs and pasted OAuth tokens are not renewed by the add-on; replace them before expiry.
+
+**Save connection** runs SELECT 1. The SQL report accepts one SELECT or WITH query,
+wraps it as a subquery and requests one extra row beyond the chosen limit to detect
+overflow. **Load columns** executes the same wrapper with LIMIT 0. Each execution
+requests a 45-second statement timeout, polls within the shared deadline, and retrieves
+all result partitions. Missing rows, changed schemas, oversized responses and row-limit
+overflow stop the report before output is written. Snowflake compute charges still apply,
+including to previews and field discovery.
+
+Dates use ISO text. Floating-point values and small integer columns become numbers;
+exact decimals, large integers, timestamps with fractional precision and structured
+values remain text. Cast a metric to DOUBLE explicitly in SQL when floating-point
+aggregation is appropriate. Chat explores only the configured database/schema and runs
+its SQL through the same report adapter. Changing the account, database, schema, role
+or warehouse behind saved reports requires a new connection.
+
 ## Verification
 
 Run `node --test tests/business-connectors.test.mjs tests/sql.test.mjs` and
@@ -96,5 +129,3 @@ Run `node --test tests/business-connectors.test.mjs tests/sql.test.mjs` and
 values, custom fields, row-budget failure, blocked credential forwarding,
 read-only SQL boundaries, dry-run scan caps, async jobs, result completeness,
 and precise numeric/nested value handling.
-
-DataMoov

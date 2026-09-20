@@ -6,7 +6,6 @@ function onOpen(e) {
     .addItem('Open DataMoov', 'showSidebar')
     .addItem('Open DataMoov in a window', 'showWindow')
     .addItem('Refresh reports', 'dmvRefreshAll')
-    .addItem('Manage report definitions', 'dmvManageReportDefinitions')
     .addToUi();
 }
 

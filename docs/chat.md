@@ -32,7 +32,7 @@ plus one report fetch.
 - **Chart**: "Chart weekly spend by campaign" adds a native Sheets chart beside the table.
 - **Use existing tabs**: "Summarize the Orders tab by month" reads your own data (header row
   plus up to 500 rows × 30 columns).
-- **SQL sources**: for PostgreSQL and BigQuery the model first calls `describe_database`,
+- **SQL sources**: for PostgreSQL, BigQuery and Snowflake the model first calls `describe_database`,
   which lists the tables and columns of the schemas or datasets you chose on the connection
   (**Schemas for chat**, default `public`; **Datasets for chat** as `project.dataset`), then
   writes one read-only SELECT against those names. The same SQL guard as saved reports
@@ -83,7 +83,7 @@ Values that come back from providers are framed as data, not instructions.
   to the model are shortened.
 - The hidden `DataMoovReports` configuration tab is excluded from chat tab listings and
   cannot be read, written or charted through chat tools. Manage shared definitions through
-  the sidebar or **Manage report definitions** in the DataMoov menu. See
+  **Reports > Manage report definitions** in the sidebar. See
   [report storage](report-storage.md).
 
 ## Tools (for developers)
@@ -92,7 +92,8 @@ Values that come back from providers are framed as data, not instructions.
 | --- | --- |
 | `run_report` | Run a report of a saved connection; returns a `resultId`, columns, row count, statistics and samples |
 | `discover_fields` | Account-specific fields (GA4 custom definitions, HubSpot/Zendesk properties, SQL result columns), with a `search` filter |
-| `describe_database` | Tables and columns of the schemas/datasets a PostgreSQL or BigQuery connection scoped for chat, with a `search` filter on table names |
+| `describe_database` | Tables and columns of the schemas/datasets a SQL connection scoped for chat, with a `search` filter on table names |
+| `combine_results` | Append complete fetched results with matching column maps and a source label; preserves currency and source caveats |
 | `summarize` | Group, filter, aggregate, sort a result server-side; rates and averages cannot be summed |
 | `write_to_sheet` | Write a result as a formatted table through the protected writer |
 | `read_sheet` | Read a tab into a result |
@@ -108,3 +109,7 @@ arbitrary test connector and assert that provider secrets and the AI key never a
 request body, that tool errors teach (unknown columns list the real ones), that `ask_user`
 skips the rest of its round, and that the budget path disables tools for the final answer.
 They do not certify any provider's live behavior or pricing.
+
+### Multi-platform comparisons
+
+Chat can use `combine_results` to append fetched reports with explicit matching column maps and a source label per platform/account, then `summarize` by week or campaign. It never invents rows or exchanges currencies. Currency is required for combined monetary results, and mixed currencies cannot be aggregated without grouping or filtering by currency. Weekly buckets start Monday and include only dates inside the requested range; the first and last buckets of a month may be partial weeks. Google Ads already includes YouTube campaigns, so a YouTube subset is not an additional platform total. GA4 acquisition metrics are not substituted for advertising clicks or spend. Full summaries support up to 20,000 groups within the shared row and size limits.

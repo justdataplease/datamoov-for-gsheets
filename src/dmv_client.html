@@ -1214,6 +1214,16 @@
     $('refresh-reports').addEventListener('click', (event) =>
       busy(event.currentTarget, '…', bootstrap)
     );
+    $('manage-report-definitions').addEventListener('click', (event) =>
+      busy(event.currentTarget, 'Opening\u2026', async () => {
+        const result = await api('dmvManageReportDefinitions');
+        notice(
+          result?.preview
+            ? 'Local preview: report definitions would open in your spreadsheet.'
+            : 'Report definitions opened in the spreadsheet.'
+        );
+      })
+    );
     $('retry-bootstrap').addEventListener('click', bootstrap);
     $('reset-report').addEventListener('click', () => {
       resetReport();
