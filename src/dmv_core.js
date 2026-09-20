@@ -3,6 +3,8 @@ var DMV_CONNECTORS;
 var DMV_LIMITS = {
   maxRows: 20000,
   defaultRows: 1000,
+  // Chat fetches whole accounts and aggregates server-side, so its initial cap is higher.
+  chatDefaultRows: 10000,
   maxColumns: 80,
   maxReports: 30,
   maxConnections: 20,
@@ -67,6 +69,21 @@ function dmvCatalog_() {
     .sort(function (a, b) {
       return a.label.localeCompare(b.label);
     });
+}
+
+// Sorted object keys make digests independent of JSON formatting and property order.
+function dmvCanonical_(value) {
+  if (Array.isArray(value)) return value.map(dmvCanonical_);
+  if (value && typeof value === 'object') {
+    var result = {};
+    Object.keys(value)
+      .sort()
+      .forEach(function (key) {
+        result[key] = dmvCanonical_(value[key]);
+      });
+    return result;
+  }
+  return value;
 }
 
 function dmvText_(value, label, maxLength, required) {

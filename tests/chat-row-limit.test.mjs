@@ -45,11 +45,11 @@ function turn(f, fields = {}) {
   return { reply, block, result: JSON.parse(block.content), first: JSON.parse(f.state.http[0].options.payload) };
 }
 
-test('chat maxRows defaults to 1000 and remains private and retained on omitted edits', () => {
+test('chat maxRows defaults to 10000 and remains private and retained on omitted edits', () => {
   const f = createDatamoovSandbox();
-  assert.equal(f.api.dmvAiSettings().maxRows, 1000);
+  assert.equal(f.api.dmvAiSettings().maxRows, 10000);
   const initial = f.api.dmvSaveAiSettings({ provider: 'anthropic', apiKey: AI_KEY });
-  assert.equal(initial.maxRows, 1000);
+  assert.equal(initial.maxRows, 10000);
   const edited = f.api.dmvSaveAiSettings({ provider: 'anthropic', maxRows: 2500 });
   assert.equal(edited.maxRows, 2500);
   const retained = f.api.dmvSaveAiSettings({ provider: 'anthropic', model: 'claude-sonnet-5' });
@@ -60,7 +60,7 @@ test('chat maxRows defaults to 1000 and remains private and retained on omitted 
   assert.equal(JSON.stringify(f.api.dmvBootstrap()).includes(AI_KEY), false);
   assert.deepEqual(f.state.script.getProperties(), {});
   assert.deepEqual(f.state.document.getProperties(), {});
-  assert.equal(createDatamoovSandbox().api.dmvAiSettings().maxRows, 1000);
+  assert.equal(createDatamoovSandbox().api.dmvAiSettings().maxRows, 10000);
 });
 
 test('chat maxRows accepts integer boundaries and rejects malformed values without changing settings', () => {
@@ -75,7 +75,7 @@ test('chat maxRows accepts integer boundaries and rejects malformed values witho
   const legacy = JSON.parse(before);
   delete legacy.maxRows;
   f.state.user.setProperty(key, JSON.stringify(legacy));
-  assert.equal(f.api.dmvAiSettings().maxRows, 1000);
+  assert.equal(f.api.dmvAiSettings().maxRows, 10000);
 });
 
 test('actual chat rejects a model-supplied limit above the saved cap before fetching', () => {

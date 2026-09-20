@@ -8,11 +8,11 @@ Google Ads, Facebook Ads, HubSpot, Zendesk, PostgreSQL and BigQuery still fetch 
 
 Choose **Run** on a saved report. If it pauses, the card shows the number of rows fetched and a **Resume** button. Those rows are staged data, not rows written to the sheet: the previous successful update time, row count and output remain unchanged. Choose **Resume** to continue immediately, or leave it for the hourly scheduler. Refresh the report list to see progress made while the sidebar was closed.
 
-The user's hourly trigger handles their approved schedules and unfinished continuations, including reports configured as **On demand**. Recovery is armed before fetching starts. A paused report is eligible on the next hourly tick; exact execution times are not guaranteed, and other due reports or quotas can delay it. Once the report finishes or fails, its normal schedule applies again. Sharing or copying the definition does not enroll another user in that schedule or continuation. Unrelated triggers are preserved. Google allows add-on time-driven triggers at most once per hour; see [installable trigger restrictions](https://developers.google.com/apps-script/guides/triggers/installable#time-driven_triggers), checked September 18, 2026.
+The user's hourly trigger handles their approved schedules and unfinished continuations, including reports configured as **On demand**. Recovery is armed before fetching starts. A paused report is eligible on the next hourly tick; exact execution times are not guaranteed, and other due reports or quotas can delay it. Once the report finishes or fails, its normal schedule applies again. Reports are private, so sharing or copying the spreadsheet does not enroll another user in that schedule or continuation. Unrelated triggers are preserved. Google allows add-on time-driven triggers at most once per hour; see [installable trigger restrictions](https://developers.google.com/apps-script/guides/triggers/installable#time-driven_triggers), checked September 18, 2026.
 
 ## Bounds and storage
 
-Continuation provides more fetch time, not unlimited report size. These deliberate limits keep staging inside private Apps Script `UserProperties`, without a new Drive permission or partial output writes. The hidden `DataMoovReports` tab stores shared definitions only; it never stores staged rows or provider cursors.
+Continuation provides more fetch time, not unlimited report size. These deliberate limits keep staging inside private Apps Script `UserProperties`, without a new Drive permission or partial output writes.
 
 | Limit | Behavior |
 | --- | --- |
@@ -40,7 +40,7 @@ If Apps Script terminates abruptly before normal error handling, a subsequent ru
 
 Saving an edited report or deleting it cancels its continuation without clearing its existing output. Editing or deleting a report that is actively fetching is blocked by the existing run lock. Changing its connection revision invalidates a saved continuation: the next resume reports that change and a subsequent run starts with the new connection settings.
 
-Direct changes to a shared definition also invalidate the user's approval. Review it with **Edit** and **Save** in the sidebar before running again; a changed definition cannot reuse a checkpoint from the old recipe. A copied spreadsheet receives definitions and visible output, but no private checkpoints or output receipts. Choose your own connection and an empty output area or new tab. Existing legacy reports that are active or paused keep their private definition until that work finishes; migration does not rewrite an in-progress checkpoint. See [report storage](report-storage.md).
+Editing a report discards its checkpoint; a changed report cannot reuse a checkpoint from the old settings. A copied spreadsheet receives the visible output, but no reports, checkpoints or output receipts. See [report storage](report-storage.md).
 
 ## Connector extension
 

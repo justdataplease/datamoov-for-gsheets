@@ -289,31 +289,33 @@ test('chat rejects over-limit dashboard saves and unsupported filters before sou
   }
 });
 
-test('chat cannot run a saved dashboard above its current cap, while sidebar refresh retains saved limits', () => {
+test('refresh honors a row limit raised in Settings after the dashboard was saved, and names the source that fails', () => {
   const f = fixture({ maxRows: 2 });
   const saved = plain(
     f.api.dmvSaveDashboard({
       ...f.plan,
-      sources: f.plan.sources.map((source) => ({ ...source, maxRows: 3 })),
+      sources: f.plan.sources.map((source) => ({ ...source, maxRows: 2 })),
     })
   );
+  f.rows.meadow = [1, 2, 3].map((spend) => ({ campaign: 'Campaign ' + spend, spend }));
+  assert.throws(
+    () => f.api.dmvRunDashboard(saved.id),
+    /^Error: Account 2: .*row limit.*This source allows 2 rows.*Maximum rows per chat report/
+  );
+  assert.equal(f.state.batches.length, 0);
+  assert.match(plain(f.api.dmvListDashboards())[0].lastError, /^Account 2: /);
+
+  f.api.dmvSaveAiSettings({ provider: 'anthropic', maxRows: 5 });
+  f.fetched.length = 0;
   const { reply } = scriptedTurn(f, [
     () => [tool('run', 'run_dashboard', { id: saved.id })],
     (results) => {
-      assert.equal(results.get('run').is_error, true);
-      assert.match(results.get('run').value.error, /current chat row setting/);
-      return [answer('Use Refresh dashboard in Reports, or increase the chat row setting.')];
+      assert.equal(results.get('run').is_error, undefined);
+      return [answer()];
     },
   ]);
-  assert.equal(f.fetched.length, 0);
-  assert.equal(f.state.batches.length, 0);
-  assert.deepEqual(
-    reply.events.map((event) => event.kind),
-    ['error']
-  );
-  f.api.dmvDeleteAiSettings();
-  assert.equal(f.api.dmvRunDashboard(saved.id).ok, true);
-  assert.ok(f.fetched.every((entry) => entry.maxRows === 3));
+  assert.ok(f.fetched.every((entry) => entry.maxRows === 5));
+  assert.ok(reply.events.some((event) => event.action === 'refreshed'));
 });
 
 test('a failed source reaches the model as a redacted tool error with no sheet write action', () => {

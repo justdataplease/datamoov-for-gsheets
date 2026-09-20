@@ -34,10 +34,6 @@ function dmvWriteReport_(spreadsheet, report, result) {
   return dmvWriteReports_(spreadsheet, [{ report: report, result: result }]);
 }
 
-function dmvWriteReportUnlocked_(spreadsheet, report, result) {
-  return dmvWriteReportsUnlocked_(spreadsheet, [{ report: report, result: result }]);
-}
-
 // Every destination is verified before any tab creation, cell change or receipt update.
 function dmvWriteReports_(spreadsheet, outputs, beforeCommit) {
   return dmvWorkbookLocked_(function () {
@@ -62,7 +58,6 @@ function dmvWriteReportsUnlocked_(spreadsheet, outputs, beforeCommit) {
   };
   outputs.forEach(function (output) {
     dmvSheetName_(output.report.target.sheetName);
-    dmvCheckReportDefinition_(output.report, spreadsheet);
     dmvPrepareReportWrite_(spreadsheet, output.report, output.result, plan);
   });
   if (JSON.stringify(plan.requests).length > DMV_LIMITS.maxBytes)
@@ -94,8 +89,6 @@ function dmvWriteReportsUnlocked_(spreadsheet, outputs, beforeCommit) {
 
 function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
   var sheet = spreadsheet.getSheetByName(report.target.sheetName);
-  if (sheet && sheet.getRange(1, 1).getValues()[0][0] === DMV_REPORT_SHEET_MARKER)
-    throw new Error('Report settings cannot be used as output.');
   var anchor = dmvCell_(report.target.startCell);
   var key = dmvOutputKey_(report.spreadsheetId, report.id);
   var old = JSON.parse(plan.all[key] || 'null');

@@ -254,22 +254,6 @@ test('same-tab references cannot indirectly reach unsafe existing formulas', () 
   assert.equal(f.state.batches.length, 0);
 });
 
-test('internal settings tabs are excluded and protected after rename or marker replacement', () => {
-  const f = fixture(),
-    internal = f.book.insertSheet('Renamed settings');
-  f.setCell(internal, 1, 1, f.api.DMV_REPORT_SHEET_MARKER);
-  assert.deepEqual(
-    plain(f.api.dmvChatListSheets_(f.session, {})).sheets.map((s) => s.sheetName),
-    ['Output']
-  );
-  assert.throws(() => f.inspect('A1', internal.name), /report settings/);
-  f.setCell(internal, 1, 1, 'changed');
-  assert.throws(() => f.inspect('A1', internal.name), /report settings/);
-  const reserved = f.book.insertSheet('DataMoovReports');
-  assert.throws(() => f.inspect('A1', reserved.name), /reserved|settings|report/i);
-  assert.equal(f.state.batches.length, 0);
-});
-
 test('sort preserves its header and rows outside the explicit range', () => {
   const f = fixture();
   [

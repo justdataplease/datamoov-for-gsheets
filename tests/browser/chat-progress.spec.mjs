@@ -268,7 +268,7 @@ test('row limits and general instructions retain legacy source rules within the 
 }) => {
   await configuredChat(page);
   await page.locator('#chat-settings-toggle').click();
-  await expect(page.locator('#ai-max-rows')).toHaveValue('1000');
+  await expect(page.locator('#ai-max-rows')).toHaveValue('10000');
   await expect(page.locator('#ai-instructions')).toHaveAttribute('maxlength', '100000');
   await page.locator('#ai-max-rows').fill('2500');
   await page.locator('#ai-instructions').fill('General context');

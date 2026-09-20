@@ -133,13 +133,9 @@
             </p>
             <div id="dashboards-list" class="card-list"></div>
           </section>
-          <button type="button" id="manage-report-definitions" class="button secondary full">
-            Manage report definitions
-          </button>
           <p class="footnote">
-            Single-source report settings are shared with spreadsheet editors. Your credentials,
-            connections and refresh schedules stay private to your Google account. DataMoov has no
-            servers.
+            Your reports, dashboards, credentials, connections and refresh schedules stay private to
+            your Google account. DataMoov has no servers.
           </p>
         </section>
         <section id="panel-compose" role="tabpanel" aria-labelledby="tab-reports" hidden>
@@ -150,7 +146,6 @@
             </div>
             <button type="button" class="text-button" id="reset-report">&larr; Reports</button>
           </div>
-          <p id="report-access-note" class="inline-note" hidden></p>
           <form id="report-form">
             <fieldset id="report-fields" disabled>
               <div class="step-heading">
@@ -274,12 +269,11 @@
                 </div>
               </div>
               <p class="field-help">
-                Report settings are shared with spreadsheet editors. Your connection and refresh
-                schedule stay private. Each run replaces this report's output range.
+                Report settings stay private to your account. Each run replaces this report's output
+                range.
               </p>
               <p id="schedule-note" class="inline-note" hidden>
-                Scheduled refreshes run with your account and connections. Shared changes pause your
-                schedule until you review and save them.
+                Scheduled refreshes run with your account and connections.
               </p>
               <div class="action-row">
                 <button type="button" id="preview-report" class="button secondary">
@@ -453,6 +447,26 @@
                   aria-live="polite"
                 ></p>
               </div>
+              <label for="connection-chat-instructions">Chat instructions (optional)</label>
+              <textarea
+                id="connection-chat-instructions"
+                rows="4"
+                maxlength="100000"
+                disabled
+                aria-describedby="connection-chat-status connection-chat-count"
+                placeholder="e.g. Use the marketing dataset. Brand campaigns start with BR_. Compare completed weeks."
+              ></textarea>
+              <p
+                id="connection-chat-status"
+                class="field-help"
+                role="status"
+                aria-live="polite"
+              ></p>
+              <p
+                id="connection-chat-count"
+                class="field-help instruction-count"
+                aria-live="polite"
+              ></p>
               <p class="field-help">
                 Saved privately to your Google account and checked with the provider when you save.
                 Secrets are never displayed again.
@@ -462,36 +476,6 @@
               </button>
             </fieldset>
           </form>
-          <section
-            class="settings-card connection-chat-settings"
-            aria-labelledby="connection-chat-heading"
-          >
-            <h2 id="connection-chat-heading">Chat instructions</h2>
-            <p class="field-help">
-              Private guidance for this connection only: business context, campaign naming, datasets
-              or how its numbers should be interpreted.
-            </p>
-            <p id="connection-chat-status" class="field-help" role="status" aria-live="polite">
-              Save this connection first, then edit it to add chat instructions.
-            </p>
-            <label for="connection-chat-instructions">Instructions for this connection</label>
-            <textarea
-              id="connection-chat-instructions"
-              rows="4"
-              maxlength="100000"
-              disabled
-              aria-describedby="connection-chat-status connection-chat-count"
-              placeholder="e.g. Use the marketing dataset. Brand campaigns start with BR_. Compare completed weeks."
-            ></textarea>
-            <p
-              id="connection-chat-count"
-              class="field-help instruction-count"
-              aria-live="polite"
-            ></p>
-            <button type="button" id="save-connection-chat" class="button secondary full" disabled>
-              Save chat instructions
-            </button>
-          </section>
         </section>
         <section id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
           <div class="section-heading">
@@ -503,7 +487,7 @@
           <details id="ai-settings" class="settings-card" aria-label="AI provider settings">
             <summary>
               <span class="ai-summary-title"
-                >AI provider<small id="ai-row-limit">1,000 rows per report</small></span
+                >AI provider<small id="ai-row-limit">10,000 rows per report</small></span
               ><span id="ai-settings-status" class="card-status">Not set up</span>
             </summary>
             <form id="ai-form">
@@ -531,7 +515,7 @@
                   min="1"
                   max="20000"
                   step="1"
-                  value="1000"
+                  value="10000"
                   required
                   aria-describedby="ai-max-rows-help"
                 />

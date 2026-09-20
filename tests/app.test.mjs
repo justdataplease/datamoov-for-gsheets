@@ -30,12 +30,12 @@ function loadProduction() {
   return context;
 }
 
-test('complete production bundle registers twelve sources and fourteen reports without Google services', () => {
+test('complete production bundle registers thirteen sources and fifteen reports without Google services', () => {
   const app = loadProduction();
   const catalog = app.dmvCatalog_();
   assert.deepEqual(Array.from(catalog, connector => connector.id).sort(),
-    ['bigquery', 'facebook_ads', 'ga4', 'github', 'google_ads', 'hubspot', 'linkedin_ads', 'microsoft_ads', 'postgres', 'search_console', 'tiktok_ads', 'zendesk']);
-  assert.equal(catalog.reduce((count, connector) => count + connector.reports.length, 0), 14);
+    ['bigquery', 'facebook_ads', 'ga4', 'github', 'google_ads', 'hubspot', 'linkedin_ads', 'microsoft_ads', 'postgres', 'search_console', 'snowflake', 'tiktok_ads', 'zendesk']);
+  assert.equal(catalog.reduce((count, connector) => count + connector.reports.length, 0), 15);
   for (const connector of catalog) {
     const guide = connector.guide;
     assert.ok(guide && (guide.steps?.length || guide.modes), connector.id + ' explains how to get its credentials');
@@ -45,7 +45,7 @@ test('complete production bundle registers twelve sources and fourteen reports w
     const mode = connector.authFields.find((field) => field.key === 'authMode');
     if (mode) assert.ok(!mode.options.some((option) => option.value === 'native'), connector.id + ' never uses the add-on identity');
   }
-  assert.deepEqual(JSON.parse(JSON.stringify(catalog.filter((connector) => connector.describesTables).map((connector) => connector.id))), ['bigquery', 'postgres']);
+  assert.deepEqual(JSON.parse(JSON.stringify(catalog.filter((connector) => connector.describesTables).map((connector) => connector.id))), ['bigquery', 'postgres', 'snowflake']);
 });
 
 test('open and install entry points build the Extensions add-on menu with existing application handlers', () => {

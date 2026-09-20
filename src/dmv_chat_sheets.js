@@ -22,17 +22,6 @@ function dmvChatSheetDeadline_(session) {
     throw new Error('The sheet action reached its time limit. Ask again to continue.');
 }
 
-function dmvChatSheetProtected_(session, sheet) {
-  var protectedIds = session.protectedSheetIds || (session.protectedSheetIds = []);
-  if (
-    dmvReportSheetName_(sheet.getName()) ||
-    sheet.getRange(1, 1).getValues()[0][0] === DMV_REPORT_SHEET_MARKER
-  ) {
-    if (protectedIds.indexOf(sheet.getSheetId()) < 0) protectedIds.push(sheet.getSheetId());
-  }
-  return protectedIds.indexOf(sheet.getSheetId()) >= 0;
-}
-
 function dmvChatSheetTarget_(session, name) {
   var sheet = session.spreadsheet.getSheetByName(dmvSheetName_(name));
   if (!sheet)
@@ -43,8 +32,6 @@ function dmvChatSheetTarget_(session, name) {
         (session.sheetNames || []).join(', ') +
         '. Use list_sheets first.'
     );
-  if (dmvChatSheetProtected_(session, sheet))
-    throw new Error('DataMoov report settings cannot be read or edited through sheet tools.');
   return sheet;
 }
 
@@ -115,19 +102,14 @@ function dmvChatListSheets_(session, input) {
   dmvChatSheetObject_(input || {}, []);
   dmvChatSheetDeadline_(session);
   var result = {
-    sheets: session.spreadsheet
-      .getSheets()
-      .filter(function (sheet) {
-        return !dmvChatSheetProtected_(session, sheet);
-      })
-      .map(function (sheet) {
-        return {
-          sheetName: sheet.getName(),
-          sheetId: sheet.getSheetId(),
-          rows: sheet.getMaxRows(),
-          columns: sheet.getMaxColumns(),
-        };
-      }),
+    sheets: session.spreadsheet.getSheets().map(function (sheet) {
+      return {
+        sheetName: sheet.getName(),
+        sheetId: sheet.getSheetId(),
+        rows: sheet.getMaxRows(),
+        columns: sheet.getMaxColumns(),
+      };
+    }),
   };
   session.events.push({ kind: 'summary', text: 'Listed available spreadsheet tabs' });
   return result;
@@ -678,14 +660,9 @@ function dmvChatEditSheet_(session, input) {
     });
     try {
       SpreadsheetApp.flush();
-      session.sheetNames = session.spreadsheet
-        .getSheets()
-        .filter(function (item) {
-          return !dmvChatSheetProtected_(session, item);
-        })
-        .map(function (item) {
-          return item.getName();
-        });
+      session.sheetNames = session.spreadsheet.getSheets().map(function (item) {
+        return item.getName();
+      });
     } catch (ignored) {
       /* A metadata refresh cannot hide an already successful write. */
     }
@@ -710,8 +687,7 @@ function dmvChatSheetTools_() {
   return [
     {
       name: 'list_sheets',
-      description:
-        'List ordinary spreadsheet tabs and their grid sizes. Internal report settings are excluded.',
+      description: 'List the spreadsheet tabs and their grid sizes.',
       input_schema: { type: 'object', properties: {} },
       run: dmvChatListSheets_,
     },

@@ -86,7 +86,7 @@ function dmvWorkbookLocked_(callback) {
   if (DMV_WORKBOOK_LOCK_DEPTH) return callback();
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000))
-    throw new Error('Another user is updating report settings or output. Try again shortly.');
+    throw new Error('Another user is updating report output. Try again shortly.');
   DMV_WORKBOOK_LOCK_DEPTH++;
   try {
     return callback();

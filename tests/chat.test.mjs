@@ -117,7 +117,7 @@ test('a full Anthropic turn runs a report, summarizes, writes the table, charts 
   assert.match(reply.events[2].text, /Wrote 2 rows to Spend by campaign!A1:C3/);
   assert.equal(reply.options, null);
   assert.equal(reply.transcriptAppend[1].actions.length, 4);
-  assert.deepEqual(plain(f.fetched[0]), { fields: ['date', 'campaign', 'spend', 'clicks'], config: {}, startDate: '2026-09-11', endDate: '2026-09-17', maxRows: 1000, deadline: f.api.Date.now() + 200000 });
+  assert.deepEqual(plain(f.fetched[0]), { fields: ['date', 'campaign', 'spend', 'clicks'], config: {}, startDate: '2026-09-11', endDate: '2026-09-17', maxRows: 10000, deadline: f.api.Date.now() + 200000 });
 
   const calls = f.state.http;
   assert.equal(calls.length, 5);
@@ -132,7 +132,7 @@ test('a full Anthropic turn runs a report, summarizes, writes the table, charts 
   assert.match(first.system[0].text, /connectionId "id-\d+": Orchard main \(Orchard Ads; account=acct-1\)/);
   assert.match(first.system[0].text, /reportType "daily"/);
   assert.match(first.system[0].text, /spend "Spend" \[currency, metric, default\]/);
-  assert.deepEqual(first.tools.map((tool) => tool.name), ['run_report', 'discover_fields', 'describe_database', 'summarize', 'write_to_sheet', 'read_sheet', 'create_chart', 'ask_user']);
+  assert.deepEqual(first.tools.map((tool) => tool.name), ['run_report', 'discover_fields', 'describe_database', 'combine_results', 'summarize', 'write_to_sheet', 'read_sheet', 'create_chart', 'ask_user', 'list_sheets', 'inspect_sheet', 'edit_sheet', 'create_pivot', 'list_dashboards', 'save_dashboard', 'run_dashboard']);
   assert.equal(first.tools[0].input_schema.properties.config.properties.region.type, 'string');
   const second = payload(calls[1]);
   assert.deepEqual(second.messages[1].content, [{ type: 'text', text: 'Pulling the data.' }, toolUse('t1', 'run_report', { connectionId: f.connection.id, reportType: 'daily', dateRange: { preset: 'last7' } })]);

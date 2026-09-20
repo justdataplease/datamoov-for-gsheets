@@ -32,26 +32,27 @@ async function edit(page, index = 0) {
   await expect(page.locator('#connection-chat-instructions')).toBeEnabled();
 }
 
-test('connection instruction saves are private to one account and separate from credential changes', async ({
+async function save(page) {
+  await page.locator('#save-connection').click();
+}
+
+test('chat instructions save with the connection through its one Save button, per account', async ({
   page,
 }) => {
   await open(page);
   await edit(page);
-  await expect(page.locator('#save-connection-chat')).toBeDisabled();
+  await expect(page.locator('#save-connection-chat')).toHaveCount(0);
   const context = 'Account one: use campaign naming rules';
   await page.locator('#connection-chat-instructions').fill(context);
-  await page.locator('#connection-label').fill('Unsaved connection name');
-  await page.locator('#save-connection-chat').click();
-  await expect(page.locator('#connection-chat-status')).toContainText('saved privately');
-  await expect(page.locator('#connection-label')).toHaveValue('Unsaved connection name');
   await expect(page.locator('#connection-chat-count')).toContainText(
     (16 + context.length).toLocaleString() + ' / 100,000'
   );
+  await save(page);
+  await expect(page.locator('#panel-connections')).toBeVisible();
   await edit(page, 1);
   await expect(page.locator('#connection-chat-instructions')).toHaveValue('');
   await edit(page, 0);
   await expect(page.locator('#connection-chat-instructions')).toHaveValue(context);
-  await expect(page.locator('#connection-label')).not.toHaveValue('Unsaved connection name');
   await page.locator('#tab-settings').click();
   await page.locator('#ai-settings summary').click();
   await expect(page.locator('#ai-instruction-source')).toHaveCount(0);
@@ -65,24 +66,27 @@ test('connection instruction saves are private to one account and separate from 
   await expect(page.locator('#connection-chat-instructions')).toHaveValue(context);
 });
 
-test('connection instructions preserve failed-save drafts and enforce the combined limit', async ({
+test('a failed instruction save keeps the saved connection open with the draft, and the limit blocks Save', async ({
   page,
 }) => {
   await open(page);
   await edit(page);
   await page.locator('#connection-chat-instructions').fill('x'.repeat(99990));
   await expect(page.locator('#connection-chat-count')).toHaveClass(/error/);
-  await expect(page.locator('#save-connection-chat')).toBeDisabled();
+  await save(page);
+  await expect(page.locator('#panel-connect')).toBeVisible();
   await page.locator('#connection-chat-instructions').fill('Keep my draft');
   await page.evaluate(
     () => (window.DATAMOOV_PREVIEW_FAIL_NEXT = 'dmvSaveConnectionChatInstructions')
   );
-  await page.locator('#save-connection-chat').click();
-  await expect(page.locator('#connection-chat-status')).toContainText('Simulated request failure');
+  await save(page);
+  await expect(page.locator('#notice')).toContainText('chat instructions were not');
   await expect(page.locator('#connection-chat-instructions')).toHaveValue('Keep my draft');
-  await expect(page.locator('#save-connection-chat')).toBeEnabled();
-  await page.locator('#save-connection-chat').click();
-  await expect(page.locator('#connection-chat-status')).toContainText('saved privately');
+  await expect(page.locator('#connection-chat-instructions')).toBeEnabled();
+  await save(page);
+  await expect(page.locator('#panel-connections')).toBeVisible();
+  await edit(page);
+  await expect(page.locator('#connection-chat-instructions')).toHaveValue('Keep my draft');
 });
 
 test('legacy source guidance is inherited then can be explicitly cleared for one connection', async ({
@@ -100,8 +104,8 @@ test('legacy source guidance is inherited then can be explicitly cleared for one
     'previous source instructions'
   );
   await page.locator('#connection-chat-instructions').fill('');
-  await page.locator('#save-connection-chat').click();
-  await expect(page.locator('#connection-chat-status')).toContainText('saved privately');
+  await save(page);
+  await expect(page.locator('#panel-connections')).toBeVisible();
   await edit(page);
   await expect(page.locator('#connection-chat-instructions')).toHaveValue('');
   await expect(page.locator('#connection-chat-status')).not.toContainText(

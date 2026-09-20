@@ -110,25 +110,6 @@ test('existing target names are rejected case-insensitively without any write', 
   }
 });
 
-test('protected report settings cannot be pivot sources or target names', () => {
-  for (const rename of [false, true]) {
-    const f = fixture();
-    const sheet = f.book.insertSheet(rename ? 'Renamed settings' : 'DataMoovReports');
-    f.setCell(sheet, 1, 1, f.api.DMV_REPORT_SHEET_MARKER);
-    assert.throws(
-      () => f.api.dmvChatCreatePivot_(f.session, { ...f.input, sourceSheet: sheet.name }),
-      /report settings|reserved/
-    );
-    assert.equal(f.state.batches.length, 0);
-  }
-  const f = fixture();
-  assert.throws(
-    () => f.api.dmvChatCreatePivot_(f.session, { ...f.input, targetSheet: 'DataMoovReports' }),
-    /reserved/
-  );
-  assert.equal(f.state.batches.length, 0);
-});
-
 test('source ranges must be explicit, bounded and inside the existing grid', () => {
   for (const range of [
     'B3',

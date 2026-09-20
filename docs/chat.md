@@ -15,11 +15,11 @@ network destination is the AI provider you configure.
    your private script properties and is never shown again; leave the field blank when
    editing to keep it. The **Create a key** link opens the provider's key page.
    **Maximum rows per chat report** sets the default and ceiling for each fetched report,
-   from 1 to 20,000 rows (initially 1,000). The model can request fewer rows; it cannot exceed
+   from 1 to 20,000 rows (initially 10,000). The model can request fewer rows; it cannot exceed
    your setting. Increase it if a complete report reaches the limit.
    **Instructions for the assistant** supplies general standing context.
-3. Add at least one connection in **Connections**. To set account-specific rules, open that
-   connection's **Edit > Chat instructions** section and choose **Save chat instructions**.
+3. Add at least one connection in **Connections**. To set account-specific rules, fill
+   **Chat instructions** in the connection form; the form's one **Save** button saves them.
    Rules can describe campaign naming, attribution or SQL tables for that particular connection;
    two accounts on the same platform can have different rules. General and connection instructions
    share a 100,000-character limit, shown by the live counters.
@@ -30,7 +30,7 @@ network destination is the AI provider you configure.
    context. Long instructions are compressed into bounded pieces; a new version becomes active
    only after every piece has been saved and read back successfully. Existing compressed instructions
    remain readable without resetting the API key or connection rules. The chat uses your own private
-   connections; sharing or copying report definitions does not supply another user's connection or credentials.
+   connections; sharing or copying the spreadsheet does not supply another user's connection or credentials.
 
 Usage is billed by the AI provider to your key. A question uses model calls plus any required
 source fetches; multi-account and period comparisons can require several fetches.
@@ -132,8 +132,13 @@ therefore use six queries. Refresh advances both weeks; explicit fixed dates rem
 The summary groups by week, account/period and currency. The eight-query limit permits up to four
 accounts for this two-period setup; the chat should ask you to narrow a larger selection.
 
-Refresh uses each query's saved row limit and resolves relative date presets again. Invoking
-refresh through Chat also checks the current chat row cap; the sidebar uses the saved limits.
+A trend request such as **"Google Ads and Facebook performance for the last 3 months, every week"**
+saves one query per account for the whole period (`last90`) and groups the report by week. Only an
+explicit week-versus-previous-week request uses the two-period setup above.
+
+Refresh resolves relative date presets again. Each source uses the higher of its saved row limit
+and your current **Maximum rows per chat report**, so raising the setting also fixes dashboards
+saved earlier. A source that still fails is named in the dashboard's error, with the limit it used.
 The complete combined result is limited to 20,000 rows and one approximately 200-second run;
 there is no continuation or schedule for dashboards yet. Currency totals stay separate.
 Source or destination failure preserves both previous outputs: every source and both write
@@ -145,7 +150,7 @@ explicit source range. Changing a saved column layout may require updating its c
 Plans, connection references and refresh state stay in the creator's private Google properties,
 scoped to this spreadsheet. They do not contain provider credentials and are not shared or copied
 with the workbook. Their output tables remain visible to spreadsheet collaborators. Single-source
-report definitions continue to use the shared hidden DataMoovReports tab.
+reports are stored the same way.
 
 ## What the model sees
 
@@ -165,7 +170,7 @@ Values that come back from providers are framed as data, not instructions.
 
 ## Guarantees
 
-- Every fetch goes through the report runtime: your configured chat row cap (initially 1,000,
+- Every fetch goes through the report runtime: your configured chat row cap (initially 10,000,
   at most 20,000), column caps, deadline and host allowlists. Reports fail instead
   of truncating.
 - Report writes go through the report writer: only empty cells, or cells the chat wrote earlier at
@@ -190,10 +195,6 @@ Values that come back from providers are framed as data, not instructions.
   as such; the chat offers no total for them and `summarize` refuses to sum them.
 - Text read from your own tabs is kept whole when written elsewhere; only the samples shown
   to the model are shortened.
-- The hidden `DataMoovReports` configuration tab is excluded from chat tab listings and
-  cannot be read, written or charted through chat tools. Manage shared definitions through
-  **Reports > Manage report definitions** in the sidebar. See
-  [report storage](report-storage.md).
 
 ## Tools (for developers)
 

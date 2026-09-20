@@ -9,7 +9,7 @@ function dmvNextRun_(schedule) {
 function dmvScheduledReports_() {
   var active = SpreadsheetApp.getActiveSpreadsheet();
   return dmvList_('report').filter(function (report) {
-    return !report.approvalRequired && (!active || report.spreadsheetId === active.getId());
+    return !active || report.spreadsheetId === active.getId();
   });
 }
 

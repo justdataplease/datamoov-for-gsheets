@@ -176,7 +176,6 @@ function dmvFetchContinued_(report, spreadsheet, token, connectionRevision) {
         var current = dmvRead_('report', report.id);
         if (current.runToken !== token || current.revision !== report.revision)
           throw new Error('The report changed during the refresh. Run it again.');
-        dmvCheckReportDefinition_(current, spreadsheet);
         if (dmvConnectionRevision_(dmvReadConnection_(current.connectionId)) !== connectionRevision)
           throw new Error('The connection changed during the refresh. Run it again.');
         dmvSaveContinuation_(current, snapshot);
@@ -188,8 +187,6 @@ function dmvFetchContinued_(report, spreadsheet, token, connectionRevision) {
     );
     return { pending: true, rowCount: snapshot.result.rows.length };
   } catch (error) {
-    var safe = new Error(dmvSafeError_(error, connection.credentials));
-    if (error.dmvApprovalRequired) safe.dmvApprovalRequired = true;
-    throw safe;
+    throw new Error(dmvSafeError_(error, connection.credentials));
   }
 }

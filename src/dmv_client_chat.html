@@ -34,7 +34,7 @@
       $('ai-key').placeholder = configured ? 'Saved — leave blank to keep' : '';
       $('ai-key').required = !configured;
       $('ai-instructions').value = configured ? chat.ai.instructions || '' : '';
-      $('ai-max-rows').value = chat.ai?.maxRows || 1000;
+      $('ai-max-rows').value = chat.ai?.maxRows || 10000;
       $('ai-debug').checked = chat.ai?.debug !== false;
       updateInstructionCount();
       $('ai-remove').hidden = !configured;
@@ -85,7 +85,7 @@
       // The settings card sits under Settings: open until a key is saved, collapsed afterwards.
       $('ai-settings').open = !configured || chat.settingsOpen;
       $('ai-row-limit').textContent =
-        Number(chat.ai?.maxRows || 1000).toLocaleString() + ' rows per report';
+        Number(chat.ai?.maxRows || 10000).toLocaleString() + ' rows per report';
       const status = $('ai-settings-status');
       status.textContent = configured
         ? chat.ai.providerLabel + ' · ' + chat.ai.model

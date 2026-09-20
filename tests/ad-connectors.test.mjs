@@ -39,7 +39,7 @@ test('YouTube report filters Google Ads video campaigns and converts micros, rat
   f.state.responses.push({ body: { results: [{
     segments: { date: '2026-09-01' }, customer: { id: '1234567890', currencyCode: 'EUR', timeZone: 'Europe/Athens' },
     campaign: { id: '77', name: 'Launch video' },
-    metrics: { costMicros: '12500000', impressions: '1000', videoViews: '400', videoViewRate: 0.4, averageCpv: '31250', clicks: '12', conversions: 2.5, conversionsValue: 99.5, videoQuartileP100Rate: 0.25 },
+    metrics: { costMicros: '12500000', impressions: '1000', videoTrueviewViews: '400', videoTrueviewViewRate: 0.4, trueviewAverageCpv: '31250', clicks: '12', conversions: 2.5, conversionsValue: 99.5, videoQuartileP100Rate: 0.25 },
   }] } });
   const output = report.fetch(f.context('google_ads', { customerId: '123-456-7890', authMode: 'token', accessToken: 'offline-token' },
     { fields: ['segments.date', 'campaign.name', 'metrics.cost_micros', 'metrics.video_views', 'metrics.video_view_rate', 'metrics.average_cpv', 'metrics.video_quartile_p100_rate'] }));

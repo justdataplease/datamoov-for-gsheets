@@ -272,7 +272,17 @@ function dmvAiMaxRows_(settings) {
     settings.maxRows >= 1 &&
     settings.maxRows <= DMV_LIMITS.maxRows
     ? settings.maxRows
-    : DMV_LIMITS.defaultRows;
+    : DMV_LIMITS.chatDefaultRows;
+}
+
+// The saved row cap alone, without loading instructions. Dashboard refresh uses it so a
+// limit raised in Settings also applies to plans saved earlier.
+function dmvAiRowCap_() {
+  try {
+    return dmvAiMaxRows_(JSON.parse(dmvStore_().getProperty(dmvKey_('ai', 'settings')) || 'null'));
+  } catch (ignored) {
+    return DMV_LIMITS.chatDefaultRows;
+  }
 }
 
 function dmvAiSummary_(settings) {
@@ -282,7 +292,7 @@ function dmvAiSummary_(settings) {
       debug: true,
       instructionCharacters: 0,
       maxInstructionCharacters: DMV_AI.maxInstructionsLength,
-      maxRows: DMV_LIMITS.defaultRows,
+      maxRows: DMV_LIMITS.chatDefaultRows,
       providers: dmvAiCatalog_(),
     };
   return {

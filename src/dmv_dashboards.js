@@ -19,10 +19,7 @@ function dmvDashboardInteger_(value, minimum, maximum, label) {
 
 function dmvDashboardTarget_(target, spreadsheet) {
   dmvDashboardObject_(target, ['sheetName', 'startCell']);
-  var name = dmvSheetName_(target.sheetName),
-    sheet = spreadsheet.getSheetByName(name);
-  if (sheet && sheet.getRange(1, 1).getValues()[0][0] === DMV_REPORT_SHEET_MARKER)
-    throw new Error('Report settings cannot be used as dashboard output.');
+  var name = dmvSheetName_(target.sheetName);
   return { sheetName: name, startCell: dmvCell_(target.startCell || 'A1').a1 };
 }
 
@@ -313,6 +310,7 @@ function dmvRunDashboard(id, requestedDeadline) {
       requestedDeadline === undefined ? Infinity : requestedDeadline
     ),
     token = dmvId_(),
+    rowCap = dmvAiRowCap_(),
     revisions = {},
     queries = [],
     today = Utilities.formatDate(new Date(), spreadsheet.getSpreadsheetTimeZone(), 'yyyy-MM-dd');
@@ -336,6 +334,9 @@ function dmvRunDashboard(id, requestedDeadline) {
         dmvReadConnection_(source.connectionId)
       );
       var query = dmvValidateQuery_(source, spreadsheet);
+      // Reports fail instead of truncating, so a limit raised in Settings after this plan
+      // was saved must apply here; the combined 20,000-row ceiling still holds.
+      query.maxRows = Math.max(query.maxRows, rowCap);
       var definition = dmvDefinition_(dmvConnector_(query.connectorId), query.reportType);
       // One refresh has one date anchor, even if sequential fetches cross midnight.
       // Only these execution queries become fixed; the saved relative presets remain reusable.
@@ -381,7 +382,18 @@ function dmvRunDashboard(id, requestedDeadline) {
       phase(
         'Fetching source ' + (index + 1) + ' of ' + dashboard.sources.length + ': ' + source.label
       );
-      var result = dmvFetchReport_(queries[index], spreadsheet, deadline);
+      var result;
+      try {
+        result = dmvFetchReport_(queries[index], spreadsheet, deadline);
+      } catch (error) {
+        var reason = dmvSafeError_(error, {});
+        if (/row limit|too many rows|more than .*rows/i.test(reason))
+          reason +=
+            ' This source allows ' +
+            queries[index].maxRows.toLocaleString() +
+            ' rows. Increase Maximum rows per chat report under Settings > AI provider (up to 20,000), or ask Chat to narrow this source.';
+        throw new Error(source.label + ': ' + reason);
+      }
       dmvDashboardDeadline_(deadline);
       fetchedRows += result.rows.length;
       if (fetchedRows > DMV_LIMITS.maxRows)

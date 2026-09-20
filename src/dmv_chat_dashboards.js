@@ -104,7 +104,7 @@ function dmvChatSaveDashboard_(session, input) {
   if (input.id && !Number.isInteger(input.revision))
     throw new Error('List dashboards first and use the saved revision when editing a dashboard.');
   if (!Array.isArray(input.sources)) throw new Error('Choose the dashboard sources.');
-  var cap = session.maxRows || DMV_LIMITS.defaultRows;
+  var cap = session.maxRows || DMV_LIMITS.chatDefaultRows;
   plan.sources = input.sources.map(function (source, index) {
     var item = Object.assign({}, source);
     item.id = item.id || 'source-' + (index + 1);
@@ -135,16 +135,6 @@ function dmvChatSaveDashboard_(session, input) {
 function dmvChatRunDashboard_(session, input) {
   dmvChatSheetObject_(input, ['id']);
   dmvChatSheetDeadline_(session);
-  var saved = dmvDashboardHere_(input.id);
-  var cap = session.maxRows || DMV_LIMITS.defaultRows;
-  if (
-    saved.sources.some(function (source) {
-      return source.maxRows > cap;
-    })
-  )
-    throw new Error(
-      'This dashboard exceeds your current chat row setting. Increase Maximum rows per chat report in Settings, or use its saved limits with Refresh dashboard in Reports.'
-    );
   var result;
   try {
     result = dmvRunDashboard(input.id, session.deadline);

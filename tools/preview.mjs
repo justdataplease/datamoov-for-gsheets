@@ -148,9 +148,6 @@ export function previewFixture(catalog, aiProviders = [], families = []) {
     const report = source.reports[0];
     return {
       id: 'demo-report-' + index,
-      definitionId: 'demo-definition-' + index,
-      connectionRequired: false,
-      approvalRequired: false,
       name: ['Campaign performance', 'Website acquisition', 'Sales pipeline'][index],
       connectorId: source.id,
       connectionId: 'demo-' + source.id,
@@ -186,7 +183,7 @@ export function previewFixture(catalog, aiProviders = [], families = []) {
     dateTimezone: 'Europe/Athens',
     limits: { maxRows: 20000, defaultRows: 1000 },
     branding: { name: 'DataMoov' },
-    ai: { configured: false, debug: true, maxRows: 1000, providers: aiProviders },
+    ai: { configured: false, debug: true, maxRows: 10000, providers: aiProviders },
   };
 }
 
@@ -198,36 +195,6 @@ function installPreview(initial) {
   const copy = (value) => structuredClone(value);
   let nextId = 1;
   const chatProgress = new Map();
-  function reportFingerprint(report) {
-    return JSON.stringify(
-      [
-        'name',
-        'connectorId',
-        'reportType',
-        'fields',
-        'config',
-        'dateRange',
-        'target',
-        'maxRows',
-      ].map((key) => report[key] ?? null)
-    );
-  }
-  data.reports.forEach((report) => {
-    report.definitionId ||= report.id;
-    report.definitionFingerprint = reportFingerprint(report);
-    report.connectionRequired = Boolean(report.connectionRequired || !report.connectionId);
-    report.approvalRequired = Boolean(report.approvalRequired || report.definitionMissing);
-    if (report.connectionRequired) {
-      report.id = null;
-      report.connectionId = '';
-    }
-    if (report.connectionRequired || report.approvalRequired) report.schedule = 'manual';
-  });
-  function findReport(input) {
-    return data.reports.find((report) =>
-      input.definitionId ? report.definitionId === input.definitionId : report.id === input.id
-    );
-  }
   function definition(report) {
     return data.catalog
       .find((source) => source.id === report.connectorId)
@@ -263,7 +230,6 @@ function installPreview(initial) {
   }
   const handlers = {
     dmvBootstrap: () => copy(data),
-    dmvManageReportDefinitions: () => ({ preview: true }),
     dmvDiscoverAccounts(input) {
       window.DATAMOOV_PREVIEW_LAST_ACCOUNT_REQUEST = copy(input);
       if (Array.isArray(window.DATAMOOV_PREVIEW_ACCOUNTS))
@@ -462,37 +428,22 @@ function installPreview(initial) {
       const connection = data.connections.find((item) => item.id === report.connectionId);
       if (!connection || connection.connectorId !== report.connectorId)
         throw new Error('Choose one of your connections for this source.');
-      const previous = findReport(report);
-      if ((report.id || report.definitionId) && (!previous || previous.definitionMissing))
-        throw new Error('This shared report was removed. Refresh the report list.');
-      if (previous && report.definitionFingerprint !== previous.definitionFingerprint)
-        throw new Error('This shared report changed. Refresh the report list and open it again.');
+      const previous = data.reports.find((item) => item.id === report.id);
+      if (report.id && !previous) throw new Error('Report not found.');
       const saved = {
         ...previous,
         ...copy(report),
         id: previous?.id || 'preview-report-' + nextId++,
-        definitionId: previous?.definitionId || 'preview-definition-' + nextId++,
-        connectionRequired: false,
-        approvalRequired: false,
         schedule: report.schedule || 'manual',
       };
-      saved.definitionFingerprint = reportFingerprint(saved);
       const index = previous ? data.reports.indexOf(previous) : -1;
       if (index < 0) data.reports.push(saved);
       else data.reports[index] = saved;
       return copy(saved);
     },
-    dmvDeleteReport(input) {
-      const request = typeof input === 'string' ? { id: input } : input;
-      const report = findReport(request);
-      if (!report) throw new Error('Report not found.');
-      if (
-        !report.definitionMissing &&
-        typeof input !== 'string' &&
-        request.definitionFingerprint !== report.definitionFingerprint
-      )
-        throw new Error('This shared report changed. Refresh the report list before removing it.');
-      data.reports = data.reports.filter((item) => item.definitionId !== report.definitionId);
+    dmvDeleteReport(id) {
+      if (!data.reports.some((item) => item.id === id)) throw new Error('Report not found.');
+      data.reports = data.reports.filter((item) => item.id !== id);
       return { ok: true };
     },
     dmvDiscoverFields(input) {
@@ -661,7 +612,7 @@ function installPreview(initial) {
       if (!provider) throw new Error('Choose a supported AI provider.');
       if (!input.apiKey && !(data.ai.configured && data.ai.provider === input.provider))
         throw new Error('Paste the API key for ' + provider.label + '.');
-      const maxRows = input.maxRows === undefined ? data.ai.maxRows || 1000 : input.maxRows;
+      const maxRows = input.maxRows === undefined ? data.ai.maxRows || 10000 : input.maxRows;
       if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 20000)
         throw new Error(
           'Maximum rows per chat report must be a whole number between 1 and 20,000.'
@@ -715,7 +666,7 @@ function installPreview(initial) {
       return handlers.dmvAiSettings();
     },
     dmvDeleteAiSettings() {
-      data.ai = { configured: false, debug: true, maxRows: 1000, providers: data.ai.providers };
+      data.ai = { configured: false, debug: true, maxRows: 10000, providers: data.ai.providers };
       return copy(data.ai);
     },
     dmvTestAi() {
@@ -855,8 +806,6 @@ function installPreview(initial) {
     dmvRunReport(id) {
       const report = data.reports.find((item) => item.id === id);
       if (!report) throw new Error('Report not found.');
-      if (report.definitionMissing || report.connectionRequired || report.approvalRequired)
-        throw new Error('Open the shared report and save your connection and schedule first.');
       if (window.DATAMOOV_PREVIEW_PENDING_NEXT) {
         const result = copy(window.DATAMOOV_PREVIEW_PENDING_NEXT);
         delete window.DATAMOOV_PREVIEW_PENDING_NEXT;

@@ -1,6 +1,6 @@
 # Import credentials into your Google account
 
-Open the add-on in the intended Google account, then choose **Settings > Credentials > Import from file** and select your local DataMoov JSON bundle. The selected file is read in browser memory and sent through the sidebar's authenticated Apps Script call. Secrets are saved in that user's private properties for this script. The import does not store them in source code, spreadsheet cells, shared report definitions or browser local storage.
+Open the add-on in the intended Google account, then choose **Settings > Credentials > Import from file** and select your local DataMoov JSON bundle. The selected file is read in browser memory and sent through the sidebar's authenticated Apps Script call. Secrets are saved in that user's private properties for this script. The import does not store them in source code, spreadsheet cells or browser local storage.
 
 Exact matching credentials and connections are reused. A label alone is not a match, and an import never overwrites a different existing credential or moves a report to another connection. Existing AI settings and schedules are unchanged. New Google OAuth credentials use the ordinary token check; each new connection uses the connector's normal connectivity check. An unused token can be saved without proving account access. Results distinguish saved, existing and failed items. A provider rejection leaves that connection unsaved; other successful items remain available.
 

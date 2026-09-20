@@ -5,9 +5,8 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | Location | Responsibility |
 | --- | --- |
 | src/dmv_app.js | Google Sheets menu, sidebar entry point and template includes |
-| src/dmv_core.js | Connector registry, catalog, validation, relative dates including adjacent completed weeks, and typed result normalization |
+| src/dmv_core.js | Connector registry, catalog, validation, canonical JSON, relative dates including adjacent completed weeks, and typed result normalization |
 | src/dmv_store.js | Private per-user records, runtime locks, active spreadsheet and validated output-tab links |
-| src/dmv_report_store.js | Shared report definitions in DataMoovReports, schema validation, fingerprints, private bindings and legacy migration |
 | src/dmv_credentials.js | Saved credentials: connector-derived types, Google token and available consumer checks on edits, delete refused while in use, and credential merging into connections at run time |
 | src/dmv_credential_import.js | Validated local credential-bundle import through the existing private save APIs, exact-match reuse and per-item results |
 | src/dmv_connections.js | Save, delete and test connections (a saved credential plus per-connection values); summaries never expose secrets |
@@ -27,7 +26,7 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | src/dmv_chat_dashboards.js | Chat adapters for saving, listing and running the dashboard runtime |
 | src/connectors/ | One self-contained declaration and adapter per provider |
 | src/dmv_sidebar.html | Sidebar structure |
-| src/dmv_client.html | Browser state, forms, per-connection instruction editor, saved dashboard cards and server calls |
+| src/dmv_client.html | Browser state, forms, connection form with its chat instructions, saved dashboard cards and server calls |
 | src/dmv_client_chat.html | Chat panel: AI and general settings, safe Markdown and output links, live activity, default-on completed actions and option chips |
 | src/dmv_styles.html | Sidebar styles |
 | src/appsscript.json | Google scopes, runtime and Sheets service |
@@ -38,9 +37,9 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 
 Apps Script server files share a global namespace. The dmv prefix identifies the app's functions; names ending in an underscore are internal helpers. Node imports belong only in tools and tests.
 
-Report definitions are authoritative in the spreadsheet's hidden `DataMoovReports` tab. A stable shared definition ID identifies the recipe; each user's private binding connects that definition and spreadsheet to their own connection, approved definition fingerprint and schedule. The private report keeps a separate runtime ID for locks, continuation state and output receipts. Direct sheet edits require validation and renewed approval in the sidebar. Shared definition mutations and output verification/write use a short script lock; provider requests happen outside that shared lock. Private record mutations keep the user lock. See [report storage](report-storage.md) for copying, migration and the storage boundary.
+Reports and dashboards are private records in the owner's UserProperties, scoped to their spreadsheet; the spreadsheet holds only output. A report record carries its full query, destination, schedule and run state, and its ID identifies locks, continuation state and output receipts. Private record mutations use the user lock; output verification and writes use a short script lock, and provider requests happen outside it. See [report storage](report-storage.md).
 
-Saved multi-source dashboards are private, workbook-scoped plans with source queries and mappings, aggregation rules and two destinations. Weekly comparisons save `lastWeek` and `previousWeek` per account; both resolve again on refresh. Chat preserves artifact intent through clarification replies and reports plan-save and output-refresh completion separately, with links to existing destination tabs. Refresh reuses the report validator and fetcher, then the same combination and summary functions used by chat, without calling AI. All source results and both destinations pass validation before one Sheets batch. Connection revisions and plan fingerprints are rechecked immediately before the write; status updates carry a run token. This private plan storage is separate from shared single-source report definitions.
+Saved multi-source dashboards are private, workbook-scoped plans with source queries and mappings, aggregation rules and two destinations. Weekly comparisons save `lastWeek` and `previousWeek` per account; both resolve again on refresh. Trends save one query per account for the whole range and bucket by week or month. Refresh applies the higher of each saved source limit and the current chat row cap, and names the failing source. Chat preserves artifact intent through clarification replies and reports plan-save and output-refresh completion separately, with links to existing destination tabs. Refresh reuses the report validator and fetcher, then the same combination and summary functions used by chat, without calling AI. All source results and both destinations pass validation before one Sheets batch. Connection revisions and plan fingerprints are rechecked immediately before the write; status updates carry a run token.
 
 The runtime resolves and validates the date range before calling fetch, and the context exposes checkDeadline() for connectors to enforce the shared deadline. Continuations retain the initially resolved dates across executions. Connectors call dmvSelectFields_ to resolve the user's selection against their declared or discovered descriptors, so every source shares one selection rule and one error vocabulary.
 
