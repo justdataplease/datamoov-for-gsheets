@@ -200,6 +200,7 @@ export function createDatamoovSandbox() {
     const originals = new Map(book.sheets.map((sheet) => [sheet.id, sheet]));
     const staged = new Map(book.sheets.map((sheet) => [sheet.id, { ...sheet, cells: new Map(sheet.cells) }]));
     const stagedCharts = [];
+    const updatedCharts = new Map(), removedCharts = new Set();
     const replies = [];
     let nextSheetId = sheetSerial;
     const findSheet = (id) => {
@@ -277,9 +278,24 @@ export function createDatamoovSandbox() {
         const chart = request.addChart.chart;
         findSheet(chart.position.overlayPosition.anchorCell.sheetId);
         for (const source of JSON.stringify(chart.spec).matchAll(/"sheetId":(\d+)/g)) findSheet(Number(source[1]));
-        const chartId = state.charts.length + stagedCharts.length + 1;
-        stagedCharts.push({ spreadsheetId, chartId, ...plain(chart) });
+        const chartId = chart.chartId ?? Math.max(state.chartSerial || 0, ...state.charts.map((item) => item.chartId), 0) + stagedCharts.length + 1;
+        if (!Number.isInteger(chartId) || chartId < 0 || [...state.charts.filter((item) => item.spreadsheetId === spreadsheetId && !removedCharts.has(item.chartId)), ...stagedCharts].some((item) => item.chartId === chartId))
+          throw new Error(`Invalid or duplicate chart id ${chartId}`);
+        stagedCharts.push({ spreadsheetId, ...plain(chart), chartId });
         reply = { addChart: { chart: { chartId } } };
+      } else if (request.updateChartSpec) {
+        const { chartId, spec } = request.updateChartSpec;
+        if (!state.charts.some((chart) => chart.spreadsheetId === spreadsheetId && chart.chartId === chartId && !removedCharts.has(chartId)))
+          throw new Error(`No chart with id ${chartId}`);
+        for (const source of JSON.stringify(spec).matchAll(/"sheetId":(\d+)/g)) findSheet(Number(source[1]));
+        updatedCharts.set(chartId, plain(spec));
+      } else if (request.deleteEmbeddedObject) {
+        const chartId = request.deleteEmbeddedObject.objectId;
+        if (!state.charts.some((chart) => chart.spreadsheetId === spreadsheetId && chart.chartId === chartId && !removedCharts.has(chartId)))
+          throw new Error(`No embedded object with id ${chartId}`);
+        removedCharts.add(chartId);
+      } else if (request.updateDimensionProperties) {
+        findSheet(request.updateDimensionProperties.range.sheetId);
       } else throw new Error(`Unsupported batch request: ${Object.keys(request)}`);
       replies.push(reply);
     }
@@ -289,6 +305,9 @@ export function createDatamoovSandbox() {
       else book.sheets.push(sheet);
     }
     sheetSerial = nextSheetId;
+    for (const chart of state.charts) if (updatedCharts.has(chart.chartId) && chart.spreadsheetId === spreadsheetId) chart.spec = updatedCharts.get(chart.chartId);
+    state.chartSerial = Math.max(state.chartSerial || 0, ...state.charts.map((chart) => chart.chartId), ...stagedCharts.map((chart) => chart.chartId), 0);
+    state.charts = state.charts.filter((chart) => chart.spreadsheetId !== spreadsheetId || !removedCharts.has(chart.chartId));
     state.charts.push(...stagedCharts);
     return { spreadsheetId, replies };
   }
@@ -328,7 +347,8 @@ export function createDatamoovSandbox() {
         state.gets.push({ spreadsheetId, options: plain(options || {}) });
         const book = state.books.get(spreadsheetId);
         if (!book) throw new Error('Unknown spreadsheet');
-        return { sheets: book.sheets.map((sheet) => ({ properties: { sheetId: sheet.id, title: sheet.name, hidden: sheet.hidden, gridProperties: { rowCount: sheet.maxRows, columnCount: sheet.maxColumns, frozenRowCount: sheet.frozenRows } } })) };
+        return { sheets: book.sheets.map((sheet) => ({ properties: { sheetId: sheet.id, title: sheet.name, hidden: sheet.hidden, gridProperties: { rowCount: sheet.maxRows, columnCount: sheet.maxColumns, frozenRowCount: sheet.frozenRows } },
+          charts: state.charts.filter((chart) => chart.spreadsheetId === spreadsheetId && chart.position.overlayPosition.anchorCell.sheetId === sheet.id).map((chart) => ({ chartId: chart.chartId })) })) };
       },
     } },
     ScriptApp: {

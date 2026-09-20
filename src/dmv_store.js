@@ -92,6 +92,22 @@ function dmvCheckRecordSize_(value) {
   return text;
 }
 
+// Field lists repeat heavily, so a gzipped plan is several times smaller than its JSON. The
+// packed text still has to fit the record that carries it.
+function dmvPack_(value) {
+  return Utilities.base64Encode(
+    Utilities.gzip(Utilities.newBlob(JSON.stringify(value))).getBytes()
+  );
+}
+
+function dmvUnpack_(text) {
+  return JSON.parse(
+    Utilities.ungzip(
+      Utilities.newBlob(Utilities.base64Decode(text), 'application/x-gzip', 'plan.json.gz')
+    ).getDataAsString('UTF-8')
+  );
+}
+
 // Shared sheet mutations and output verification/write use the same short lock in sidebar and
 // time-driven executions, including when no active document exists. Never hold it for a fetch.
 function dmvWorkbookLocked_(callback) {

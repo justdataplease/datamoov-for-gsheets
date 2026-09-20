@@ -7,7 +7,7 @@ itself holds only their output.
 | Stored privately per user | Stored in the spreadsheet |
 | --- | --- |
 | Report settings (source, connection, fields, options, dates, row limit, destination, schedule) | Report output tables |
-| Dashboard plans | Dashboard data and report tabs, charts, pivots |
+| Dashboard plans (datasets, tiles, chart ids; stored compressed) | Dataset tabs with their provenance rows, the dashboard tab, its charts |
 | Credentials, connections, AI key and instructions | |
 | Run state, continuation checkpoints, output receipts | |
 

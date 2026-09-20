@@ -73,19 +73,58 @@ test('the real chat request carries artifact intent, reusable periods and bounde
     JSON.stringify(request.messages),
     /Create a marketing performance week vs previous period report/
   );
+  // Artifact intent: the request is a saved dashboard, stays one after the user only names the
+  // sources, and never ends as numbers in chat.
   assert.match(
     request.system,
-    /create or build a performance report or dashboard across multiple sources\/accounts asks for a saved spreadsheet artifact/
+    /- DASHBOARDS\. A request to create or build a dashboard or a performance report or overview \("create a marketing performance week vs previous period"[^)]*\) asks for a saved spreadsheet artifact/
   );
-  assert.match(request.system, /Preserve that intent after source-selection replies/);
-  assert.match(request.system, /dateRange \{preset: "lastWeek"\}/);
-  assert.match(request.system, /\{preset: "previousWeek"\}/);
-  assert.match(request.system, /Three accounts therefore need six saved source queries/);
   assert.match(
     request.system,
-    /do not also run_report those queries before or after run_dashboard/
+    /keep that intent after a source-selection reply such as "Use all ad platforms"/
   );
-  assert.match(request.system, /clickable links returned by run_dashboard for both output tabs/);
+  assert.match(request.system, /never finish such a request with chat numbers alone/);
+  assert.match(request.system, /A question such as "how much did we spend" is analysis/);
+  // Reusable periods: relative presets, two datasets per account only for week versus previous
+  // week, and one query per account for a trend.
+  assert.match(
+    request.system,
+    /- Dashboard datasets: one query per requested account or subject/
+  );
+  assert.match(
+    request.system,
+    /Only an explicit week-versus-previous-week request uses two datasets per account, with dateRange presets lastWeek and previousWeek and labels naming account and period/
+  );
+  assert.match(
+    request.system,
+    /Cover a trend with ONE query per account over the whole period \(last 3 months is \{preset: "last90"\}\) and let tiles bucket it with dateBucket week or month; never split a trend into several date ranges/
+  );
+  // No duplicate fetching: the dashboard runtime is the only fetch of a dashboard request.
+  assert.match(
+    request.system,
+    /Build a dashboard with exactly these calls: list_dashboards \(reuse or update a matching one\), save_dashboard, run_dashboard/
+  );
+  assert.match(
+    request.system,
+    /Do not call run_report, combine_results, summarize, write_to_sheet or create_chart for it: run_dashboard fetches every dataset once/
+  );
+  // An honest finish: what exists, where, how to refresh it, and no claim after a failure.
+  assert.match(request.system, /- Dashboard tiles: start with one kpi tile/);
+  assert.match(
+    request.system,
+    /After run_dashboard succeeds, answer with: what was created, the scorecard values it returned, which tab holds what, and that Reports > Dashboards > Refresh dashboard rebuilds all of it without AI/
+  );
+  assert.match(request.system, /The tab links are shown to the user automatically/);
+  assert.match(
+    request.system,
+    /If saving or running failed, say which step failed and do not claim the dashboard exists/
+  );
+  // The earlier single-table flow (sources plus summary, then create_chart) must not linger
+  // beside the rules above.
+  assert.doesNotMatch(
+    request.system,
+    /six saved source queries|eight-query dashboard limit|reportRange|includeFutureRows/
+  );
   assert.match(
     request.system,
     /Explicit user dates, rolling last 7 days and week-to-date requests take precedence/
@@ -105,6 +144,16 @@ test('the real chat request carries artifact intent, reusable periods and bounde
   const reportTool = request.tools.find((tool) => tool.name === 'run_report');
   assert.ok(
     reportTool.input_schema.properties.dateRange.properties.preset.enum.includes('previousWeek')
+  );
+  // The saved plan itself can hold both relative weeks of three accounts.
+  const datasets = request.tools.find((tool) => tool.name === 'save_dashboard').input_schema
+    .properties.datasets;
+  for (const preset of ['lastWeek', 'previousWeek'])
+    assert.ok(datasets.items.properties.dateRange.properties.preset.enum.includes(preset), preset);
+  assert.ok(datasets.maxItems >= 6, 'three accounts in two periods must fit one dashboard');
+  assert.match(
+    request.tools.find((tool) => tool.name === 'run_dashboard').description,
+    /do not also call run_report, write_to_sheet or create_chart for the same data/
   );
 });
 
@@ -152,81 +201,151 @@ function dashboardFixture() {
       credentials: { account },
     })
   );
+  const metrics = ['spend', 'clicks', 'impressions'].map((field) => ({ field, agg: 'sum' }));
   f.input = {
     name: 'Weekly performance comparison',
-    sources: connections.flatMap((connection, index) =>
-      ['lastWeek', 'previousWeek'].map((preset) => ({
-        id: 'account' + index + '-' + preset,
-        label:
-          connection.label + ' - ' + (preset === 'lastWeek' ? 'current week' : 'previous week'),
-        connectionId: connection.id,
-        reportType: 'performance',
-        fields: columns.map((column) => column.key),
-        config: {},
-        dateRange: { preset },
-        maxRows: 1000,
-        mapping: columns.map((column) => ({ field: column.key, key: column.key })),
-      }))
+    target: { sheetName: 'Weekly comparison Dashboard' },
+    // Three accounts in two periods are six datasets, the most one dashboard holds. Tiles read
+    // them together, so every dataset maps its columns to the shared names.
+    datasets: connections.flatMap((connection, index) =>
+      ['lastWeek', 'previousWeek'].map((preset) => {
+        const period = preset === 'lastWeek' ? 'current week' : 'previous week';
+        return {
+          id: 'account' + index + '_' + preset,
+          label: connection.label + ' - ' + period,
+          sheetName: connection.label + ' ' + period + ' Data',
+          connectionId: connection.id,
+          reportType: 'performance',
+          fields: columns.map((column) => column.key),
+          config: {},
+          dateRange: { preset },
+          maxRows: 1000,
+          mapping: columns.map((column) => ({ field: column.key, key: column.key })),
+        };
+      })
     ),
-    summary: {
-      groupBy: ['date', 'source', 'currency'],
-      dateBucket: 'week',
-      metrics: ['spend', 'clicks', 'impressions'].map((field) => ({ field, agg: 'sum' })),
-      limit: 20000,
-    },
-    dataTarget: { sheetName: 'Weekly source data', startCell: 'A1' },
-    target: { sheetName: 'Weekly comparison', startCell: 'A1' },
+    tiles: [
+      { title: 'Totals', type: 'kpi', metrics },
+      {
+        title: 'Spend by account and period',
+        type: 'column',
+        groupBy: ['source'],
+        metrics: [{ field: 'spend', agg: 'sum' }],
+      },
+      {
+        title: 'Weekly totals',
+        type: 'table',
+        groupBy: ['date', 'source'],
+        dateBucket: 'week',
+        metrics,
+      },
+    ],
   };
   return f;
 }
 
+// The rows of a tab under the row whose first cell is `heading`, up to the next blank row.
+function rowsUnder(f, sheetName, heading, width) {
+  const sheet = f.tab(sheetName);
+  let row = 1;
+  while (row <= sheet.getLastRow() && f.value(sheet, row, 1) !== heading) row++;
+  assert.ok(row <= sheet.getLastRow(), heading + ' is on ' + sheetName);
+  const rows = [];
+  for (row++; row <= sheet.getLastRow() && f.value(sheet, row, 1) !== ''; row++)
+    rows.push(Array.from({ length: width }, (_, column) => f.value(sheet, row, column + 1)));
+  return rows;
+}
+
 test('a saved three-account comparison fetches six relative queries and advances both weeks on refresh', () => {
   const f = dashboardFixture();
-  const saved = f.api.dmvSaveDashboard(f.input);
-  assert.equal(saved.sourceCount, 6);
+  const tabs = f.input.datasets.map((dataset) => dataset.sheetName).concat(f.input.target.sheetName);
+  const saved = plain(f.api.dmvSaveDashboard(f.input));
+  assert.equal(saved.datasets.length, 6);
+  assert.equal(f.fetched.length, 0, 'saving does not fetch');
+  // The saved plan keeps the relative presets, not the dates they mean today.
   const record = f.api.dmvRead_('dashboard', saved.id);
   assert.deepEqual(
-    plain(record.sources.map((source) => source.dateRange)),
+    plain(f.api.dmvUnpack_(record.plan).datasets.map((dataset) => dataset.dateRange)),
     Array.from({ length: 3 }, () => [{ preset: 'lastWeek' }, { preset: 'previousWeek' }]).flat()
   );
+  const { id: _id, label: _label, sheetName: _sheetName, mapping: _mapping, ...query } =
+    f.input.datasets[1];
   const reportQuery = f.api.dmvValidateReport_(
     {
-      ...f.input.sources[1],
+      ...query,
       name: 'Prior week',
       target: { sheetName: 'Separate prior week', startCell: 'A1' },
     },
     f.book
   );
   assert.equal(reportQuery.dateRange.preset, 'previousWeek');
-  const first = f.api.dmvRunDashboard(saved.id);
+
+  const weeks = (current, previous) => Array.from({ length: 3 }, () => [current, previous]).flat();
+  const first = plain(f.api.dmvRunDashboard(saved.id));
   assert.equal(first.rowCount, 6);
+  assert.deepEqual(
+    first.datasets.map((dataset) => [dataset.id, dataset.rowCount]),
+    f.input.datasets.map((dataset) => [dataset.id, 1])
+  );
   assert.equal(f.fetched.length, 6, 'one fetch per account and period');
-  assert.equal(f.state.batches.length, 1, 'both output tabs commit together');
+  assert.deepEqual(
+    f.fetched.map(({ account }) => account),
+    ['Account A', 'Account A', 'Account B', 'Account B', 'Account C', 'Account C']
+  );
+  assert.equal(f.state.batches.length, 1, 'six data tabs, the dashboard tab and its chart commit together');
   assert.deepEqual(
     f.fetched.map(({ startDate, endDate }) => [startDate, endDate]),
-    Array.from({ length: 3 }, () => [
-      ['2026-09-07', '2026-09-13'],
-      ['2026-08-31', '2026-09-06'],
-    ]).flat()
+    weeks(['2026-09-07', '2026-09-13'], ['2026-08-31', '2026-09-06'])
   );
-  const sheetIds = [
-    f.tab('Weekly source data').id,
-    f.tab('Weekly comparison').id,
-  ];
+  // Each period stays its own series, and the dashboard names the dates each dataset covered.
+  assert.deepEqual(
+    rowsUnder(f, 'Weekly comparison Dashboard', 'Weekly totals', 5).slice(1),
+    f.input.datasets.map((dataset, index) => [
+      index % 2 ? '2026-08-31' : '2026-09-07',
+      dataset.label,
+      10,
+      2,
+      20,
+    ])
+  );
+  assert.deepEqual(
+    rowsUnder(f, 'Weekly comparison Dashboard', 'Data sources', 7)
+      .slice(1)
+      .map((row) => row[4]),
+    weeks('2026-09-07 to 2026-09-13', '2026-08-31 to 2026-09-06')
+  );
+  assert.equal(f.state.charts.length, 1);
+  const sheetIds = tabs.map((name) => f.tab(name).id);
+
   f.advance(3 * DAY);
-  const second = f.api.dmvRunDashboard(saved.id);
+  const second = plain(f.api.dmvRunDashboard(saved.id));
   assert.equal(second.rowCount, 6);
   assert.equal(f.fetched.length, 12);
   assert.equal(f.state.batches.length, 2);
   assert.deepEqual(
     f.fetched.slice(6).map(({ startDate, endDate }) => [startDate, endDate]),
-    Array.from({ length: 3 }, () => [
-      ['2026-09-14', '2026-09-20'],
-      ['2026-09-07', '2026-09-13'],
-    ]).flat()
+    weeks(['2026-09-14', '2026-09-20'], ['2026-09-07', '2026-09-13'])
   );
   assert.deepEqual(
-    [f.tab('Weekly source data').id, f.tab('Weekly comparison').id],
-    sheetIds
+    rowsUnder(f, 'Weekly comparison Dashboard', 'Weekly totals', 5)
+      .slice(1)
+      .map((row) => row[0]),
+    weeks('2026-09-14', '2026-09-07')
   );
+  assert.deepEqual(
+    rowsUnder(f, 'Weekly comparison Dashboard', 'Data sources', 7)
+      .slice(1)
+      .map((row) => row[4]),
+    weeks('2026-09-14 to 2026-09-20', '2026-09-07 to 2026-09-13')
+  );
+  assert.match(
+    f.value(f.tab('Account A previous week Data'), 2, 1),
+    /^2026-09-07 to 2026-09-13 · 1 rows · /
+  );
+  assert.deepEqual(
+    tabs.map((name) => f.tab(name).id),
+    sheetIds,
+    'a refresh reuses all seven tabs'
+  );
+  assert.equal(f.state.charts.length, 1, 'and updates the chart in place');
 });

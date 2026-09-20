@@ -334,9 +334,17 @@ test('freeze and new-tab creation are bounded, while rename protects saved repor
   f.api.dmvList_ = (kind) =>
     kind === 'report' ? [{ spreadsheetId: f.book.id, target: { sheetName: 'Output' } }] : [];
   assert.throws(() => f.edit('rename_sheet', { newName: 'Renamed' }), /saved report/);
-  f.api.dmvList_ = (kind) =>
-    kind === 'dashboard' ? [{ spreadsheetId: f.book.id, dataTarget: { sheetName: 'Output' } }] : [];
-  assert.throws(() => f.edit('rename_sheet', { newName: 'Renamed' }), /saved dashboard/);
+  // A dashboard owns its dashboard tab and one tab per dataset; a record saved by the earlier
+  // single-table version still owns its data tab until the user removes it.
+  for (const dashboard of [
+    { target: { sheetName: 'Output' }, outputs: [{ id: 'gads', sheetName: 'Google Ads Data' }] },
+    { target: { sheetName: 'Ads Dashboard' }, outputs: [{ id: 'gads', sheetName: 'Output' }] },
+    { target: { sheetName: 'Old report' }, dataTarget: { sheetName: 'Output' } },
+  ]) {
+    f.api.dmvList_ = (kind) =>
+      kind === 'dashboard' ? [{ spreadsheetId: f.book.id, ...dashboard }] : [];
+    assert.throws(() => f.edit('rename_sheet', { newName: 'Renamed' }), /saved dashboard/);
+  }
   f.api.dmvList_ = () => [];
   f.edit('rename_sheet', { newName: 'Renamed' });
   assert.ok(f.tab('Renamed'));

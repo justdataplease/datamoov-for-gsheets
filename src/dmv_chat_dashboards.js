@@ -9,51 +9,74 @@ function dmvChatDashboardTools_(session, baseTools) {
       )
     );
   }
-  var query = schema('run_report'),
-    summary = schema('summarize');
-  delete summary.properties.resultId;
-  delete summary.properties.filters;
-  summary.required = [];
-  query.properties.id = {
+  var dataset = schema('run_report'),
+    summary = schema('summarize').properties;
+  dataset.properties.id = {
     type: 'string',
-    pattern: '^[a-zA-Z0-9_-]{1,80}$',
-    maxLength: 80,
-    description: 'A distinct stable local source key using letters, digits, underscores or dashes.',
+    pattern: '^[a-zA-Z0-9_-]{1,40}$',
+    maxLength: 40,
+    description:
+      'Short stable key that tiles use to name this dataset, for example gads_campaigns.',
   };
-  query.properties.label = {
+  dataset.properties.label = {
     type: 'string',
-    description: 'Distinct platform and account label for the combined rows.',
+    description: 'Distinct platform, account and subject, for example "Google Ads 1 campaigns".',
   };
-  query.properties.mapping = {
+  dataset.properties.sheetName = {
+    type: 'string',
+    description: 'The tab that receives this dataset, for example "Google Ads 1 Data".',
+  };
+  dataset.properties.mapping = {
     type: 'array',
     items: {
       type: 'object',
       properties: {
-        field: { type: 'string', description: 'Original source column key.' },
+        field: { type: 'string', description: 'Original dataset column key.' },
         key: {
           type: 'string',
           description:
-            'Shared output key, for example date, campaign_id, campaign_name, spend, clicks or impressions.',
+            'Shared name, for example date, campaign_name, spend, clicks, impressions, conversions or currency.',
         },
       },
       required: ['field', 'key'],
     },
-    description: 'Align matching fields from every source. Keep the same shared keys and types.',
+    description:
+      'Only for datasets that a tile reads together with another dataset: give matching columns the same key and type in each of them. Such tiles then use these keys, plus source (the dataset label) and currency.',
   };
-  query.required = query.required.concat(['label', 'mapping']);
-  var target = {
+  dataset.required = dataset.required.concat(['id', 'label', 'sheetName']);
+  var tile = {
     type: 'object',
     properties: {
-      sheetName: { type: 'string' },
-      startCell: { type: 'string', description: 'Default A1.' },
+      title: { type: 'string' },
+      type: {
+        type: 'string',
+        enum: ['kpi', 'table'].concat(DMV_DASHBOARD.chartTypes),
+        description:
+          'kpi: scorecards of its metrics, no groupBy. Charts: groupBy[0] is the axis, an optional second groupBy column (for example source) splits one metric into series. table: any groupBy and metrics.',
+      },
+      datasets: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Dataset ids this tile reads. Several ids need a mapping on each dataset.',
+      },
+      groupBy: summary.groupBy,
+      dateBucket: summary.dateBucket,
+      metrics: summary.metrics,
+      orderBy: summary.orderBy,
+      limit: {
+        type: 'integer',
+        description: 'Rows or axis points kept. Defaults: 50 table rows, 15 categories, 400 dates.',
+      },
+      rankWithin: summary.rankWithin,
+      limitPerGroup: summary.limitPerGroup,
     },
-    required: ['sheetName'],
+    required: ['title', 'type', 'metrics'],
   };
   return [
     {
       name: 'list_dashboards',
       description:
-        'List your saved multi-source dashboards in this spreadsheet. Reuse an existing dashboard when the user asks to refresh it.',
+        'List your saved dashboards in this spreadsheet. Reuse an existing dashboard when the user asks to refresh or change it.',
       input_schema: { type: 'object', properties: {} },
       run: function (active, input) {
         dmvChatSheetObject_(input || {}, []);
@@ -63,26 +86,39 @@ function dmvChatDashboardTools_(session, baseTools) {
     {
       name: 'save_dashboard',
       description:
-        'Save a repeatable multi-source performance dashboard. Stores source queries, column mappings, dates and aggregation/ranking rules. It appears under Reports > Dashboards with Refresh dashboard. It writes two distinct tabs: dataTarget holds the combined source rows and is named "<subject> Data"; target is the dashboard itself, named "<subject> Dashboard", holding the summary table and its charts. Saving does not fetch or change output; call run_dashboard next. Start with list_dashboards to avoid duplicates; updates need id and revision. Plans stay private to this account. Charts or native pivots can be added to the output separately.',
+        'Save a refreshable dashboard: 1 to 6 datasets (each a report query written to its own tab) and up to 12 tiles laid out on the dashboard tab (target): kpi scorecards on top, then native charts, then the tables behind them. At least one tile must be a chart. The runtime fetches, aggregates, writes and charts; it appears under Reports > Dashboards, where Refresh dashboard rebuilds every tab and chart without AI. Saving does not fetch; call run_dashboard next. Updates need id and revision from list_dashboards. Plans stay private to this account.',
       input_schema: {
         type: 'object',
         properties: {
           id: { type: 'string' },
           revision: { type: 'integer' },
           name: { type: 'string' },
-          sources: { type: 'array', items: query, minItems: 2, maxItems: 8 },
-          summary: summary,
-          dataTarget: target,
-          target: target,
+          datasets: {
+            type: 'array',
+            items: dataset,
+            minItems: 1,
+            maxItems: DMV_DASHBOARD.maxDatasets,
+          },
+          tiles: { type: 'array', items: tile, minItems: 1, maxItems: DMV_DASHBOARD.maxTiles },
+          target: {
+            type: 'object',
+            properties: {
+              sheetName: {
+                type: 'string',
+                description: 'The dashboard tab, "<subject> Dashboard".',
+              },
+            },
+            required: ['sheetName'],
+          },
         },
-        required: ['name', 'sources', 'summary', 'dataTarget', 'target'],
+        required: ['name', 'datasets', 'tiles', 'target'],
       },
       run: dmvChatSaveDashboard_,
     },
     {
       name: 'run_dashboard',
       description:
-        'Refetch every source in a saved dashboard, validate and combine complete results, then rebuild the data and dashboard tabs together. Both previous outputs stay unchanged if a source or destination fails. Reuse this or the Refresh dashboard button on later visits; no cached chat results are needed.',
+        'Fetch every dataset of a saved dashboard and rebuild its data tabs, scorecards, charts and tables in one atomic write; earlier output stays unchanged if anything fails. Returns scorecard values, tile row counts and tab links. It is all a dashboard request needs: do not also call run_report, write_to_sheet or create_chart for the same data.',
       input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       run: dmvChatRunDashboard_,
     },
@@ -90,34 +126,24 @@ function dmvChatDashboardTools_(session, baseTools) {
 }
 
 function dmvChatSaveDashboard_(session, input) {
-  dmvChatSheetObject_(input, [
-    'id',
-    'revision',
-    'name',
-    'sources',
-    'summary',
-    'dataTarget',
-    'target',
-  ]);
+  dmvChatSheetObject_(input, ['id', 'revision', 'name', 'datasets', 'tiles', 'target']);
   dmvChatSheetDeadline_(session);
   var plan = Object.assign({}, input);
   if (input.id && !Number.isInteger(input.revision))
     throw new Error('List dashboards first and use the saved revision when editing a dashboard.');
-  if (!Array.isArray(input.sources)) throw new Error('Choose the dashboard sources.');
+  if (!Array.isArray(input.datasets)) throw new Error('Choose the dashboard datasets.');
   var cap = session.maxRows || DMV_LIMITS.chatDefaultRows;
-  plan.sources = input.sources.map(function (source, index) {
-    var item = Object.assign({}, source);
-    item.id = item.id || 'source-' + (index + 1);
+  plan.datasets = input.datasets.map(function (dataset) {
+    var item = Object.assign({}, dataset);
     item.maxRows = item.maxRows === undefined ? cap : item.maxRows;
     if (!Number.isInteger(item.maxRows) || item.maxRows < 1 || item.maxRows > cap)
       throw new Error(
-        'Each dashboard source must use at most ' +
+        'Each dashboard dataset must use at most ' +
           cap +
           ' rows. Change Maximum rows per chat report in Settings when needed.'
       );
     return item;
   });
-  plan.summary = Object.assign({ limit: DMV_LIMITS.maxRows }, input.summary || {});
   var saved = dmvSaveDashboard(plan);
   session.events.push({
     kind: 'dashboard',
@@ -126,8 +152,11 @@ function dmvChatSaveDashboard_(session, input) {
       'Saved dashboard "' +
       saved.name +
       '" with ' +
-      saved.sourceCount +
-      ' sources. Refresh it from Reports > Dashboards.',
+      saved.datasets.length +
+      (saved.datasets.length === 1 ? ' dataset and ' : ' datasets and ') +
+      saved.chartCount +
+      (saved.chartCount === 1 ? ' chart.' : ' charts.') +
+      ' Refresh it from Reports > Dashboards.',
   });
   return saved;
 }
@@ -142,41 +171,41 @@ function dmvChatRunDashboard_(session, input) {
     if (error.sheetUpdated)
       session.events.push({
         kind: 'write',
-        links: dmvChatDashboardLinks_(error),
+        links: error.links || [],
         action: 'updated_incomplete',
         text:
-          'Updated the data and dashboard tabs, but could not finish saving refresh status. ' +
+          'Updated the dashboard tabs, but could not finish saving refresh status. ' +
           error.message,
       });
     throw error;
   }
+  result.datasets.forEach(function (dataset) {
+    session.events.push({
+      kind: 'report',
+      text:
+        'Fetched ' +
+        dataset.label +
+        ' · ' +
+        Number(dataset.rowCount).toLocaleString() +
+        ' rows into ' +
+        dataset.sheetName,
+    });
+  });
   session.events.push({
     kind: 'dashboard',
     action: 'refreshed',
-    links: dmvChatDashboardLinks_(result),
-    text: 'Refreshed every source in the saved dashboard.',
-  });
-  session.events.push({
-    kind: 'write',
+    links: result.links,
     text:
-      'Updated ' +
-      result.dataRowCount +
-      ' combined data rows in ' +
-      result.dataTarget.sheetName +
-      ' and ' +
-      result.rowCount +
-      ' report rows in ' +
+      'Built "' +
+      result.name +
+      '" on ' +
       result.target.sheetName +
-      '.',
+      ': ' +
+      result.chartCount +
+      (result.chartCount === 1 ? ' chart, ' : ' charts, ') +
+      result.scorecards.length +
+      (result.scorecards.length === 1 ? ' scorecard.' : ' scorecards.'),
   });
+  dmvChatSeeNewTabs_(session);
   return result;
-}
-
-function dmvChatDashboardLinks_(result) {
-  return [
-    { label: 'Dashboard: ' + result.target.sheetName, url: result.reportUrl },
-    { label: 'Data: ' + result.dataTarget.sheetName, url: result.dataUrl },
-  ].filter(function (link) {
-    return !!link.url;
-  });
 }

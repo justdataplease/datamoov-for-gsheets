@@ -44,6 +44,10 @@ source fetches; multi-account and period comparisons can require several fetches
 - **Chart**: "Chart weekly spend by campaign" adds a native Sheets chart beside the table.
 - **Use existing tabs**: "Summarize the Orders tab by month" reads your own data (header row
   plus up to 500 rows × 30 columns).
+- **Any Google Ads resource**: beyond daily campaign performance, the **Custom query (GAQL)**
+  report lets chat read ad groups, ads, keywords, search terms, negative keywords, asset groups,
+  geography or account totals with one GAQL query. `discover_fields` lists the resources and the
+  fields each one supports. The report date range is applied whenever the query selects metrics.
 - **SQL sources**: for PostgreSQL, BigQuery and Snowflake the model first calls `describe_database`,
   which lists the tables and columns of the schemas or datasets you chose on the connection
   (**Schemas for chat**, default `public`; **Datasets for chat** as `project.dataset`), then
@@ -99,59 +103,73 @@ that range participate automatically. Data outside it requires a larger source r
 Native date grouping requires actual Sheets date cells; ISO dates written as text cannot be
 passed as native date groups. An already prepared month column can be an ordinary pivot group.
 
-## Saved multi-source dashboards
+## Dashboards
 
-A report imports one source into a table. A saved dashboard combines 2 to 8 source queries,
-normalizes matching fields, and produces two tabs: a **Data** tab with the combined source rows
-and a **Dashboard** tab with the aggregated summary and its charts. Both use the same report
-runtime. Create the dashboard directly in Chat; no separate
-saved reports are required first.
+A report imports one source into a table. A **dashboard** is what you ask Chat for when you want
+to *see* performance: it fetches 1 to 6 datasets, writes each to its own tab, and builds one
+**Dashboard** tab with scorecards on top, native Sheets charts below them, then the data sources
+and the table behind every chart. You do not create reports first; the dashboard carries its own
+queries.
 
-For example: **"Create a monthly Google Ads and Facebook performance dashboard, with spend,
-clicks and impressions by campaign. Save the combined data in Marketing data, put the summary
-and a chart in Marketing dashboard, and make it refreshable."** Chat saves the queries,
-dates, column mappings, grouping and ranking rules, then runs the dashboard. It explains the
-sources, whether the setup was saved and outputs updated, links to both tabs, and how to refresh
-it. Dashboard requests include suitable native charts unless you ask for tables only. Charts and
-optional formatting are created separately from the two-table write; a later chart failure does
-not mean the tables were never written.
+For example: **"Create a performance dashboard for Google Ads and Facebook Ads for the last 3
+months, every week."** Chat saves the plan and runs it once. You get:
 
-The saved card appears under **Reports > Dashboards**. **Refresh dashboard** fetches every source
-again and rebuilds both tabs without an AI call or cached chat rows. Its status shows the current
-source, combination, summary and write phases. The card also shows sources, links to available
-output tabs, last refresh, row counts and failures. Saving a plan and refreshing its output are
-reported as separate completed actions. **Create in chat** opens a draft request you can edit.
-Removing the saved setup preserves its existing tabs.
+- **Google Ads Data**, **Facebook Ads Data** (one tab per dataset). The first rows say where the
+  data came from: dataset, source, connection, report, date range, row count and refresh time.
+  The table starts on row 4.
+- **Performance Dashboard**: the title and refresh time, scorecards (spend, clicks, conversions),
+  charts such as weekly spend by platform and top campaigns, a **Data sources** table that lists
+  every dataset with its date range, rows and tab, and the numbers behind each chart.
+
+Datasets can be different subjects, not only the same report from several accounts. With the
+Google Ads **Custom query (GAQL)** report one dashboard can hold campaigns, ad groups, keywords,
+search terms and negative keywords, each on its own tab, with charts drawn from any of them.
+Charts that compare platforms read several datasets together; Chat gives their columns shared
+names (date, spend, clicks) so Google's cost and Facebook's spend line up.
+
+The answer in Chat lists what was fetched, links to every tab, and repeats the scorecard values.
+The saved card appears under **Reports > Dashboards** with a link per tab and the rows of the
+last refresh. **Refresh dashboard** fetches every dataset again and rebuilds every tab, scorecard
+and chart from the saved plan: no AI call, no AI key needed. Charts the dashboard created are
+updated in place, so a chart you moved or resized stays where you put it; one you deleted comes
+back. **Create in chat** opens a draft request you can edit. Removing the saved setup keeps its
+tabs.
 
 A request such as **"Create a marketing performance week vs previous period"** follows the same
-saved-dashboard workflow, including after you answer a source-selection question. A simple
-question about spend or performance remains an analysis unless you request a spreadsheet report.
-The default comparison uses the last completed Monday-to-Sunday week and its preceding week,
-resolved in the spreadsheet timezone. The saved plan uses `lastWeek` and `previousWeek`, with one
-query per account per period and source labels identifying both account and period. Three accounts
-therefore use six queries. Refresh advances both weeks; explicit fixed dates remain fixed.
-The summary groups by week, account/period and currency. The eight-query limit permits up to four
-accounts for this two-period setup; the chat should ask you to narrow a larger selection.
+workflow, including after you answer a source-selection question. It saves two datasets per
+account, `lastWeek` and `previousWeek` (the last completed Monday-to-Sunday week and the one
+before, in the spreadsheet timezone), so three accounts use six datasets and both weeks advance
+on refresh. A trend request saves one dataset per account for the whole period (`last90` for the
+last 3 months) and the charts group it by week or month. A simple question about spend remains an
+analysis unless you ask for a dashboard.
 
-A trend request such as **"Google Ads and Facebook performance for the last 3 months, every week"**
-saves one query per account for the whole period (`last90`) and groups the report by week. Only an
-explicit week-versus-previous-week request uses the two-period setup above.
+Limits and guarantees:
 
-Refresh resolves relative date presets again. Each source uses the higher of its saved row limit
-and your current **Maximum rows per chat report**, so raising the setting also fixes dashboards
-saved earlier. A source that still fails is named in the dashboard's error, with the limit it used.
-The complete combined result is limited to 20,000 rows and one approximately 200-second run;
-there is no continuation or schedule for dashboards yet. Currency totals stay separate.
-Source or destination failure preserves both previous outputs: every source and both write
-areas must pass validation before the single Sheets batch runs. Editing table values prevents
-an overwrite on refresh. Native charts remain in the sheet; refresh reapplies standard table header and number formats.
-Charts created with includeFutureRows follow newly added rows in their selected columns. Native pivots retain their
-explicit source range. Changing a saved column layout may require updating its charts or pivots.
+- 1 to 6 datasets and up to 12 tiles (scorecard groups, charts, tables), at least one chart.
+  Charts keep up to 12 series; by default 400 dates or 15 categories, tables 50 rows (1,000 at
+  most). A shortened tile says so in its title, for example "top 15 of 129".
+- Datasets together hold at most 20,000 rows, and the whole refresh is one roughly 200-second run
+  written in one Sheets request; there is no continuation or schedule for dashboards yet. Keep
+  datasets lean: a custom query without `segments.date` returns totals for the period instead of
+  one row per day.
+- Each dataset uses the higher of its saved row limit and your current **Maximum rows per chat
+  report**, so raising the setting also fixes dashboards saved earlier. A dataset that fails is
+  named in the error, with the limit it used.
+- Every dataset and every tab must pass validation before anything is written. A failed source
+  or an occupied destination leaves all previous tabs and charts unchanged.
+- Money in different currencies is never added: scorecards and chart series split by currency.
+  Rates and averages cannot be summed.
+- The tabs belong to the dashboard. Editing values inside its tables, or typing into the blank
+  rows reserved under the charts, stops the next refresh until the edit is undone; put your own
+  notes on another tab. Formatting you add is reset on refresh.
+- Relative date presets resolve again on every refresh, all at one local date; fixed dates stay
+  fixed.
 
 Plans, connection references and refresh state stay in the creator's private Google properties,
-scoped to this spreadsheet. They do not contain provider credentials and are not shared or copied
-with the workbook. Their output tables remain visible to spreadsheet collaborators. Single-source
-reports are stored the same way.
+scoped to this spreadsheet. Plans are stored compressed, contain no provider credentials and are
+not shared or copied with the workbook. Their output tabs remain visible to spreadsheet
+collaborators, provenance rows included, so anyone can see what fed each number. Dashboards saved
+before datasets and tiles existed are listed with a note to remove and recreate them.
 
 ## What the model sees
 
@@ -215,14 +233,14 @@ Values that come back from providers are framed as data, not instructions.
 | `edit_sheet` | Apply validated values, scalar formulas, formatting, sorting, filters, freeze panes, or tab creation/rename |
 | `create_pivot` | Create a native pivot on a new tab from a validated source range |
 | `list_dashboards` | List private saved dashboards for this spreadsheet |
-| `save_dashboard` | Save source queries, mappings, aggregation rules and two output destinations |
-| `run_dashboard` | Fetch fresh source data and atomically refresh both saved outputs; return their tab links and row counts |
+| `save_dashboard` | Save a plan: datasets (a query, a tab and optional shared column names each) and tiles (kpi, chart or table over one or more datasets) plus the dashboard tab |
+| `run_dashboard` | Fetch every dataset and atomically rebuild all tabs, scorecards, charts and tables; return scorecard values, tile row counts and tab links |
 
 Providers are adapted in `src/dmv_ai.js`: Anthropic Messages API, OpenAI Chat Completions
 and Gemini `generateContent`, each with its own tool-call format, normalized to one shape for
 the loop in `src/dmv_chat.js`. Tool implementations live in `src/dmv_chat_tools.js`, `src/dmv_chat_sheets.js`,
-`src/dmv_chat_pivots.js` and `src/dmv_chat_dashboards.js`. Saved refresh plans execute in
-`src/dmv_dashboards.js`.
+`src/dmv_chat_pivots.js` and `src/dmv_chat_dashboards.js`. Saved dashboard plans execute in
+`src/dmv_dashboards.js`, which lays out the dashboard tab and builds its charts itself.
 
 Offline tests (`tests/chat.test.mjs`) drive the loop with scripted provider replies through an
 arbitrary test connector and assert that provider secrets and the AI key never appear in a

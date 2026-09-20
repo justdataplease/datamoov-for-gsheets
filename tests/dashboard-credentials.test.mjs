@@ -49,18 +49,26 @@ function fixture(saveDashboard = true) {
   );
   f.input = {
     name: 'Guarded dashboard',
-    sources: f.connections.map((connection, index) => ({
-      connectionId: connection.id,
+    target: { sheetName: 'Summary' },
+    datasets: f.connections.map((connection, index) => ({
+      id: 'source' + index,
       label: 'Source ' + index,
+      sheetName: 'Raw ' + index,
+      connectionId: connection.id,
       reportType: 'rows',
       fields: ['value'],
       config: {},
       maxRows: 10,
       mapping: [{ field: 'value', key: 'value' }],
     })),
-    summary: { groupBy: ['source'], metrics: [{ field: 'value', agg: 'sum' }], limit: 10 },
-    dataTarget: { sheetName: 'Raw', startCell: 'A1' },
-    target: { sheetName: 'Summary', startCell: 'A1' },
+    tiles: [
+      {
+        title: 'Value by source',
+        type: 'column',
+        groupBy: ['source'],
+        metrics: [{ field: 'value', agg: 'sum' }],
+      },
+    ],
   };
   f.dashboard = saveDashboard ? f.api.dmvSaveDashboard(f.input) : null;
   f.verifications.length = 0;

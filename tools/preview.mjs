@@ -529,18 +529,25 @@ function installPreview(initial) {
       data.dashboards ||= [];
       const previous = input.id ? data.dashboards.find((item) => item.id === input.id) : null;
       if (input.id && !previous) throw new Error('Dashboard not found.');
+      const datasets = input.datasets || [
+        { id: 'gads', label: 'Google Ads campaigns', sheetName: 'Google Ads Data' },
+        { id: 'meta', label: 'Facebook Ads campaigns', sheetName: 'Facebook Ads Data' },
+      ];
       const saved = {
         id: previous?.id || 'dashboard-' + nextId++,
         name: input.name,
-        sourceCount: input.sources?.length || 2,
-        sourceLabels: input.sources?.map((source) => source.label) || [
-          'Google Ads',
-          'Facebook Ads',
-        ],
-        dataTarget: copy(input.dataTarget || { sheetName: 'Dashboard data', startCell: 'A1' }),
-        target: copy(input.target || { sheetName: 'Performance dashboard', startCell: 'A1' }),
+        datasets: datasets.map((dataset) => ({
+          id: dataset.id,
+          label: dataset.label,
+          sheetName: dataset.sheetName,
+          rowCount: null,
+          url: null,
+        })),
+        chartCount: (input.tiles || []).filter((tile) => !['kpi', 'table'].includes(tile.type))
+          .length || 3,
+        target: { sheetName: input.target?.sheetName || 'Performance Dashboard', startCell: 'A1' },
         status: 'ready',
-        statusMessage: 'Ready to fetch all sources.',
+        statusMessage: 'Ready to refresh all datasets',
         revision: (previous?.revision || 0) + 1,
       };
       if (previous) Object.assign(previous, saved);
@@ -553,34 +560,50 @@ function installPreview(initial) {
       saved.status = 'running';
       saved.lastError = '';
       for (const phase of [
-        'Fetching every source',
-        'Combining data and building the report',
-        'Updating both tabs',
+        'Fetching dataset 1 of ' + saved.datasets.length + ': ' + saved.datasets[0].label,
+        'Building scorecards, charts and tables',
+        'Updating ' + (saved.datasets.length + 1) + ' tabs and ' + saved.chartCount + ' charts',
       ]) {
         saved.statusMessage = phase;
         await new Promise((resolve) => setTimeout(resolve, 650));
       }
+      const link = (gid) =>
+        'https://docs.google.com/spreadsheets/d/datamoov-preview-only/edit#gid=' +
+        gid +
+        '&range=A1';
+      saved.datasets.forEach((dataset, index) => {
+        dataset.rowCount = 288 * (index + 1);
+        dataset.url = link(901 + index);
+      });
+      const rowCount = saved.datasets.reduce((sum, dataset) => sum + dataset.rowCount, 0);
       Object.assign(saved, {
         status: 'success',
-        statusMessage: 'Both tabs updated.',
+        statusMessage:
+          'Updated ' + saved.datasets.length + ' data tabs and ' + saved.chartCount + ' charts',
         lastRun: new Date().toISOString(),
-        lastRowCount: 12,
-        lastDataRowCount: 576,
-        dataUrl:
-          'https://docs.google.com/spreadsheets/d/datamoov-preview-only/edit#gid=901&range=A1',
-        reportUrl:
-          'https://docs.google.com/spreadsheets/d/datamoov-preview-only/edit#gid=902&range=A1',
+        lastRowCount: rowCount,
+        reportUrl: link(900),
       });
       return {
         ok: true,
         id,
-        rowCount: 12,
-        dataRowCount: 576,
+        name: saved.name,
+        rowCount,
+        chartCount: saved.chartCount,
         updatedAt: saved.lastRun,
         target: copy(saved.target),
-        dataTarget: copy(saved.dataTarget),
-        dataUrl: saved.dataUrl,
         reportUrl: saved.reportUrl,
+        datasets: copy(saved.datasets),
+        scorecards: [
+          { label: 'Spend (EUR)', value: 12480.5 },
+          { label: 'Clicks', value: 48210 },
+        ],
+        links: [{ label: 'Dashboard: ' + saved.target.sheetName, url: saved.reportUrl }].concat(
+          saved.datasets.map((dataset) => ({
+            label: 'Data: ' + dataset.sheetName,
+            url: dataset.url,
+          }))
+        ),
       };
     },
     dmvDeleteDashboard(id) {
@@ -765,30 +788,49 @@ function installPreview(initial) {
       await progressStep('Working on your request');
       if (window.DATAMOOV_PREVIEW_CHAT_REPLY) return finish(window.DATAMOOV_PREVIEW_CHAT_REPLY);
       if (/dashboard/i.test(text)) {
-        const saved = handlers.dmvSaveDashboard({
-          name: 'Performance dashboard',
-          sources: [{ label: 'Google Ads' }, { label: 'Facebook Ads' }],
-        });
-        await progressStep('Fetching dashboard sources');
+        const saved = handlers.dmvSaveDashboard({ name: 'Performance dashboard' });
+        await progressStep('Refreshing dashboard sources');
         const result = await handlers.dmvRunDashboard(saved.id);
         const answer =
-          '**Dashboard created.**\n\n- Data tab: **' +
-          result.dataTarget.sheetName +
-          '**\n- Report tab: **' +
+          '**Dashboard created.**\n\n- Dashboard tab: **' +
           result.target.sheetName +
-          '**\n\nUse **Reports > Dashboards > Refresh dashboard** to fetch both sources and rebuild both tabs. (Sample preview data.)';
+          '** with ' +
+          result.chartCount +
+          ' charts\n' +
+          result.datasets
+            .map((dataset) => '- Data tab: **' + dataset.sheetName + '**')
+            .join('\n') +
+          '\n\nUse **Reports > Dashboards > Refresh dashboard** to fetch every dataset and rebuild all tabs and charts. (Sample preview data.)';
         const events = [
           {
             kind: 'dashboard',
-            action: 'refreshed',
-            text: 'Saved dashboard with 2 sources.',
-            links: [
-              { label: 'Report: ' + result.target.sheetName + ' (preview)', url: result.reportUrl },
-              { label: 'Data: ' + result.dataTarget.sheetName + ' (preview)', url: result.dataUrl },
-            ],
+            action: 'saved',
+            text: 'Saved dashboard "Performance dashboard" with 2 datasets and 3 charts.',
           },
-          { kind: 'write', text: 'Updated the data and report tabs.' },
-        ];
+        ]
+          .concat(
+            result.datasets.map((dataset) => ({
+              kind: 'report',
+              text:
+                'Fetched ' +
+                dataset.label +
+                ' · ' +
+                dataset.rowCount +
+                ' rows into ' +
+                dataset.sheetName,
+            }))
+          )
+          .concat([
+            {
+              kind: 'dashboard',
+              action: 'refreshed',
+              text:
+                'Built "Performance dashboard" on ' +
+                result.target.sheetName +
+                ': 3 charts, 2 scorecards.',
+              links: result.links.map((item) => ({ ...item, label: item.label + ' (preview)' })),
+            },
+          ]);
         return finish({
           text: answer,
           events,

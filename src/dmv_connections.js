@@ -9,9 +9,14 @@ function dmvConnectionInUse_(id, activeOnly) {
     dmvList_('dashboard').some(function (dashboard) {
       return (
         active(dashboard) &&
-        (dashboard.sources || []).some(function (source) {
-          return source.connectionId === id;
-        })
+        // Plans are stored packed; their connections are listed beside them. Dashboards saved
+        // by an earlier version still carry plain sources.
+        (
+          dashboard.connectionIds ||
+          (dashboard.sources || []).map(function (source) {
+            return source.connectionId;
+          })
+        ).indexOf(id) >= 0
       );
     })
   );

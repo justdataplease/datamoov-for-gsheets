@@ -1,4 +1,24 @@
-/* Reproducible multi-source dashboards stay private to their owner and workbook. */
+/* Dashboards: several datasets, each refreshed into its own tab, plus one dashboard tab with
+   scorecards, native charts and their supporting tables. Plans stay private to their owner and
+   workbook. A refresh rebuilds every tab and chart from the saved plan, without an AI call. */
+var DMV_DASHBOARD = {
+  maxDatasets: 6,
+  maxTiles: 12,
+  maxKpis: 8,
+  maxSeries: 12,
+  chartTypes: ['line', 'column', 'bar', 'area', 'pie', 'scatter'],
+  chartsPerRow: 2,
+  chartBandRows: 17,
+  chartColumnSpan: 5,
+  chartWidth: 630,
+  chartHeight: 340,
+  columnWidth: 130,
+  tableRows: 50,
+  maxTableRows: 1000,
+  datePoints: 400,
+  categoryPoints: 15,
+};
+
 function dmvDashboardObject_(value, keys) {
   if (
     !value ||
@@ -7,7 +27,7 @@ function dmvDashboardObject_(value, keys) {
       return keys.indexOf(key) < 0;
     })
   )
-    throw new Error('Use only the documented dashboard settings.');
+    throw new Error('Use only the documented dashboard settings: ' + keys.join(', ') + '.');
   return value;
 }
 
@@ -17,34 +37,42 @@ function dmvDashboardInteger_(value, minimum, maximum, label) {
   return dmvInteger_(value, minimum, maximum, label);
 }
 
-function dmvDashboardTarget_(target, spreadsheet) {
-  dmvDashboardObject_(target, ['sheetName', 'startCell']);
-  var name = dmvSheetName_(target.sheetName);
-  return { sheetName: name, startCell: dmvCell_(target.startCell || 'A1').a1 };
+function dmvDashboardNames_(values, maximum, label) {
+  if (
+    !Array.isArray(values) ||
+    values.length > maximum ||
+    values.some(function (key, index) {
+      return typeof key !== 'string' || !key || key.length > 150 || values.indexOf(key) !== index;
+    })
+  )
+    throw new Error('Choose distinct ' + label + '.');
+  return values.slice();
+}
+
+function dmvDashboardIsChart_(tile) {
+  return DMV_DASHBOARD.chartTypes.indexOf(tile.type) >= 0;
 }
 
 function dmvValidateDashboard_(input, spreadsheet) {
-  dmvDashboardObject_(input, [
-    'id',
-    'revision',
-    'name',
-    'sources',
-    'summary',
-    'dataTarget',
-    'target',
-  ]);
-  if (JSON.stringify(input).length > 250000)
-    throw new Error('The dashboard configuration is too large.');
-  if (!Array.isArray(input.sources) || input.sources.length < 2 || input.sources.length > 8)
-    throw new Error('Choose between two and eight dashboard sources.');
+  dmvDashboardObject_(input, ['id', 'revision', 'name', 'datasets', 'tiles', 'target']);
+  if (
+    !Array.isArray(input.datasets) ||
+    !input.datasets.length ||
+    input.datasets.length > DMV_DASHBOARD.maxDatasets
+  )
+    throw new Error('Choose between one and six dashboard datasets.');
+  dmvDashboardObject_(input.target, ['sheetName']);
+  var target = { sheetName: dmvSheetName_(input.target.sheetName), startCell: 'A1' };
   var ids = Object.create(null),
     labels = Object.create(null),
-    queries = Object.create(null),
-    shape;
-  var sources = input.sources.map(function (source, index) {
-    dmvDashboardObject_(source, [
+    tabs = Object.create(null),
+    queries = Object.create(null);
+  tabs[target.sheetName.toLowerCase()] = true;
+  var datasets = input.datasets.map(function (dataset, index) {
+    dmvDashboardObject_(dataset, [
       'id',
       'label',
+      'sheetName',
       'connectorId',
       'connectionId',
       'reportType',
@@ -54,174 +82,307 @@ function dmvValidateDashboard_(input, spreadsheet) {
       'maxRows',
       'mapping',
     ]);
-    var query = dmvValidateQuery_(source, spreadsheet);
+    var query = dmvValidateQuery_(dataset, spreadsheet);
     query.maxRows = dmvDashboardInteger_(
-      source.maxRows === undefined ? DMV_LIMITS.defaultRows : source.maxRows,
+      dataset.maxRows === undefined ? DMV_LIMITS.defaultRows : dataset.maxRows,
       1,
       DMV_LIMITS.maxRows,
-      'Source row limit'
+      'Dataset row limit'
     );
-    var id = source.id === undefined ? 'source' + (index + 1) : source.id;
-    if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(id) || ids[id])
-      throw new Error('Use distinct source IDs of 1 to 80 letters, digits, underscores or dashes.');
+    var id = dataset.id === undefined ? 'dataset' + (index + 1) : dataset.id;
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,40}$/.test(id) || ids[id])
+      throw new Error(
+        'Use distinct dataset IDs of 1 to 40 letters, digits, underscores or dashes.'
+      );
     ids[id] = true;
-    var label = dmvText_(source.label, 'Source label', 80, true);
-    if (labels[label]) throw new Error('Use distinct dashboard source labels.');
+    var label = dmvText_(dataset.label, 'Dataset label', 80, true);
+    if (labels[label]) throw new Error('Use distinct dataset labels.');
     labels[label] = true;
+    var sheetName = dmvSheetName_(dataset.sheetName);
+    if (tabs[sheetName.toLowerCase()])
+      throw new Error('Give every dataset and the dashboard its own tab: ' + sheetName + '.');
+    tabs[sheetName.toLowerCase()] = true;
     var identityQuery = Object.assign({}, query, { fields: query.fields.slice().sort() });
     delete identityQuery.maxRows;
     var identity = JSON.stringify(dmvCanonical_(identityQuery));
     if (queries[identity])
-      throw new Error('Do not include the same source query twice in a dashboard.');
+      throw new Error('Do not include the same dataset query twice in a dashboard.');
     queries[identity] = true;
-    if (!Array.isArray(source.mapping) || !source.mapping.length || source.mapping.length > 78)
-      throw new Error('Map between one and 78 source columns.');
-    var keys = Object.create(null);
-    var mapping = source.mapping.map(function (entry) {
-      dmvDashboardObject_(entry, ['field', 'key']);
-      if (
-        typeof entry.field !== 'string' ||
-        !entry.field ||
-        entry.field.length > 150 ||
-        (query.fields.length && query.fields.indexOf(entry.field) < 0)
-      )
-        throw new Error('Map selected source fields only.');
-      if (
-        typeof entry.key !== 'string' ||
-        !/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(entry.key) ||
-        ['source', 'constructor', 'prototype', '__proto__'].indexOf(entry.key) >= 0 ||
-        keys[entry.key]
-      )
-        throw new Error('Use distinct ordinary mapped column names; source is reserved.');
-      keys[entry.key] = true;
-      return { field: entry.field, key: entry.key };
-    });
-    var currentShape = Object.keys(keys).sort().join('|');
-    if (shape !== undefined && shape !== currentShape)
-      throw new Error('Every dashboard source must map the same output columns.');
-    shape = currentShape;
-    return Object.assign({}, query, { id: id, label: label, mapping: mapping });
+    var validated = Object.assign({}, query, { id: id, label: label, sheetName: sheetName });
+    if (dataset.mapping !== undefined) {
+      if (!Array.isArray(dataset.mapping) || !dataset.mapping.length || dataset.mapping.length > 78)
+        throw new Error('Map between one and 78 dataset columns.');
+      var keys = Object.create(null);
+      validated.mapping = dataset.mapping.map(function (entry) {
+        dmvDashboardObject_(entry, ['field', 'key']);
+        if (
+          typeof entry.field !== 'string' ||
+          !entry.field ||
+          entry.field.length > 150 ||
+          (query.fields.length && query.fields.indexOf(entry.field) < 0)
+        )
+          throw new Error('Map selected dataset fields only.');
+        if (
+          typeof entry.key !== 'string' ||
+          !/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(entry.key) ||
+          ['source', 'constructor', 'prototype', '__proto__'].indexOf(entry.key) >= 0 ||
+          keys[entry.key]
+        )
+          throw new Error('Use distinct ordinary mapped column names; source is reserved.');
+        keys[entry.key] = true;
+        return { field: entry.field, key: entry.key };
+      });
+    }
+    return validated;
   });
-  var columns = sources[0].mapping
-    .map(function (entry) {
-      return entry.key;
-    })
-    .concat(['source', 'currency']);
-  var summary = input.summary;
-  dmvDashboardObject_(summary, [
-    'groupBy',
-    'dateBucket',
-    'metrics',
-    'orderBy',
-    'rankWithin',
-    'limitPerGroup',
-    'limit',
-  ]);
-  function names(values, allowed, label) {
+  if (
+    !Array.isArray(input.tiles) ||
+    !input.tiles.length ||
+    input.tiles.length > DMV_DASHBOARD.maxTiles
+  )
+    throw new Error('Choose between one and twelve dashboard tiles.');
+  var kpis = 0;
+  var tiles = input.tiles.map(function (tile) {
+    dmvDashboardObject_(tile, [
+      'title',
+      'type',
+      'datasets',
+      'groupBy',
+      'dateBucket',
+      'metrics',
+      'orderBy',
+      'limit',
+      'rankWithin',
+      'limitPerGroup',
+    ]);
+    var title = dmvText_(tile.title, 'Tile title', 120, true);
+    var type = String(tile.type || '');
+    if (['kpi', 'table'].concat(DMV_DASHBOARD.chartTypes).indexOf(type) < 0)
+      throw new Error('Tile type must be kpi, table, ' + DMV_DASHBOARD.chartTypes.join(', ') + '.');
+    var from =
+      tile.datasets === undefined
+        ? Object.keys(ids)
+        : dmvDashboardNames_(tile.datasets, DMV_DASHBOARD.maxDatasets, 'tile datasets');
     if (
-      !Array.isArray(values) ||
-      values.length > 78 ||
-      values.some(function (key, index) {
-        return typeof key !== 'string' || allowed.indexOf(key) < 0 || values.indexOf(key) !== index;
+      !from.length ||
+      from.some(function (id) {
+        return !ids[id];
       })
     )
-      throw new Error('Choose distinct valid ' + label + ' columns.');
-    return values.slice();
-  }
-  var groupBy = names(summary.groupBy || [], columns, 'grouping');
-  if (!Array.isArray(summary.metrics) || summary.metrics.length > 78)
-    throw new Error('Choose valid dashboard metrics.');
-  var metricKeys = Object.create(null);
-  var metrics = summary.metrics.map(function (metric) {
-    dmvDashboardObject_(metric, ['field', 'agg']);
+      throw new Error('"' + title + '": datasets must name dataset IDs of this dashboard.');
+    var members = datasets.filter(function (dataset) {
+      return from.indexOf(dataset.id) >= 0;
+    });
+    var mapped = members.every(function (dataset) {
+      return !!dataset.mapping;
+    });
+    if (members.length > 1 && !mapped)
+      throw new Error(
+        '"' +
+          title +
+          '" reads several datasets, so each of them needs a mapping that gives their columns shared names.'
+      );
+    // Mapped columns are known now; columns of an unmapped dataset are checked at refresh.
+    var allowed = mapped
+      ? members[0].mapping
+          .map(function (entry) {
+            return entry.key;
+          })
+          .filter(function (key) {
+            return members.every(function (dataset) {
+              return dataset.mapping.some(function (entry) {
+                return entry.key === key;
+              });
+            });
+          })
+          .concat(['source', 'currency'])
+      : null;
+    function known(name) {
+      if (allowed && allowed.indexOf(name) < 0)
+        throw new Error(
+          '"' + title + '": unknown column "' + name + '". Mapped columns: ' + allowed.join(', ')
+        );
+      return name;
+    }
+    var groupBy = dmvDashboardNames_(tile.groupBy || [], 6, 'groupBy columns').map(known);
     if (
-      columns.indexOf(metric.field) < 0 ||
-      ['sum', 'avg', 'min', 'max', 'count', 'count_distinct'].indexOf(metric.agg) < 0
+      !Array.isArray(tile.metrics === undefined ? [] : tile.metrics) ||
+      (tile.metrics || []).length > 8
     )
-      throw new Error('Choose a mapped field and supported metric aggregation.');
-    var key = metric.field + '__' + metric.agg;
-    if (metricKeys[key] || groupBy.indexOf(key) >= 0)
-      throw new Error('Choose distinct dashboard metrics.');
-    metricKeys[key] = true;
-    return { field: metric.field, agg: metric.agg };
-  });
-  if (!groupBy.length && !metrics.length)
-    throw new Error('Choose grouping columns or metrics for the dashboard report.');
-  if (groupBy.length + metrics.length > DMV_LIMITS.maxColumns)
-    throw new Error('Choose at most 80 report columns.');
-  var bucket = summary.dateBucket || 'day';
-  if (['day', 'week', 'month', 'year'].indexOf(bucket) < 0)
-    throw new Error('Choose day, week, month or year date grouping.');
-  var validatedSummary = {
-    groupBy: groupBy,
-    metrics: metrics,
-    dateBucket: bucket,
-    limit: dmvDashboardInteger_(
-      summary.limit === undefined ? DMV_LIMITS.maxRows : summary.limit,
-      1,
-      DMV_LIMITS.maxRows,
-      'Summary row limit'
-    ),
-  };
-  if (summary.orderBy !== undefined) {
-    dmvDashboardObject_(summary.orderBy, ['field', 'direction']);
-    if (
-      groupBy.concat(Object.keys(metricKeys)).indexOf(summary.orderBy.field) < 0 ||
-      ['asc', 'desc'].indexOf(summary.orderBy.direction) < 0
-    )
-      throw new Error('Choose a valid summary sort column and direction.');
-    validatedSummary.orderBy = {
-      field: summary.orderBy.field,
-      direction: summary.orderBy.direction,
+      throw new Error('"' + title + '": choose at most eight metrics.');
+    var metricKeys = Object.create(null);
+    var metrics = (tile.metrics || []).map(function (metric) {
+      dmvDashboardObject_(metric, ['field', 'agg']);
+      var agg = metric.agg === undefined ? 'sum' : metric.agg;
+      if (
+        typeof metric.field !== 'string' ||
+        !metric.field ||
+        metric.field.length > 150 ||
+        ['sum', 'avg', 'min', 'max', 'count', 'count_distinct'].indexOf(agg) < 0 ||
+        metricKeys[metric.field + '__' + agg]
+      )
+        throw new Error('"' + title + '": choose distinct metrics with a supported agg.');
+      metricKeys[metric.field + '__' + agg] = true;
+      return { field: known(metric.field), agg: agg };
+    });
+    var bucket = tile.dateBucket || 'day';
+    if (['day', 'week', 'month', 'year'].indexOf(bucket) < 0)
+      throw new Error('Choose day, week, month or year date grouping.');
+    var validated = {
+      title: title,
+      type: type,
+      datasets: from,
+      groupBy: groupBy,
+      dateBucket: bucket,
+      metrics: metrics,
     };
-  }
-  if (summary.rankWithin !== undefined || summary.limitPerGroup !== undefined) {
-    var rankWithin = names(summary.rankWithin, groupBy, 'ranking');
-    if (!rankWithin.length || !validatedSummary.orderBy)
-      throw new Error('Per-group rankings need grouping columns and an explicit sort metric.');
-    validatedSummary.rankWithin = rankWithin;
-    validatedSummary.limitPerGroup = dmvDashboardInteger_(
-      summary.limitPerGroup,
-      1,
-      DMV_LIMITS.maxRows,
-      'Per-group row limit'
+    if (type === 'kpi') {
+      if (groupBy.length || !metrics.length)
+        throw new Error('"' + title + '": a kpi tile takes metrics and no groupBy.');
+      kpis += metrics.length;
+    } else if (type === 'table') {
+      if (!groupBy.length && !metrics.length)
+        throw new Error('"' + title + '": a table needs groupBy columns or metrics.');
+    } else {
+      if (!groupBy.length || groupBy.length > 2 || !metrics.length)
+        throw new Error(
+          '"' +
+            title +
+            '": a chart needs metrics and one groupBy column for its axis; a second groupBy column splits it into series.'
+        );
+      if ((groupBy.length === 2 || type === 'pie') && metrics.length !== 1)
+        throw new Error('"' + title + '": a pie or split chart takes exactly one metric.');
+      if (type === 'pie' && groupBy.length !== 1)
+        throw new Error('"' + title + '": a pie chart takes one groupBy column.');
+    }
+    if (tile.orderBy !== undefined) {
+      dmvDashboardObject_(tile.orderBy, ['field', 'direction']);
+      if (
+        typeof tile.orderBy.field !== 'string' ||
+        !tile.orderBy.field ||
+        tile.orderBy.field.length > 160 ||
+        ['asc', 'desc'].indexOf(tile.orderBy.direction) < 0
+      )
+        throw new Error('"' + title + '": orderBy needs a field and asc or desc.');
+      validated.orderBy = { field: tile.orderBy.field, direction: tile.orderBy.direction };
+    }
+    if (tile.limit !== undefined)
+      validated.limit = dmvDashboardInteger_(
+        tile.limit,
+        1,
+        DMV_DASHBOARD.maxTableRows,
+        'Tile row limit'
+      );
+    if (tile.rankWithin !== undefined || tile.limitPerGroup !== undefined) {
+      if (type !== 'table' || !validated.orderBy)
+        throw new Error(
+          '"' + title + '": per-group rankings need a table tile with an explicit orderBy metric.'
+        );
+      validated.rankWithin = dmvDashboardNames_(tile.rankWithin, 6, 'ranking columns');
+      if (
+        !validated.rankWithin.length ||
+        validated.rankWithin.some(function (key) {
+          return groupBy.indexOf(key) < 0;
+        })
+      )
+        throw new Error('"' + title + '": every rankWithin column must also be in groupBy.');
+      validated.limitPerGroup = dmvDashboardInteger_(
+        tile.limitPerGroup,
+        1,
+        DMV_DASHBOARD.maxTableRows,
+        'Per-group row limit'
+      );
+    }
+    return validated;
+  });
+  if (!tiles.some(dmvDashboardIsChart_))
+    throw new Error(
+      'A dashboard needs at least one chart tile (' +
+        DMV_DASHBOARD.chartTypes.join(', ') +
+        '). Numbers alone are a report.'
     );
-  }
-  var dataTarget = dmvDashboardTarget_(input.dataTarget, spreadsheet),
-    target = dmvDashboardTarget_(input.target, spreadsheet);
-  if (dataTarget.sheetName === target.sheetName)
-    throw new Error('Choose different tabs for combined data and the dashboard report.');
+  if (kpis > DMV_DASHBOARD.maxKpis) throw new Error('Choose at most eight kpi metrics.');
   return {
     name: dmvText_(input.name, 'Dashboard name', 80, true),
-    sources: sources,
-    summary: validatedSummary,
-    dataTarget: dataTarget,
+    datasets: datasets,
+    tiles: tiles,
     target: target,
   };
 }
 
+// Dashboards saved before datasets and tiles existed combined every source into one table.
+function dmvDashboardLegacy_(dashboard) {
+  return !dashboard.plan;
+}
+
+var DMV_DASHBOARD_LEGACY =
+  'This dashboard was saved by an earlier version. Remove it and ask Chat to create it again.';
+
+function dmvDashboardPlan_(dashboard) {
+  if (dmvDashboardLegacy_(dashboard)) throw new Error(DMV_DASHBOARD_LEGACY);
+  try {
+    return dmvUnpack_(dashboard.plan);
+  } catch (ignored) {
+    throw new Error('This saved dashboard is damaged. Remove it and create it again.');
+  }
+}
+
+function dmvDashboardOutputId_(dashboard, dataset) {
+  return dashboard.id + '-d-' + dataset.id;
+}
+
+function dmvDashboardLinks_(spreadsheet, dashboard) {
+  return [
+    {
+      label: 'Dashboard: ' + dashboard.target.sheetName,
+      url: dmvSheetLink_(spreadsheet, dashboard.target),
+    },
+  ]
+    .concat(
+      (dashboard.outputs || []).map(function (output) {
+        return {
+          label: 'Data: ' + output.sheetName,
+          url: dmvSheetLink_(spreadsheet, { sheetName: output.sheetName, startCell: 'A1' }),
+        };
+      })
+    )
+    .filter(function (link) {
+      return !!link.url;
+    });
+}
+
 function dmvDashboardSummary_(dashboard) {
+  var legacy = dmvDashboardLegacy_(dashboard);
   var expired = dashboard.status === 'running' && Date.now() - dashboard.startedAt >= 300000;
+  var spreadsheet = dmvSpreadsheet_();
   return {
     id: dashboard.id,
     revision: dashboard.revision,
     name: dashboard.name,
-    sourceCount: dashboard.sources.length,
-    sourceLabels: dashboard.sources.map(function (source) {
-      return source.label;
-    }),
-    dataTarget: dashboard.dataTarget,
+    legacy: legacy,
+    datasets: legacy
+      ? []
+      : dashboard.outputs.map(function (output) {
+          return {
+            id: output.id,
+            label: output.label,
+            sheetName: output.sheetName,
+            rowCount: output.rows === undefined ? null : output.rows,
+            url: dmvSheetLink_(spreadsheet, { sheetName: output.sheetName, startCell: 'A1' }),
+          };
+        }),
+    chartCount: dashboard.chartCount || 0,
     target: dashboard.target,
-    dataUrl: dmvSheetLink_(dmvSpreadsheet_(), dashboard.dataTarget),
-    reportUrl: dmvSheetLink_(dmvSpreadsheet_(), dashboard.target),
-    status: expired ? 'error' : dashboard.status,
-    statusMessage: expired
-      ? 'The previous refresh was interrupted. Refresh again to retry all sources.'
-      : dashboard.statusMessage || '',
+    reportUrl: dmvSheetLink_(spreadsheet, dashboard.target),
+    status: legacy || expired ? 'error' : dashboard.status,
+    statusMessage: legacy
+      ? 'Saved by an earlier version'
+      : expired
+        ? 'The previous refresh was interrupted. Refresh again to retry all datasets.'
+        : dashboard.statusMessage || '',
     lastRun: dashboard.lastRun || null,
     lastRowCount: dashboard.lastRowCount === undefined ? null : dashboard.lastRowCount,
-    lastDataRowCount: dashboard.lastDataRowCount === undefined ? null : dashboard.lastDataRowCount,
-    lastError: dashboard.lastError || '',
+    lastError: legacy ? DMV_DASHBOARD_LEGACY : dashboard.lastError || '',
     private: true,
   };
 }
@@ -252,41 +413,89 @@ function dmvSaveDashboard(input) {
       throw new Error('This dashboard changed. Refresh the sidebar before saving.');
     if (!previous && dmvList_('dashboard').length >= DMV_LIMITS.maxReports)
       throw new Error('Keep at most 30 private dashboards.');
-    var dashboard = Object.assign(dmvValidateDashboard_(input, spreadsheet), {
+    var plan = dmvValidateDashboard_(input, spreadsheet);
+    var dashboard = {
       id: previous ? previous.id : dmvId_(),
       spreadsheetId: spreadsheet.getId(),
       revision: previous ? previous.revision + 1 : 1,
+      name: plan.name,
+      target: plan.target,
+      outputs: plan.datasets.map(function (dataset) {
+        return { id: dataset.id, label: dataset.label, sheetName: dataset.sheetName };
+      }),
+      chartCount: plan.tiles.filter(dmvDashboardIsChart_).length,
+      // Listed outside the packed plan so connection guards need not unpack every dashboard.
+      connectionIds: plan.datasets
+        .map(function (dataset) {
+          return dataset.connectionId;
+        })
+        .filter(function (connectionId, index, all) {
+          return all.indexOf(connectionId) === index;
+        }),
+      plan: dmvPack_({ datasets: plan.datasets, tiles: plan.tiles }),
+      chartIds: (previous && previous.chartIds) || [],
       status: 'ready',
-      statusMessage: 'Ready to refresh all sources',
+      statusMessage: 'Ready to refresh all datasets',
       lastError: '',
       runToken: null,
-    });
-    ['lastRun', 'lastRowCount', 'lastDataRowCount'].forEach(function (key) {
+    };
+    ['lastRun', 'lastRowCount'].forEach(function (key) {
       if (previous && previous[key] !== undefined) dashboard[key] = previous[key];
     });
     // Reserve record room for execution metadata so a valid plan can always record its outcome.
-    dmvCheckRecordSize_(
-      Object.assign({}, dashboard, {
-        statusMessage: 'x'.repeat(520),
-        lastError: 'x'.repeat(1600),
-        runToken: 'x'.repeat(80),
-        startedAt: Date.now(),
-        lastRun: new Date().toISOString(),
-        lastRowCount: 20000,
-        lastDataRowCount: 20000,
-      })
-    );
+    try {
+      dmvCheckRecordSize_(
+        Object.assign({}, dashboard, {
+          statusMessage: 'x'.repeat(200),
+          lastError: 'x'.repeat(900),
+          runToken: 'x'.repeat(80),
+          startedAt: Date.now(),
+          lastRun: new Date().toISOString(),
+          lastRowCount: 20000,
+          chartIds: plan.tiles.map(function () {
+            return 2000000000;
+          }),
+          outputs: dashboard.outputs.map(function (output) {
+            return Object.assign({ rows: 20000 }, output);
+          }),
+        })
+      );
+    } catch (ignored) {
+      throw new Error('This dashboard is too large to save. Use fewer datasets, fields or tiles.');
+    }
     dmvSave_('dashboard', dashboard);
+    // A dataset dropped from the plan no longer owns its tab.
+    ((previous && previous.outputs) || []).forEach(function (output) {
+      if (
+        !dashboard.outputs.some(function (kept) {
+          return kept.id === output.id;
+        })
+      )
+        dmvStore_().deleteProperty(
+          dmvOutputKey_(dashboard.spreadsheetId, dmvDashboardOutputId_(dashboard, output))
+        );
+    });
     return dmvDashboardSummary_(dashboard);
   });
 }
 
+// Like a report, removing a dashboard keeps its tabs and releases their ownership receipts.
 function dmvDeleteDashboard(id) {
   return dmvLocked_(function () {
     var dashboard = dmvDashboardHere_(id);
     if (dashboard.runToken && Date.now() - dashboard.startedAt < 300000)
       throw new Error('Wait for this dashboard refresh to finish.');
-    dmvStore_().deleteProperty(dmvKey_('dashboard', dashboard.id));
+    var store = dmvStore_();
+    store.deleteProperty(dmvKey_('dashboard', dashboard.id));
+    ['-report', '-data']
+      .concat(
+        (dashboard.outputs || []).map(function (output) {
+          return '-d-' + output.id;
+        })
+      )
+      .forEach(function (suffix) {
+        store.deleteProperty(dmvOutputKey_(dashboard.spreadsheetId, dashboard.id + suffix));
+      });
     return { ok: true };
   });
 }
@@ -294,8 +503,447 @@ function dmvDeleteDashboard(id) {
 function dmvDashboardDeadline_(deadline) {
   if (Date.now() > deadline - 10000)
     throw new Error(
-      'This dashboard reached its refresh time limit. Narrow its source reports and try again.'
+      'This dashboard reached its refresh time limit. Narrow its datasets and try again.'
     );
+}
+
+function dmvDashboardPad_(row, width) {
+  row = row.map(dmvSheetValue_);
+  while (row.length < width) row.push('');
+  return row;
+}
+
+// The rows a tile reads: one dataset as fetched, or datasets appended under their shared mapped
+// names with a source column. Tiles over the same datasets share one input.
+function dmvDashboardInput_(session, datasets, tile, fetched, memo) {
+  var key = tile.datasets.join('|');
+  if (memo[key]) return memo[key];
+  var members = datasets.filter(function (dataset) {
+    return tile.datasets.indexOf(dataset.id) >= 0;
+  });
+  if (members.length === 1 && !members[0].mapping) return (memo[key] = fetched[members[0].id]);
+  var shared = members[0].mapping.filter(function (entry) {
+    return members.every(function (dataset) {
+      return dataset.mapping.some(function (other) {
+        return other.key === entry.key;
+      });
+    });
+  });
+  if (!shared.length)
+    throw new Error('"' + tile.title + '": its datasets share no mapped column names.');
+  var combined = dmvChatCombine_(
+    session,
+    {
+      sources: members.map(function (dataset) {
+        return {
+          resultId: fetched[dataset.id],
+          label: dataset.label,
+          columns: dataset.mapping
+            .filter(function (entry) {
+              return shared.some(function (other) {
+                return other.key === entry.key;
+              });
+            })
+            .map(function (entry) {
+              return { from: entry.field, to: entry.key };
+            }),
+        };
+      }),
+    },
+    1
+  );
+  return (memo[key] = combined.resultId);
+}
+
+// Money in several currencies is never added together: the tile splits by currency instead of
+// failing, because a refresh has no model to repair the plan.
+function dmvDashboardSummarize_(session, resultId, spec) {
+  function run(input) {
+    var described = dmvChatSummarize_(session, Object.assign({ resultId: resultId }, input));
+    return dmvChatResult_(session, described.resultId);
+  }
+  try {
+    return run(spec);
+  } catch (error) {
+    var column = (dmvChatResult_(session, resultId).metadata || {}).currencyColumn;
+    if (!column || !/different currencies|Include currency/.test(error.message)) throw error;
+    var retry = Object.assign({}, spec, { groupBy: (spec.groupBy || []).concat([column]) });
+    if (spec.rankWithin) retry.rankWithin = spec.rankWithin.concat([column]);
+    return run(retry);
+  }
+}
+
+// Mapped columns are named by their keys ("campaign_name"); headers read better capitalized.
+function dmvDashboardLabel_(value) {
+  var text = String(value === null || value === undefined ? '' : value);
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function dmvDashboardCards_(session, resultId, tile) {
+  var base = dmvChatResult_(session, resultId);
+  var cards = [];
+  tile.metrics.forEach(function (metric) {
+    var column = dmvChatColumn_(base, metric.field, 'metric');
+    var summary = dmvDashboardSummarize_(session, resultId, { metrics: [metric], limit: 50 });
+    var value = summary.columns[summary.columns.length - 1];
+    // Money always names its currency, so neither a reader nor the chat has to guess it.
+    var single = value.type === 'currency' ? (summary.metadata || {}).currency : '';
+    summary.rows.forEach(function (row) {
+      var split =
+        summary.columns.length > 1
+          ? ' (' + row[summary.columns[0].key] + ')'
+          : single
+            ? ' (' + single + ')'
+            : '';
+      cards.push({
+        label: dmvDashboardLabel_(value.label || column.key) + split,
+        value: row[value.key] === null || row[value.key] === undefined ? '' : row[value.key],
+        type: value.type,
+      });
+    });
+  });
+  return cards;
+}
+
+// A chart reads a wide table: the axis column, then one column per series.
+function dmvDashboardChartTable_(session, resultId, tile) {
+  var base = dmvChatResult_(session, resultId);
+  var axis = dmvChatColumn_(base, tile.groupBy[0], 'groupBy column');
+  var summary = dmvDashboardSummarize_(session, resultId, {
+    groupBy: tile.groupBy,
+    dateBucket: tile.dateBucket,
+    metrics: tile.metrics,
+    limit: DMV_LIMITS.maxRows,
+  });
+  var dimensions = summary.columns.filter(function (column) {
+    return column.role === 'dimension';
+  });
+  var values = summary.columns.filter(function (column) {
+    return column.role !== 'dimension';
+  });
+  var splits = dimensions.slice(1);
+  var series = [],
+    seriesByName = Object.create(null),
+    points = [],
+    pointByKey = Object.create(null);
+  summary.rows.forEach(function (row) {
+    var x = row[dimensions[0].key];
+    x = x === null || x === undefined ? '' : x;
+    var point = pointByKey[JSON.stringify(x)];
+    if (!point) {
+      point = pointByKey[JSON.stringify(x)] = { x: x, values: Object.create(null), total: 0 };
+      points.push(point);
+    }
+    var split = splits
+      .map(function (column) {
+        return String(row[column.key] === null ? '' : row[column.key]);
+      })
+      .join(' · ');
+    values.forEach(function (column) {
+      var label = String(column.label || column.key);
+      var name = !split ? label : values.length > 1 ? label + ' · ' + split : split;
+      if (!seriesByName[name]) {
+        seriesByName[name] = { name: name, type: column.type, total: 0 };
+        series.push(seriesByName[name]);
+      }
+      var number = Number(row[column.key]);
+      point.values[name] = row[column.key];
+      if (isFinite(number)) {
+        seriesByName[name].total += Math.abs(number);
+        point.total += Math.abs(number);
+      }
+    });
+  });
+  var note = '';
+  if (series.length > DMV_DASHBOARD.maxSeries) {
+    note = 'top ' + DMV_DASHBOARD.maxSeries + ' of ' + series.length + ' series';
+    series = series
+      .slice()
+      .sort(function (a, b) {
+        return b.total - a.total;
+      })
+      .slice(0, DMV_DASHBOARD.maxSeries);
+  }
+  var dated = axis.type === 'date';
+  var ascending = tile.orderBy && tile.orderBy.direction === 'asc' ? 1 : -1;
+  points.sort(function (a, b) {
+    if (dated) return a.x < b.x ? -1 : a.x > b.x ? 1 : 0;
+    return (a.total - b.total) * ascending;
+  });
+  var limit = tile.limit || (dated ? DMV_DASHBOARD.datePoints : DMV_DASHBOARD.categoryPoints);
+  if (points.length > limit) {
+    note =
+      (note ? note + ', ' : '') + (dated ? 'latest ' : 'top ') + limit + ' of ' + points.length;
+    points = dated ? points.slice(points.length - limit) : points.slice(0, limit);
+  }
+  var columns = [
+    { key: 'x', label: dimensions[0].label, type: dimensions[0].type === 'date' ? 'date' : 'text' },
+  ].concat(
+    series.map(function (item) {
+      return { key: item.name, label: item.name, type: item.type };
+    })
+  );
+  var matrix = [
+    columns.map(function (column) {
+      return dmvDashboardLabel_(column.label);
+    }),
+  ].concat(
+    points.map(function (point) {
+      return [point.x].concat(
+        series.map(function (item) {
+          var value = point.values[item.name];
+          return value === null || value === undefined ? '' : value;
+        })
+      );
+    })
+  );
+  if (matrix.length < 2) throw new Error('"' + tile.title + '" has no rows to chart.');
+  return { columns: columns, matrix: matrix, note: note };
+}
+
+function dmvDashboardTable_(session, resultId, tile) {
+  var spec = {
+    groupBy: tile.groupBy,
+    dateBucket: tile.dateBucket,
+    metrics: tile.metrics,
+    limit: tile.limit || DMV_DASHBOARD.tableRows,
+  };
+  ['orderBy', 'rankWithin', 'limitPerGroup'].forEach(function (key) {
+    if (tile[key] !== undefined) spec[key] = tile[key];
+  });
+  var summary = dmvDashboardSummarize_(session, resultId, spec);
+  var normalized = dmvNormalizeResult_(summary, DMV_DASHBOARD.maxTableRows);
+  var metadata = summary.metadata || {};
+  normalized.matrix[0] = normalized.matrix[0].map(dmvDashboardLabel_);
+  return {
+    columns: normalized.columns,
+    matrix: normalized.matrix,
+    note:
+      metadata.rankedGroups > summary.rows.length ||
+      (!metadata.ranking && metadata.totalGroups > summary.rows.length)
+        ? 'top ' + summary.rows.length + ' of ' + (metadata.rankedGroups || metadata.totalGroups)
+        : '',
+  };
+}
+
+// The dashboard tab is one owned page: title, scorecards, a band reserved for the charts, the
+// data sources, then the table behind every chart and table tile.
+function dmvDashboardPage_(dashboard, stamp, cards, blocks, sources) {
+  cards = cards.slice(0, DMV_DASHBOARD.maxKpis);
+  var width = Math.max(
+    7,
+    cards.length,
+    Math.max.apply(
+      null,
+      blocks.map(function (block) {
+        return block.columns.length;
+      })
+    )
+  );
+  var matrix = [],
+    tables = [],
+    styles = [],
+    charts = [];
+  function push(row) {
+    matrix.push(dmvDashboardPad_(row, width));
+    return matrix.length - 1;
+  }
+  styles.push({ row: push([dashboard.name]), style: 'title' });
+  styles.push({
+    row: push([
+      'Refreshed ' +
+        stamp +
+        ' · DataMoov > Reports > Dashboards > Refresh dashboard updates every tab and chart',
+    ]),
+    style: 'muted',
+  });
+  push([]);
+  if (cards.length) {
+    styles.push({
+      row: push(
+        cards.map(function (card) {
+          return card.label;
+        })
+      ),
+      columns: cards.length,
+      style: 'kpiLabel',
+    });
+    var valueRow = push(
+      cards.map(function (card) {
+        return card.value;
+      })
+    );
+    cards.forEach(function (card, index) {
+      styles.push({ row: valueRow, column: index, style: 'kpiValue', type: card.type });
+    });
+    push([]);
+  }
+  var chartTop = matrix.length;
+  var chartCount = blocks.filter(function (block) {
+    return block.chart;
+  }).length;
+  var bandRows = Math.ceil(chartCount / DMV_DASHBOARD.chartsPerRow) * DMV_DASHBOARD.chartBandRows;
+  for (var i = 0; i < bandRows; i++) push([]);
+  styles.push({ row: push(['Data sources']), style: 'section' });
+  tables.push({
+    row: push(['Dataset', 'Source', 'Connection', 'Report', 'Date range', 'Rows', 'Tab']),
+    rows: sources.length + 1,
+    columns: ['text', 'text', 'text', 'text', 'text', 'number', 'text'].map(function (type) {
+      return { type: type };
+    }),
+  });
+  sources.forEach(push);
+  blocks.forEach(function (block) {
+    push([]);
+    styles.push({
+      row: push([block.title + (block.note ? ' (' + block.note + ')' : '')]),
+      style: 'section',
+    });
+    var top = matrix.length;
+    block.matrix.forEach(push);
+    tables.push({ row: top, rows: block.matrix.length, columns: block.columns });
+    if (block.chart)
+      charts.push({
+        type: block.type,
+        title: block.title,
+        row: top,
+        rows: block.matrix.length,
+        columns: block.columns.length,
+        anchorRow:
+          chartTop +
+          Math.floor(charts.length / DMV_DASHBOARD.chartsPerRow) * DMV_DASHBOARD.chartBandRows,
+        anchorColumn: (charts.length % DMV_DASHBOARD.chartsPerRow) * DMV_DASHBOARD.chartColumnSpan,
+      });
+  });
+  return {
+    matrix: matrix,
+    layout: { tables: tables, styles: styles },
+    charts: charts,
+    width: width,
+  };
+}
+
+function dmvDashboardChartSpec_(chart, area) {
+  function column(offset, skipHeader) {
+    return {
+      sourceRange: {
+        sources: [
+          {
+            sheetId: area.sheetId,
+            startRowIndex: area.row - 1 + chart.row + (skipHeader ? 1 : 0),
+            endRowIndex: area.row - 1 + chart.row + chart.rows,
+            startColumnIndex: area.column - 1 + offset,
+            endColumnIndex: area.column + offset,
+          },
+        ],
+      },
+    };
+  }
+  var spec = { title: chart.title };
+  if (chart.type === 'pie')
+    spec.pieChart = {
+      legendPosition: 'RIGHT_LEGEND',
+      domain: column(0, true),
+      series: column(1, true),
+    };
+  else {
+    var series = [];
+    for (var offset = 1; offset < chart.columns; offset++)
+      series.push({ series: column(offset, false), targetAxis: 'LEFT_AXIS' });
+    spec.basicChart = {
+      chartType: DMV_CHART_TYPES[chart.type],
+      legendPosition: series.length > 1 ? 'BOTTOM_LEGEND' : 'NO_LEGEND',
+      headerCount: 1,
+      domains: [{ domain: column(0, false) }],
+      series: series,
+    };
+  }
+  return spec;
+}
+
+// Charts the dashboard created earlier are updated in place, which keeps a position or size
+// the user adjusted; missing ones are added and surplus ones removed, all in the write batch.
+// The runtime chooses the ids of new charts itself (outcome.chartIds) so the caller can record
+// them before the batch is sent: a retry after an interrupted refresh then finds its charts
+// instead of stacking a second set on top.
+function dmvDashboardChartRequests_(spreadsheetId, charts, area, width, savedIds, outcome) {
+  var response = Sheets.Spreadsheets.get(spreadsheetId, {
+    fields: 'sheets(properties.sheetId,charts.chartId)',
+  });
+  var sheet = null,
+    existing = Object.create(null),
+    taken = Object.create(null);
+  ((response && response.sheets) || []).forEach(function (item) {
+    var here = item.properties && item.properties.sheetId === area.sheetId;
+    if (here) sheet = item;
+    (item.charts || []).forEach(function (chart) {
+      taken[chart.chartId] = true;
+      if (here) existing[chart.chartId] = true;
+    });
+  });
+  var requests = [];
+  outcome.chartIds = [];
+  function add(request) {
+    requests.push(request);
+  }
+  if (!sheet) {
+    add({
+      updateDimensionProperties: {
+        range: {
+          sheetId: area.sheetId,
+          dimension: 'COLUMNS',
+          startIndex: area.column - 1,
+          endIndex: area.column - 1 + width,
+        },
+        properties: { pixelSize: DMV_DASHBOARD.columnWidth },
+        fields: 'pixelSize',
+      },
+    });
+    add({
+      updateSheetProperties: {
+        properties: { sheetId: area.sheetId, gridProperties: { hideGridlines: true } },
+        fields: 'gridProperties.hideGridlines',
+      },
+    });
+  }
+  charts.forEach(function (chart, index) {
+    var spec = dmvDashboardChartSpec_(chart, area);
+    var saved = savedIds[index];
+    if (saved !== undefined && saved !== null && existing[saved]) {
+      outcome.chartIds[index] = saved;
+      add({ updateChartSpec: { chartId: saved, spec: spec } });
+      return;
+    }
+    var chartId;
+    do chartId = parseInt(dmvOutputDigest_(Utilities.getUuid()).slice(0, 7), 16);
+    while (taken[chartId]);
+    taken[chartId] = true;
+    outcome.chartIds[index] = chartId;
+    add({
+      addChart: {
+        chart: {
+          chartId: chartId,
+          spec: spec,
+          position: {
+            overlayPosition: {
+              anchorCell: {
+                sheetId: area.sheetId,
+                rowIndex: area.row - 1 + chart.anchorRow,
+                columnIndex: area.column - 1 + chart.anchorColumn,
+              },
+              widthPixels: DMV_DASHBOARD.chartWidth,
+              heightPixels: DMV_DASHBOARD.chartHeight,
+            },
+          },
+        },
+      },
+    });
+  });
+  savedIds.slice(charts.length).forEach(function (saved) {
+    if (saved !== undefined && saved !== null && existing[saved])
+      add({ deleteEmbeddedObject: { objectId: saved } });
+  });
+  return requests;
 }
 
 function dmvRunDashboard(id, requestedDeadline) {
@@ -313,42 +961,42 @@ function dmvRunDashboard(id, requestedDeadline) {
     rowCap = dmvAiRowCap_(),
     revisions = {},
     queries = [],
-    today = Utilities.formatDate(new Date(), spreadsheet.getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+    dates = [],
+    plan,
+    timezone = spreadsheet.getSpreadsheetTimeZone(),
+    today = Utilities.formatDate(new Date(), timezone, 'yyyy-MM-dd');
   dmvDashboardDeadline_(deadline);
   var dashboard = dmvLocked_(function () {
     var current = dmvDashboardHere_(id);
     if (current.runToken && Date.now() - current.startedAt < 300000)
       throw new Error('This dashboard is already refreshing.');
-    var plan = dmvValidateDashboard_(
+    var saved = dmvDashboardPlan_(current);
+    plan = dmvValidateDashboard_(
       {
         name: current.name,
-        sources: current.sources,
-        summary: current.summary,
-        dataTarget: current.dataTarget,
-        target: current.target,
+        datasets: saved.datasets,
+        tiles: saved.tiles,
+        target: { sheetName: current.target.sheetName },
       },
       spreadsheet
     );
-    queries = plan.sources.map(function (source) {
-      revisions[source.connectionId] = dmvConnectionRevision_(
-        dmvReadConnection_(source.connectionId)
+    queries = plan.datasets.map(function (dataset, index) {
+      revisions[dataset.connectionId] = dmvConnectionRevision_(
+        dmvReadConnection_(dataset.connectionId)
       );
-      var query = dmvValidateQuery_(source, spreadsheet);
+      var query = dmvValidateQuery_(dataset, spreadsheet);
       // Reports fail instead of truncating, so a limit raised in Settings after this plan
       // was saved must apply here; the combined 20,000-row ceiling still holds.
-      query.maxRows = Math.max(query.maxRows, rowCap);
+      query.maxRows = Math.max(dataset.maxRows, rowCap);
       var definition = dmvDefinition_(dmvConnector_(query.connectorId), query.reportType);
       // One refresh has one date anchor, even if sequential fetches cross midnight.
       // Only these execution queries become fixed; the saved relative presets remain reusable.
-      if (definition.dateRange)
-        query.dateRange = Object.assign(
-          { preset: 'custom' },
-          dmvDateRange_(query.dateRange, today)
-        );
+      dates[index] = definition.dateRange ? dmvDateRange_(query.dateRange, today) : null;
+      if (dates[index]) query.dateRange = Object.assign({ preset: 'custom' }, dates[index]);
       return query;
     });
     current.status = 'running';
-    current.statusMessage = 'Preparing source reports';
+    current.statusMessage = 'Preparing datasets';
     current.runToken = token;
     current.startedAt = Date.now();
     current.lastError = '';
@@ -377,10 +1025,18 @@ function dmvRunDashboard(id, requestedDeadline) {
   try {
     var session = dmvChatSession_(spreadsheet);
     session.deadline = deadline;
-    var fetchedRows = 0;
-    var combinedSources = dashboard.sources.map(function (source, index) {
+    // Refresh inputs are not follow-up material for a chat turn, so they skip the result cache.
+    session.transient = true;
+    var stamp =
+      Utilities.formatDate(new Date(), timezone, 'yyyy-MM-dd HH:mm') + ' (' + timezone + ')';
+    var fetched = {},
+      fetchedRows = 0,
+      outputs = [],
+      sources = [],
+      counts = {};
+    plan.datasets.forEach(function (dataset, index) {
       phase(
-        'Fetching source ' + (index + 1) + ' of ' + dashboard.sources.length + ': ' + source.label
+        'Fetching dataset ' + (index + 1) + ' of ' + plan.datasets.length + ': ' + dataset.label
       );
       var result;
       try {
@@ -389,61 +1045,100 @@ function dmvRunDashboard(id, requestedDeadline) {
         var reason = dmvSafeError_(error, {});
         if (/row limit|too many rows|more than .*rows/i.test(reason))
           reason +=
-            ' This source allows ' +
+            ' This dataset allows ' +
             queries[index].maxRows.toLocaleString() +
-            ' rows. Increase Maximum rows per chat report under Settings > AI provider (up to 20,000), or ask Chat to narrow this source.';
-        throw new Error(source.label + ': ' + reason);
+            ' rows. Increase Maximum rows per chat report under Settings > AI provider (up to 20,000), or ask Chat to narrow this dataset.';
+        throw new Error(dataset.label + ': ' + reason);
       }
       dmvDashboardDeadline_(deadline);
       fetchedRows += result.rows.length;
       if (fetchedRows > DMV_LIMITS.maxRows)
-        throw new Error('Combined dashboard data exceeds 20,000 rows. Narrow its source reports.');
+        throw new Error('The dashboard datasets exceed 20,000 rows together. Narrow them.');
       var resultId = dmvChatResultId_();
       session.results[resultId] = result;
-      return {
-        resultId: resultId,
-        label: source.label,
-        columns: source.mapping.map(function (entry) {
-          return { from: entry.field, to: entry.key };
-        }),
-      };
+      fetched[dataset.id] = resultId;
+      counts[dataset.id] = result.rows.length;
+      var connector = dmvConnector_(dataset.connectorId);
+      var provenance = [
+        dataset.label,
+        connector.label,
+        dmvReadConnection_(dataset.connectionId).label,
+        dmvDefinition_(connector, dataset.reportType).label,
+        // A custom query without metrics (negative keywords, settings) reports no period.
+        dates[index] && (result.metadata || {}).dateFiltered !== false
+          ? dates[index].startDate + ' to ' + dates[index].endDate
+          : 'No date range',
+        result.rows.length,
+        dataset.sheetName,
+      ];
+      sources.push(provenance);
+      var width = result.columns.length;
+      outputs.push({
+        report: {
+          id: dmvDashboardOutputId_(dashboard, dataset),
+          spreadsheetId: spreadsheet.getId(),
+          target: { sheetName: dataset.sheetName, startCell: 'A1' },
+        },
+        result: {
+          columns: result.columns,
+          matrix: [
+            dmvDashboardPad_([provenance.slice(0, 4).join(' · ')], width),
+            dmvDashboardPad_(
+              [
+                provenance[4] +
+                  ' · ' +
+                  result.rows.length.toLocaleString() +
+                  ' rows · Refreshed ' +
+                  stamp +
+                  ' · Dashboard: ' +
+                  dashboard.name,
+              ],
+              width
+            ),
+            dmvDashboardPad_([], width),
+          ].concat(result.matrix),
+          layout: {
+            tables: [{ row: 3, rows: result.matrix.length, columns: result.columns }],
+            styles: [
+              { row: 0, style: 'section' },
+              { row: 1, style: 'muted' },
+            ],
+          },
+        },
+      });
     });
-    phase('Combining source data');
-    var combined = dmvChatCombine_(session, { sources: combinedSources });
-    var raw = dmvChatResult_(session, combined.resultId);
-    phase('Building the dashboard report');
-    var summarized = dmvChatSummarize_(
-      session,
-      Object.assign({}, dashboard.summary, { resultId: combined.resultId })
-    );
-    var summary = dmvChatResult_(session, summarized.resultId);
-    if (
-      summary.metadata &&
-      (summary.metadata.rankedGroups > summary.rows.length ||
-        (!summary.metadata.ranking && summary.metadata.totalGroups > summary.rows.length))
-    )
-      throw new Error(
-        'The summary row limit omitted groups. Increase its limit before refreshing the dashboard.'
-      );
-    var outputs = [
-      {
-        report: {
-          id: dashboard.id + '-data',
-          spreadsheetId: spreadsheet.getId(),
-          target: dashboard.dataTarget,
-        },
-        result: dmvNormalizeResult_(raw, DMV_LIMITS.maxRows),
+    phase('Building scorecards, charts and tables');
+    var memo = {},
+      cards = [],
+      blocks = [];
+    plan.tiles.forEach(function (tile) {
+      var input = dmvDashboardInput_(session, plan.datasets, tile, fetched, memo);
+      if (tile.type === 'kpi') {
+        cards = cards.concat(dmvDashboardCards_(session, input, tile));
+        return;
+      }
+      var chart = dmvDashboardIsChart_(tile);
+      var block = chart
+        ? dmvDashboardChartTable_(session, input, tile)
+        : dmvDashboardTable_(session, input, tile);
+      block.title = tile.title;
+      block.type = tile.type;
+      block.chart = chart;
+      blocks.push(block);
+      dmvDashboardDeadline_(deadline);
+    });
+    var page = dmvDashboardPage_(dashboard, stamp, cards, blocks, sources);
+    if (JSON.stringify(page.matrix).length > DMV_LIMITS.maxBytes)
+      throw new Error('The dashboard tab is too large. Use fewer or smaller tiles.');
+    outputs.push({
+      report: {
+        id: dashboard.id + '-report',
+        spreadsheetId: spreadsheet.getId(),
+        target: dashboard.target,
       },
-      {
-        report: {
-          id: dashboard.id + '-report',
-          spreadsheetId: spreadsheet.getId(),
-          target: dashboard.target,
-        },
-        result: dmvNormalizeResult_(summary, DMV_LIMITS.maxRows),
-      },
-    ];
-    phase('Updating both dashboard tabs');
+      result: { columns: [], matrix: page.matrix, layout: page.layout },
+    });
+    phase('Updating ' + outputs.length + ' tabs and ' + page.charts.length + ' charts');
     return dmvLocked_(function () {
       var current = currentRun();
       function check() {
@@ -456,33 +1151,71 @@ function dmvRunDashboard(id, requestedDeadline) {
         });
       }
       check();
-      dmvWriteReports_(spreadsheet, outputs, check);
+      var outcome = {};
+      dmvWriteReports_(
+        spreadsheet,
+        outputs,
+        function () {
+          check();
+          // Recorded before the batch is sent, so an interrupted refresh still knows its charts.
+          current.chartIds = outcome.chartIds;
+          dmvSave_('dashboard', current);
+        },
+        function (areas) {
+          return dmvDashboardChartRequests_(
+            spreadsheet.getId(),
+            page.charts,
+            areas[areas.length - 1],
+            page.width,
+            current.chartIds || [],
+            outcome
+          );
+        }
+      );
       sheetUpdated = true;
-      // Both destinations may be new tabs; their links need a spreadsheet that can see them.
+      // Every destination may be a new tab; links need a spreadsheet that can see them.
       spreadsheet = dmvReopen_(spreadsheet);
       current.status = 'success';
-      current.statusMessage = 'Updated both tabs from all ' + dashboard.sources.length + ' sources';
+      current.statusMessage =
+        'Updated ' + plan.datasets.length + ' data tabs and ' + page.charts.length + ' charts';
       current.lastRun = new Date().toISOString();
-      current.lastRowCount = summary.rows.length;
-      current.lastDataRowCount = raw.rows.length;
+      current.lastRowCount = fetchedRows;
+      current.outputs.forEach(function (output) {
+        output.rows = counts[output.id];
+      });
       current.lastError = '';
       current.runToken = null;
       dmvSave_('dashboard', current);
       return {
         ok: true,
         id: id,
-        rowCount: summary.rows.length,
-        dataRowCount: raw.rows.length,
-        sourceCount: dashboard.sources.length,
+        name: current.name,
         updatedAt: current.lastRun,
         target: current.target,
-        dataTarget: current.dataTarget,
-        dataUrl: dmvSheetLink_(spreadsheet, current.dataTarget),
         reportUrl: dmvSheetLink_(spreadsheet, current.target),
-        dataRange: dmvDashboardRange_(current.dataTarget, outputs[0].result),
-        reportRange: dmvDashboardRange_(current.target, outputs[1].result),
-        dataColumns: raw.columns,
-        columns: summary.columns,
+        datasets: current.outputs.map(function (output) {
+          return {
+            id: output.id,
+            label: output.label,
+            sheetName: output.sheetName,
+            rowCount: output.rows,
+            url: dmvSheetLink_(spreadsheet, { sheetName: output.sheetName, startCell: 'A1' }),
+          };
+        }),
+        rowCount: fetchedRows,
+        chartCount: page.charts.length,
+        scorecards: cards.slice(0, DMV_DASHBOARD.maxKpis).map(function (card) {
+          return { label: card.label, value: card.value };
+        }),
+        tiles: blocks.map(function (block) {
+          return {
+            title: block.title,
+            type: block.type,
+            rows: block.matrix.length - 1,
+            note: block.note || undefined,
+          };
+        }),
+        links: dmvDashboardLinks_(spreadsheet, current),
       };
     });
   } catch (error) {
@@ -490,7 +1223,7 @@ function dmvRunDashboard(id, requestedDeadline) {
     var message = sheetUpdated
       ? error.sheetUpdated
         ? dmvSafeError_(error, {})
-        : 'The output tabs were updated, but dashboard completion could not be saved. Refresh again to retry safely.'
+        : 'The dashboard tabs were updated, but dashboard completion could not be saved. Refresh again to retry safely.'
       : dmvSafeError_(error, {});
     try {
       dmvLocked_(function () {
@@ -511,13 +1244,9 @@ function dmvRunDashboard(id, requestedDeadline) {
     var failure = new Error(message);
     if (sheetUpdated) {
       // The commit happened; its tabs may be new, so links need a spreadsheet that sees them.
-      spreadsheet = dmvReopen_(spreadsheet);
       failure.sheetUpdated = true;
       failure.id = dashboard.id;
-      failure.target = dashboard.target;
-      failure.dataTarget = dashboard.dataTarget;
-      failure.dataUrl = dmvSheetLink_(spreadsheet, dashboard.dataTarget);
-      failure.reportUrl = dmvSheetLink_(spreadsheet, dashboard.target);
+      failure.links = dmvDashboardLinks_(dmvReopen_(spreadsheet), dashboard);
     }
     throw failure;
   }
@@ -528,19 +1257,8 @@ function dmvDashboardFingerprint_(dashboard) {
     dmvCanonical_({
       name: dashboard.name,
       spreadsheetId: dashboard.spreadsheetId,
-      sources: dashboard.sources,
-      summary: dashboard.summary,
-      dataTarget: dashboard.dataTarget,
+      plan: dashboard.plan,
       target: dashboard.target,
     })
-  );
-}
-
-function dmvDashboardRange_(target, result) {
-  var cell = dmvCell_(target.startCell);
-  return (
-    cell.a1 +
-    ':' +
-    dmvChatA1_(cell.row + result.matrix.length - 1, cell.column + result.columns.length - 1)
   );
 }

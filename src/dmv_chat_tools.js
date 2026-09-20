@@ -26,6 +26,8 @@ function dmvChatResultId_() {
 function dmvChatStoreResult_(session, result) {
   var id = dmvChatResultId_();
   session.results[id] = result;
+  // A dashboard refresh keeps its working results in memory only.
+  if (session.transient) return id;
   var text = JSON.stringify({
     columns: result.columns,
     rows: result.rows,
@@ -504,9 +506,10 @@ function dmvChatCurrencies_(result, rows) {
 
 /* combine_results: append actual fetched rows with an explicit, common column mapping.
    No joins, user-supplied rows, arithmetic or provider-specific field switches. */
-function dmvChatCombine_(session, input) {
+function dmvChatCombine_(session, input, minimum) {
   var sources = input && input.sources;
-  if (!Array.isArray(sources) || sources.length < 2 || sources.length > 20)
+  // The chat tool appends at least two results; a dashboard tile may rename just one.
+  if (!Array.isArray(sources) || sources.length < (minimum || 2) || sources.length > 20)
     throw new Error('Combine between 2 and 20 existing results.');
   var columns = [],
     rows = [],

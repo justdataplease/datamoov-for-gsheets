@@ -613,9 +613,11 @@ function dmvChatEditSheet_(session, input) {
           dmvList_('dashboard').some(function (dashboard) {
             return (
               dashboard.spreadsheetId === session.spreadsheetId &&
-              [dashboard.target, dashboard.dataTarget].some(function (target) {
-                return target && target.sheetName === sheet.getName();
-              })
+              [dashboard.target, dashboard.dataTarget]
+                .concat(dashboard.outputs || [])
+                .some(function (target) {
+                  return target && target.sheetName === sheet.getName();
+                })
             );
           })
         )

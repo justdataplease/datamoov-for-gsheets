@@ -238,6 +238,194 @@ function dmvGoogleAdsCampaignFetch_(ctx, available, extraWhere, grain) {
   };
 }
 
+/* Custom query: any Google Ads resource through one read-only GAQL statement. The search
+   endpoint cannot change an account, so the guard only keeps the statement a single SELECT
+   whose columns the runtime can name and type. */
+function dmvGoogleAdsParseQuery_(text) {
+  var query = String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  var match =
+    /^SELECT (.+?) FROM ([a-z_]+)( WHERE (.+?))?( ORDER BY (.+?))?( LIMIT ([0-9]+))?( PARAMETERS (.+))?$/i.exec(
+      query
+    );
+  if (!match || query.length > 5000 || query.indexOf(';') >= 0)
+    throw new Error(
+      'Write one GAQL query: SELECT fields FROM resource [WHERE conditions] [ORDER BY field] [LIMIT n].'
+    );
+  var names = match[1].split(',').map(function (name) {
+    return name.trim();
+  });
+  if (
+    names.length > DMV_LIMITS.maxColumns ||
+    names.some(function (name, index) {
+      return !/^[a-z_]+(\.[a-z0-9_]+)+$/.test(name) || names.indexOf(name) !== index;
+    })
+  )
+    throw new Error(
+      'Select up to 80 distinct GAQL fields such as campaign.name or metrics.clicks.'
+    );
+  return {
+    names: names,
+    resource: match[2].toLowerCase(),
+    where: match[4] || '',
+    orderBy: match[6] || '',
+    limit: match[8] || '',
+    parameters: match[10] || '',
+  };
+}
+
+// GAQL names carry their own typing conventions: *_micros and average costs are money in
+// micros, rates and shares are fractions, every other metric is a count or value.
+function dmvGoogleAdsQueryColumn_(name) {
+  var known = dmvGoogleAdsFields_()
+    .concat(dmvGoogleAdsVideoFields_())
+    .filter(function (field) {
+      return field.key === name;
+    })[0];
+  if (known) return Object.assign({}, known);
+  var metric = name.indexOf('metrics.') === 0;
+  var micros =
+    /_micros$/.test(name) ||
+    /^metrics\.(average_(cpc|cpm|cpv|cpe|cost|target_cpa)|cost_per_|trueview_average_cpv)/.test(
+      name
+    );
+  var rate = /(^metrics\.ctr$|_rate$|_share$|_percentage$|percent)/.test(name);
+  var label = name
+    .replace(/^(metrics|segments)\./, '')
+    .replace(/_micros$/, '')
+    .replace(/[._]/g, ' ');
+  var column = {
+    key: name,
+    label: label.charAt(0).toUpperCase() + label.slice(1),
+    type: micros
+      ? 'currency'
+      : rate
+        ? 'percent'
+        : metric
+          ? 'number'
+          : /^segments\.(date|week|month|quarter)$/.test(name)
+            ? 'date'
+            : 'text',
+    role: metric ? 'metric' : 'dimension',
+  };
+  if (micros) column.micros = true;
+  if (metric && (rate || /(average_|_per_|score|position)/.test(name))) column.additive = false;
+  return column;
+}
+
+function dmvGoogleAdsQueryFetch_(ctx) {
+  var parsed = dmvGoogleAdsParseQuery_(ctx.config.gaql);
+  var connection = dmvGoogleAdsConnection_(ctx);
+  var columns = parsed.names.map(dmvGoogleAdsQueryColumn_);
+  // Metrics and segments cover a period, so the report's date range applies to them unless
+  // the query already filters dates itself. Attribute-only resources (negative keywords,
+  // settings) have no period.
+  var dated = parsed.names.some(function (name) {
+    return /^(metrics|segments)\./.test(name);
+  });
+  var where = parsed.where;
+  if (dated && !/segments\.(date|week|month|quarter|year)\b/.test(where))
+    where =
+      (where ? where + ' AND ' : '') +
+      "segments.date BETWEEN '" +
+      ctx.startDate +
+      "' AND '" +
+      ctx.endDate +
+      "'";
+  var query =
+    'SELECT ' +
+    parsed.names.join(', ') +
+    ' FROM ' +
+    parsed.resource +
+    (where ? ' WHERE ' + where : '') +
+    (parsed.orderBy ? ' ORDER BY ' + parsed.orderBy : '') +
+    (parsed.limit ? ' LIMIT ' + parsed.limit : '') +
+    (parsed.parameters ? ' PARAMETERS ' + parsed.parameters : '');
+  var path = 'customers/' + connection.id + '/googleAds:search';
+  var raw = dmvGoogleAdsPages_(ctx, connection, path, query, ctx.maxRows);
+  var account = {};
+  if (
+    columns.some(function (column) {
+      return column.type === 'currency';
+    })
+  )
+    account =
+      (
+        dmvGoogleAdsPages_(
+          ctx,
+          connection,
+          path,
+          'SELECT customer.currency_code, customer.time_zone FROM customer LIMIT 1',
+          1
+        )[0] || {}
+      ).customer || {};
+  return {
+    columns: columns,
+    rows: raw.map(function (item) {
+      var row = {};
+      columns.forEach(function (column) {
+        var value = column.key.split('.').reduce(function (object, key) {
+          var camel = key.replace(/_([a-z])/g, function (_, letter) {
+            return letter.toUpperCase();
+          });
+          return object === null || object === undefined ? undefined : object[camel];
+        }, item);
+        row[column.key] =
+          value !== null && typeof value === 'object'
+            ? JSON.stringify(value)
+            : dmvGoogleAdsValue_(item, column);
+      });
+      return row;
+    }),
+    metadata: {
+      apiVersion: 'v25',
+      accountId: connection.id,
+      currency: account.currencyCode || '',
+      timeZone: account.timeZone || '',
+      grain: 'Custom GAQL query FROM ' + parsed.resource,
+      dateFiltered: dated,
+      complete: true,
+    },
+  };
+}
+
+// discover_fields for a custom query: "resources" lists what can follow FROM; "FROM x" (or a
+// whole query) lists that resource's attributes plus the metrics and segments it supports.
+function dmvGoogleAdsQueryDiscover_(ctx) {
+  var connection = dmvGoogleAdsConnection_(ctx);
+  var text = String(ctx.config.gaql || '');
+  var from = /\bFROM\s+([a-z_]+)/i.exec(text) || /^\s*([a-z_]+)\s*$/i.exec(text);
+  var resource = from && from[1].toLowerCase() !== 'resources' ? from[1].toLowerCase() : '';
+  function search(query) {
+    return dmvGoogleAdsPages_(ctx, connection, 'googleAdsFields:search', query, 2000);
+  }
+  if (!resource)
+    return search("SELECT name WHERE category = 'RESOURCE'").map(function (row) {
+      return { key: String(row.name), label: 'Resource for FROM', type: 'text' };
+    });
+  var attributes = search(
+    "SELECT name, selectable, is_repeated WHERE name LIKE '" + resource + ".%'"
+  ).filter(function (row) {
+    return row.selectable === true;
+  });
+  var related = search("SELECT name, selectable_with WHERE name = '" + resource + "'")[0];
+  if (!related)
+    throw new Error(
+      'Google Ads has no resource named ' + resource + '. Discover "resources" to list them.'
+    );
+  return attributes
+    .map(function (row) {
+      return String(row.name);
+    })
+    .concat(
+      (related.selectableWith || []).filter(function (name) {
+        return /^(metrics|segments)\./.test(String(name));
+      })
+    )
+    .map(dmvGoogleAdsQueryColumn_);
+}
+
 function dmvGoogleAdsTest_(ctx) {
   var connection = dmvGoogleAdsConnection_(ctx);
   var rows = dmvGoogleAdsPages_(
@@ -324,7 +512,28 @@ function dmvGoogleAdsErrorMessage_(code, body) {
       });
     });
   });
-  // Only fixed guidance is returned: provider messages and error triggers can contain secrets.
+  // A rejected query is explained with Google's own words: they describe the GAQL the user or
+  // the chat wrote (an unknown field, a segment that does not fit the resource), never a secret.
+  var queryErrors = [];
+  (Array.isArray(details) ? details : []).slice(0, 20).forEach(function (detail) {
+    (Array.isArray(detail && detail.errors) ? detail.errors : [])
+      .slice(0, 5)
+      .forEach(function (error) {
+        var value = (error && error.errorCode) || {};
+        var kind = value.queryError || value.fieldError || value.dateRangeError || value.enumError;
+        if (typeof kind === 'string')
+          queryErrors.push(
+            kind + (error.message ? ': ' + String(error.message).slice(0, 240) : '')
+          );
+      });
+  });
+  if (queryErrors.length)
+    return (
+      'Google Ads rejected the query. ' +
+      queryErrors.slice(0, 3).join(' | ') +
+      ' GAQL joins conditions with AND only (no parentheses or OR); use discover_fields with "FROM <resource>" to see which fields fit together.'
+    );
+  // Otherwise only fixed guidance is returned: other provider messages can contain secrets.
   var guidance = {
     ACCESS_TOKEN_SCOPE_INSUFFICIENT:
       'The Google credential lacks the Google Ads scope. Reauthorize its OAuth client with https://www.googleapis.com/auth/adwords and save the new refresh token. A GA4-only grant cannot read Ads.',
@@ -373,7 +582,8 @@ function dmvGoogleAdsErrorMessage_(code, body) {
 dmvRegisterConnector_({
   id: 'google_ads',
   label: 'Google Ads',
-  description: 'Daily campaign performance in your account currency.',
+  description:
+    'Campaign performance, or any resource with a custom query, in your account currency.',
   category: 'Marketing',
   color: '#4285f4',
   test: dmvGoogleAdsTest_,
@@ -446,6 +656,25 @@ dmvRegisterConnector_({
       discoverFields: function (ctx) {
         return dmvGoogleAdsDiscover_(ctx, dmvGoogleAdsVideoFields_());
       },
+    },
+    {
+      id: 'custom_query',
+      label: 'Custom query (GAQL)',
+      description:
+        'Any Google Ads resource in one GAQL query: customer (account totals), campaign, ad_group, ad_group_ad (ads), keyword_view, search_term_view, campaign_criterion or ad_group_criterion (negative keywords: WHERE campaign_criterion.negative = TRUE), asset_group, geographic_view, age_range_view, gender_view, landing_page_view. Select segments.date only for a daily trend; without it rows are totals for the date range, which keeps reports small. Money fields (*_micros, average costs) arrive in account currency.',
+      fields: [],
+      configFields: [
+        {
+          key: 'gaql',
+          label: 'GAQL query',
+          type: 'textarea',
+          required: true,
+          help: 'SELECT fields FROM resource [WHERE ...] [ORDER BY ...] [LIMIT n]. Leave dates out: the report date range is applied whenever metrics or segments are selected. For discover_fields pass "resources" to list resources, or "FROM ad_group" to list the fields of one.',
+        },
+      ],
+      dateRange: true,
+      fetch: dmvGoogleAdsQueryFetch_,
+      discoverFields: dmvGoogleAdsQueryDiscover_,
     },
   ],
 });

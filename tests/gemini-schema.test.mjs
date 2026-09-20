@@ -4,6 +4,7 @@ import { createDatamoovSandbox, plain } from './helpers/datamoov-sandbox.mjs';
 
 const AI_KEY = 'offline-gemini-schema-key';
 const SOURCE_KEY = 'offline-gemini-schema-source-secret';
+const DATASET_IDS = ['google_ads', 'facebook_ads'];
 
 function fixture() {
   const f = createDatamoovSandbox();
@@ -53,26 +54,53 @@ function fixture() {
     tools: f.tools,
   };
   f.settings = { apiKey: AI_KEY, model: 'gemini-3.8-flash' };
+  const spend = [{ field: 'spend', agg: 'sum' }];
   f.plan = {
     name: 'Campaign dashboard',
-    sources: f.connections.map((connection, index) => ({
-      id: ['google_ads', 'facebook_ads'][index],
+    target: { sheetName: 'Gemini Dashboard' },
+    datasets: f.connections.map((connection, index) => ({
+      id: DATASET_IDS[index],
       label: 'Account ' + (index + 1),
+      sheetName: 'Account ' + (index + 1) + ' Data',
       connectionId: connection.id,
       reportType: 'daily',
       dateRange: { preset: 'lastMonth' },
       fields: ['campaign', 'spend'],
       mapping: columns.map((column) => ({ field: column.key, key: column.key })),
     })),
-    summary: {
-      groupBy: ['campaign', 'currency'],
-      metrics: [{ field: 'spend', agg: 'sum' }],
-      orderBy: { field: 'spend__sum', direction: 'desc' },
-    },
-    dataTarget: { sheetName: 'Gemini campaign data', startCell: 'A1' },
-    target: { sheetName: 'Gemini dashboard', startCell: 'B3' },
+    // Every tile names the datasets by their underscore IDs, so a mangled ID fails the save.
+    tiles: [
+      { title: 'Total spend', type: 'kpi', datasets: DATASET_IDS, metrics: spend },
+      {
+        title: 'Spend by campaign',
+        type: 'bar',
+        datasets: DATASET_IDS,
+        groupBy: ['campaign'],
+        metrics: spend,
+      },
+      {
+        title: 'Campaigns',
+        type: 'table',
+        datasets: DATASET_IDS,
+        groupBy: ['source', 'campaign'],
+        metrics: spend,
+        orderBy: { field: 'spend__sum', direction: 'desc' },
+      },
+    ],
   };
   return f;
+}
+
+// The rows of a tab under the row whose first cell is `heading`, up to the next blank row.
+function rowsUnder(f, sheetName, heading, width) {
+  const sheet = f.tab(sheetName);
+  let row = 1;
+  while (row <= sheet.getLastRow() && f.value(sheet, row, 1) !== heading) row++;
+  assert.ok(row <= sheet.getLastRow(), heading + ' is on ' + sheetName);
+  const rows = [];
+  for (row++; row <= sheet.getLastRow() && f.value(sheet, row, 1) !== ''; row++)
+    rows.push(Array.from({ length: width }, (_, column) => f.value(sheet, row, column + 1)));
+  return rows;
 }
 
 function declarations(body) {
@@ -113,14 +141,79 @@ test('the complete Gemini toolset uses JSON Schema and retains nested constraint
   ]);
   assert.equal(schemas.run_report.properties.maxRows.maximum, 1256);
   assert.equal(schemas.run_report.properties.maxRows.default, 1256);
-  assert.equal(schemas.save_dashboard.properties.sources.items.properties.maxRows.maximum, 1256);
-  assert.equal(schemas.save_dashboard.properties.sources.minItems, 2);
-  assert.equal(schemas.save_dashboard.properties.sources.maxItems, 8);
-  const sourceId = schemas.save_dashboard.properties.sources.items.properties.id;
-  assert.equal(sourceId.maxLength, 80);
-  assert.ok(new RegExp(sourceId.pattern).test('google_ads'));
-  assert.ok(new RegExp(sourceId.pattern).test('facebook_ads'));
-  assert.equal(new RegExp(sourceId.pattern).test('invalid/source'), false);
+  // save_dashboard nests arrays of objects three deep (datasets > mapping, tiles > metrics);
+  // their bounds, enums, patterns and required lists must reach Gemini untouched.
+  const dashboard = schemas.save_dashboard;
+  assert.deepEqual(Object.keys(dashboard.properties).sort(), [
+    'datasets',
+    'id',
+    'name',
+    'revision',
+    'target',
+    'tiles',
+  ]);
+  assert.deepEqual(dashboard.required, ['name', 'datasets', 'tiles', 'target']);
+  assert.equal(dashboard.properties.revision.type, 'integer');
+  const { datasets, tiles, target } = dashboard.properties;
+  assert.equal(datasets.type, 'array');
+  assert.equal(datasets.minItems, 1);
+  assert.equal(datasets.maxItems, 6);
+  const dataset = datasets.items;
+  assert.equal(dataset.type, 'object');
+  assert.deepEqual(dataset.required, ['connectionId', 'reportType', 'id', 'label', 'sheetName']);
+  assert.equal(dataset.properties.maxRows.maximum, 1256);
+  assert.equal(dataset.properties.maxRows.default, 1256);
+  assert.equal(dataset.properties.maxRows.minimum, 1);
+  assert.deepEqual(dataset.properties.fields, schemas.run_report.properties.fields);
+  assert.deepEqual(dataset.properties.dateRange, schemas.run_report.properties.dateRange);
+  assert.deepEqual(dataset.properties.dateRange.required, ['preset']);
+  for (const preset of ['last90', 'lastWeek', 'previousWeek', 'custom'])
+    assert.ok(dataset.properties.dateRange.properties.preset.enum.includes(preset), preset);
+  const datasetId = dataset.properties.id;
+  assert.equal(datasetId.maxLength, 40);
+  for (const id of DATASET_IDS) assert.ok(new RegExp(datasetId.pattern).test(id), id);
+  assert.equal(new RegExp(datasetId.pattern).test('invalid/source'), false);
+  assert.equal(new RegExp(datasetId.pattern).test('x'.repeat(41)), false);
+  assert.equal(dataset.properties.mapping.type, 'array');
+  assert.deepEqual(dataset.properties.mapping.items.required, ['field', 'key']);
+  assert.deepEqual(Object.keys(dataset.properties.mapping.items.properties), ['field', 'key']);
+  assert.equal(tiles.type, 'array');
+  assert.equal(tiles.minItems, 1);
+  assert.equal(tiles.maxItems, 12);
+  const tile = tiles.items;
+  assert.deepEqual(tile.required, ['title', 'type', 'metrics']);
+  assert.deepEqual(tile.properties.type.enum, [
+    'kpi',
+    'table',
+    'line',
+    'column',
+    'bar',
+    'area',
+    'pie',
+    'scatter',
+  ]);
+  assert.deepEqual(tile.properties.datasets, {
+    type: 'array',
+    items: { type: 'string' },
+    description: tile.properties.datasets.description,
+  });
+  assert.deepEqual(tile.properties.dateBucket.enum, ['day', 'week', 'month', 'year']);
+  assert.deepEqual(tile.properties.metrics, schemas.summarize.properties.metrics);
+  assert.deepEqual(tile.properties.metrics.items.required, ['field', 'agg']);
+  assert.deepEqual(tile.properties.metrics.items.properties.agg.enum, [
+    'sum',
+    'avg',
+    'min',
+    'max',
+    'count',
+    'count_distinct',
+  ]);
+  assert.deepEqual(tile.properties.orderBy.properties.direction.enum, ['asc', 'desc']);
+  assert.equal(tile.properties.limit.type, 'integer');
+  assert.equal(tile.properties.limitPerGroup.minimum, 1);
+  assert.deepEqual(target.required, ['sheetName']);
+  assert.deepEqual(Object.keys(target.properties), ['sheetName']);
+  assert.deepEqual(schemas.run_dashboard.required, ['id']);
   assert.deepEqual(schemas.list_sheets, { type: 'object', properties: {} });
   assert.deepEqual(schemas.list_dashboards, { type: 'object', properties: {} });
 });
@@ -153,7 +246,7 @@ test('Gemini adaptation leaves shared schemas and Anthropic/OpenAI declarations 
   );
 });
 
-test('a Gemini tool round saves and runs a two-source dashboard with underscore IDs and signatures intact', () => {
+test('a Gemini tool round saves and runs a two-dataset dashboard with underscore IDs and signatures intact', () => {
   const f = fixture();
   const fetch = f.api.UrlFetchApp.fetch;
   const responses = new Map();
@@ -201,7 +294,11 @@ test('a Gemini tool round saves and runs a two-source dashboard with underscore 
         },
       ];
     } else if (round === 2) {
-      assert.equal(responses.get('save_dashboard').sourceCount, 2);
+      assert.deepEqual(
+        responses.get('save_dashboard').datasets.map((dataset) => dataset.id),
+        DATASET_IDS
+      );
+      assert.equal(responses.get('save_dashboard').chartCount, 1);
       parts = [
         {
           functionCall: {
@@ -231,25 +328,61 @@ test('a Gemini tool round saves and runs a two-source dashboard with underscore 
   assert.equal(round, 4);
   assert.equal(reply.failed, false);
   assert.match(reply.text, /Refresh it from Reports > Dashboards/);
+  // One save, one fetch per dataset, then the built dashboard: no separate write or chart call.
   assert.deepEqual(
-    reply.events.map((event) => event.kind),
-    ['dashboard', 'dashboard', 'write']
+    reply.events.map((event) => event.kind + (event.action ? ':' + event.action : '')),
+    ['dashboard:saved', 'report', 'report', 'dashboard:refreshed']
+  );
+  assert.equal(reply.events[1].text, 'Fetched Account 1 · 1 rows into Account 1 Data');
+  assert.deepEqual(
+    reply.events[3].links.map((link) => link.label),
+    ['Dashboard: Gemini Dashboard', 'Data: Account 1 Data', 'Data: Account 2 Data']
   );
   assert.deepEqual(f.fetched, [
     { id: 'canopy', maxRows: 1256 },
     { id: 'meadow', maxRows: 1256 },
   ]);
+  const saved = f.api.dmvDashboardHere_(responses.get('save_dashboard').id);
+  const plan = plain(f.api.dmvUnpack_(saved.plan));
   assert.deepEqual(
-    plain(f.api.dmvDashboardHere_(responses.get('save_dashboard').id).sources).map(
-      (source) => source.id
-    ),
-    ['google_ads', 'facebook_ads']
+    plan.datasets.map((dataset) => dataset.id),
+    DATASET_IDS
   );
-  assert.equal(responses.get('run_dashboard').rowCount, 2);
-  assert.equal(responses.get('run_dashboard').dataRowCount, 2);
-  assert.equal(f.state.batches.length, 1, 'both dashboard tabs are committed in one atomic batch');
-  assert.equal(f.value(f.tab('Gemini dashboard'), 4, 2), 'meadow');
-  assert.equal(f.value(f.tab('Gemini dashboard'), 4, 4), 7);
+  assert.deepEqual(
+    plan.tiles.map((tile) => tile.datasets),
+    [DATASET_IDS, DATASET_IDS, DATASET_IDS]
+  );
+  const run = responses.get('run_dashboard');
+  assert.deepEqual(
+    run.datasets.map((dataset) => [dataset.id, dataset.sheetName, dataset.rowCount]),
+    [
+      ['google_ads', 'Account 1 Data', 1],
+      ['facebook_ads', 'Account 2 Data', 1],
+    ]
+  );
+  assert.equal(run.rowCount, 2);
+  assert.equal(run.chartCount, 1);
+  assert.deepEqual(run.scorecards, [{ label: 'Spend (EUR)', value: 10 }]);
+  assert.equal(
+    f.state.batches.length,
+    1,
+    'both data tabs, the dashboard tab and its chart are committed in one atomic batch'
+  );
+  assert.deepEqual(rowsUnder(f, 'Gemini Dashboard', 'Campaigns', 3), [
+    ['Source', 'Campaign', 'Spend'],
+    ['Account 2', 'meadow', 7],
+    ['Account 1', 'canopy', 3],
+  ]);
+  assert.deepEqual(rowsUnder(f, 'Gemini Dashboard', 'Spend by campaign', 2), [
+    ['Campaign', 'Spend'],
+    ['meadow', 7],
+    ['canopy', 3],
+  ]);
+  assert.deepEqual(
+    f.state.charts.map((chart) => [chart.spec.title, chart.spec.basicChart.chartType]),
+    [['Spend by campaign', 'BAR']]
+  );
+  assert.equal(f.value(f.tab('Account 2 Data'), 5, 1), 'meadow');
   assert.equal(JSON.stringify(reply).includes(SOURCE_KEY), false);
   assert.equal(JSON.stringify(reply).includes(AI_KEY), false);
 });

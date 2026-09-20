@@ -3,10 +3,12 @@ import { test, expect } from '@playwright/test';
 const savedDashboard = {
   id: 'dashboard-fixture',
   name: 'Monthly account dashboard',
-  sourceCount: 2,
-  sourceLabels: ['Google Ads', 'Facebook Ads'],
-  dataTarget: { sheetName: 'Marketing Data', startCell: 'A1' },
-  target: { sheetName: 'Marketing Report', startCell: 'A1' },
+  datasets: [
+    { id: 'gads', label: 'Google Ads campaigns', sheetName: 'Google Ads Data', rowCount: null, url: null },
+    { id: 'meta', label: 'Facebook Ads campaigns', sheetName: 'Facebook Ads Data', rowCount: null, url: null },
+  ],
+  chartCount: 3,
+  target: { sheetName: 'Marketing Dashboard', startCell: 'A1' },
   status: 'ready',
   statusMessage: '',
   private: true,
@@ -78,13 +80,12 @@ async function controlDashboards(page, dashboards = [savedDashboard]) {
 
 const card = (page) => page.locator('.dashboard-card');
 
-test('dashboard cards explain private setup, safely show both tabs, and start an unsent chat draft', async ({
+test('dashboard cards explain private setup, safely show every tab, and start an unsent chat draft', async ({
   page,
 }) => {
   await open(page);
-  await expect(page.locator('#dashboards-section')).toContainText(
-    'no separate saved reports are needed'
-  );
+  await expect(page.locator('#dashboards-section')).toContainText('Each dataset lands in its own tab');
+  await expect(page.locator('#dashboards-section')).toContainText('No saved reports are needed');
   await expect(page.locator('#dashboards-list')).toContainText(
     'Create your first dashboard in Chat'
   );
@@ -93,10 +94,11 @@ test('dashboard cards explain private setup, safely show both tabs, and start an
     { ...savedDashboard, name: '<img src=x onerror=alert(1)> Dashboard' },
   ]);
   await expect(card(page)).toHaveCount(1);
-  await expect(card(page)).toContainText('2 sources');
-  await expect(card(page)).toContainText('Google Ads, Facebook Ads');
-  await expect(card(page)).toContainText('Marketing Data');
-  await expect(card(page)).toContainText('Marketing Report');
+  await expect(card(page)).toContainText('2 datasets · 3 charts');
+  await expect(card(page)).toContainText('Google Ads campaigns');
+  await expect(card(page)).toContainText('Google Ads Data');
+  await expect(card(page)).toContainText('Facebook Ads Data');
+  await expect(card(page)).toContainText('Marketing Dashboard');
   await expect(card(page).locator('img,script')).toHaveCount(0);
   await expect(card(page).getByRole('button', { name: 'Refresh dashboard' })).toBeEnabled();
   expect(
@@ -106,7 +108,7 @@ test('dashboard cards explain private setup, safely show both tabs, and start an
   ).toBe(true);
   await page.locator('#dashboards-section').getByRole('button', { name: 'Create in chat' }).click();
   await expect(page.locator('#panel-chat')).toBeVisible();
-  await expect(page.locator('#chat-input')).toHaveValue(/Create a reusable dashboard/);
+  await expect(page.locator('#chat-input')).toHaveValue(/Create a performance dashboard/);
   expect(await page.evaluate(() => window.dashboardProbe.chats.length)).toBe(0);
 });
 
@@ -137,13 +139,17 @@ test('dashboard polling never overlaps and stale phases cannot replace completed
   await page.waitForFunction(() => window.dashboardProbe.lists.length === 3);
   await page.evaluate(() => {
     const probe = window.dashboardProbe;
+    const datasets = probe.items[0].datasets.map((dataset, index) => ({
+      ...dataset,
+      rowCount: index ? 12 : 30,
+    }));
     const result = {
       id: probe.items[0].id,
-      rowCount: 5,
-      dataRowCount: 42,
+      rowCount: 42,
+      chartCount: 3,
       updatedAt: '2026-09-20T10:00:00.000Z',
       target: probe.items[0].target,
-      dataTarget: probe.items[0].dataTarget,
+      datasets,
     };
     probe.items[0] = {
       ...probe.items[0],
@@ -151,13 +157,14 @@ test('dashboard polling never overlaps and stale phases cannot replace completed
       statusMessage: '',
       lastRun: result.updatedAt,
       lastRowCount: result.rowCount,
-      lastDataRowCount: result.dataRowCount,
+      datasets,
     };
     probe.runs[0].succeed(result);
   });
-  await expect(card(page)).toContainText('42 source · 5 report');
+  await expect(card(page)).toContainText('Google Ads Data · 30 rows');
+  await expect(card(page)).toContainText('Facebook Ads Data · 12 rows');
   await expect(page.locator('#notice')).toContainText(
-    '42 source rows updated in Marketing Data; 5 report rows updated in Marketing Report.'
+    '42 rows refreshed in 2 data tabs; 3 charts rebuilt on Marketing Dashboard.'
   );
   await page.evaluate(() => {
     const probe = window.dashboardProbe;
@@ -182,8 +189,11 @@ test('dashboard refresh failure preserves previous output counts and removal pre
       ...savedDashboard,
       status: 'success',
       lastRun: '2026-09-19T10:00:00.000Z',
-      lastRowCount: 4,
-      lastDataRowCount: 30,
+      lastRowCount: 34,
+      datasets: savedDashboard.datasets.map((dataset, index) => ({
+        ...dataset,
+        rowCount: index ? 4 : 30,
+      })),
     },
   ]);
   await card(page).getByRole('button', { name: 'Refresh dashboard' }).click();
@@ -192,13 +202,14 @@ test('dashboard refresh failure preserves previous output counts and removal pre
     probe.items[0] = {
       ...probe.items[0],
       status: 'error',
-      lastError: 'A source is unavailable. Both previous tabs were preserved.',
+      lastError: 'Facebook Ads campaigns: the source is unavailable. Previous tabs were preserved.',
     };
     probe.runs[0].fail(new Error(probe.items[0].lastError));
   });
-  await expect(card(page)).toContainText('30 source · 4 report');
+  await expect(card(page)).toContainText('Google Ads Data · 30 rows');
+  await expect(card(page)).toContainText('Facebook Ads Data · 4 rows');
   await expect(card(page).locator('.card-error')).toContainText(
-    'Both previous tabs were preserved'
+    'Facebook Ads campaigns: the source is unavailable'
   );
   await expect(card(page).getByRole('button', { name: 'Refresh dashboard' })).toBeEnabled();
   page.once('dialog', (dialog) => dialog.dismiss());
@@ -210,7 +221,7 @@ test('dashboard refresh failure preserves previous output counts and removal pre
     return dialog.accept();
   });
   await card(page).getByRole('button', { name: 'Remove', exact: true }).click();
-  expect(confirmation).toContain('Data and Dashboard tabs and existing sheet data stay in place');
+  expect(confirmation).toContain('Its data and dashboard tabs stay in place');
   await expect(card(page).getByRole('button', { name: 'Refresh dashboard' })).toBeDisabled();
   expect(await page.evaluate(() => window.dashboardProbe.removals[0].args)).toEqual([
     'dashboard-fixture',
@@ -220,7 +231,7 @@ test('dashboard refresh failure preserves previous output counts and removal pre
     window.dashboardProbe.removals[0].succeed({ ok: true });
   });
   await expect(card(page)).toHaveCount(0);
-  await expect(page.locator('#notice')).toContainText('Data and Dashboard tabs were kept');
+  await expect(page.locator('#notice')).toContainText('data and dashboard tabs were kept');
 });
 
 test('resetting the report list ignores late dashboard run and poll responses', async ({
@@ -278,7 +289,7 @@ test('a dashboard chat event updates cards without resetting unsaved AI settings
   expect(await page.evaluate(() => window.dashboardProbe.lists.length)).toBe(2);
 });
 
-test('preview dashboard can be created, refreshed into two tabs and removed from the sidebar', async ({
+test('preview dashboard can be created, refreshed into a tab per dataset and removed from the sidebar', async ({
   page,
 }, testInfo) => {
   await open(page);
@@ -290,9 +301,12 @@ test('preview dashboard can be created, refreshed into two tabs and removed from
           .withFailureHandler(reject)
           .dmvSaveDashboard({
             name: 'Reusable marketing dashboard',
-            sources: [{ label: 'Google Ads' }, { label: 'Facebook Ads' }],
-            dataTarget: { sheetName: 'Combined Data', startCell: 'A1' },
-            target: { sheetName: 'Monthly Report', startCell: 'A1' },
+            datasets: [
+              { id: 'gads', label: 'Google Ads campaigns', sheetName: 'Google Ads Data' },
+              { id: 'meta', label: 'Facebook Ads campaigns', sheetName: 'Facebook Ads Data' },
+            ],
+            tiles: [{ title: 'Weekly spend', type: 'line' }, { title: 'Totals', type: 'kpi' }],
+            target: { sheetName: 'Monthly Dashboard' },
           });
       })
   );
@@ -301,17 +315,22 @@ test('preview dashboard can be created, refreshed into two tabs and removed from
   await card(page).getByRole('button', { name: 'Refresh dashboard' }).click();
   await expect(card(page).getByRole('button', { name: 'Refreshing...' })).toBeDisabled();
   await expect(card(page).locator('.status')).toHaveText('Up to date');
-  await expect(card(page).getByRole('link', { name: 'Combined Data' })).toHaveAttribute(
+  await expect(card(page)).toContainText('2 datasets · 1 chart');
+  await expect(card(page).getByRole('link', { name: 'Monthly Dashboard' })).toHaveAttribute(
+    'href',
+    'https://docs.google.com/spreadsheets/d/datamoov-preview-only/edit#gid=900&range=A1'
+  );
+  await expect(card(page).getByRole('link', { name: 'Google Ads Data' })).toHaveAttribute(
     'href',
     'https://docs.google.com/spreadsheets/d/datamoov-preview-only/edit#gid=901&range=A1'
   );
-  await expect(card(page).getByRole('link', { name: 'Monthly Report' })).toHaveAttribute(
+  await expect(card(page).getByRole('link', { name: 'Facebook Ads Data' })).toHaveAttribute(
     'href',
     'https://docs.google.com/spreadsheets/d/datamoov-preview-only/edit#gid=902&range=A1'
   );
-  await expect(card(page)).toContainText('576 source · 12 report');
+  await expect(card(page)).toContainText('Facebook Ads Data · 576 rows');
   await expect(page.locator('#notice')).toContainText(
-    '576 source rows updated in Combined Data; 12 report rows updated in Monthly Report.'
+    '864 rows refreshed in 2 data tabs; 1 chart rebuilt on Monthly Dashboard.'
   );
   await page.screenshot({ path: testInfo.outputPath('dashboard-ready.png'), fullPage: true });
   page.once('dialog', (dialog) => dialog.accept());

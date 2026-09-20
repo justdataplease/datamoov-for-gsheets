@@ -414,7 +414,7 @@
         return;
       }
       input.value =
-        'Create a reusable dashboard combining my connected sources, with a Data tab and a Dashboard tab holding the summary and charts. Ask me which sources, metrics and date range to use.';
+        'Create a performance dashboard from my connected sources: each dataset in its own tab, plus a Dashboard tab with scorecards and charts. Ask me which sources, metrics and date range to use.';
       input.focus();
     }
     function renderDashboards() {
@@ -434,18 +434,17 @@
         const content = el('div', 'card-content');
         const top = el('div', 'card-top');
         const names = el('div');
-        const labels = Array.isArray(dashboard.sourceLabels) ? dashboard.sourceLabels : [];
-        const count = Number.isInteger(dashboard.sourceCount)
-          ? dashboard.sourceCount
-          : labels.length;
+        const datasets = Array.isArray(dashboard.datasets) ? dashboard.datasets : [];
+        const charts = Number(dashboard.chartCount || 0);
         names.append(
           el('div', 'card-title', dashboard.name),
           el(
             'div',
             'card-subtitle',
-            count +
-              (count === 1 ? ' source' : ' sources') +
-              (labels.length ? ' · ' + labels.join(', ') : '')
+            datasets.length +
+              (datasets.length === 1 ? ' dataset · ' : ' datasets · ') +
+              charts +
+              (charts === 1 ? ' chart' : ' charts')
           )
         );
         const running = dashboardRunning(dashboard);
@@ -462,24 +461,18 @@
         top.append(names, el('span', 'status ' + status[1], status[0]));
         content.append(
           top,
-          dashboardDetail('Data tab', dashboard.dataTarget, dashboard.dataUrl),
-          dashboardDetail('Dashboard tab', dashboard.target, dashboard.reportUrl),
-          detail('Updated', timeLabel(dashboard.lastRun))
+          dashboardDetail('Dashboard tab', dashboard.target, dashboard.reportUrl)
         );
-        if (dashboard.lastDataRowCount != null || dashboard.lastRowCount != null)
-          content.append(
-            detail(
-              'Rows',
-              (dashboard.lastDataRowCount == null
-                ? '?'
-                : Number(dashboard.lastDataRowCount).toLocaleString()) +
-                ' source · ' +
-                (dashboard.lastRowCount == null
-                  ? '?'
-                  : Number(dashboard.lastRowCount).toLocaleString()) +
-                ' report'
-            )
-          );
+        // One line per dataset: where its rows land and how many the last refresh wrote.
+        for (const dataset of datasets) {
+          const row = dashboardDetail(dataset.label, dataset.sheetName, dataset.url);
+          if (dataset.rowCount != null)
+            row.lastElementChild.append(
+              ' · ' + Number(dataset.rowCount).toLocaleString() + ' rows'
+            );
+          content.append(row);
+        }
+        content.append(detail('Updated', timeLabel(dashboard.lastRun)));
         if (dashboard.statusMessage)
           content.append(el('p', 'card-progress', dashboard.statusMessage));
         if (dashboard.lastError) content.append(el('p', 'card-error', dashboard.lastError));
@@ -491,7 +484,7 @@
           runDashboard(dashboard)
         );
         remove.disabled = running || removing;
-        refresh.disabled = running || removing;
+        refresh.disabled = running || removing || dashboard.legacy === true;
         actions.append(remove, refresh);
         card.append(content, actions);
         list.append(card);
@@ -515,26 +508,26 @@
         const result = await api('dmvRunDashboard', dashboard.id);
         if (dashboardView.disposed || dashboardView.runs.get(dashboard.id) !== token) return;
         const current = state.dashboards.find((item) => item.id === dashboard.id) || dashboard;
+        const refreshed = Array.isArray(result.datasets) ? result.datasets : [];
         upsert(state.dashboards, {
           ...current,
-          dataUrl: result.dataUrl || current.dataUrl,
           reportUrl: result.reportUrl || current.reportUrl,
           status: 'success',
           lastError: null,
           statusMessage: '',
           lastRun: result.updatedAt || new Date().toISOString(),
           lastRowCount: result.rowCount,
-          lastDataRowCount: result.dataRowCount,
+          chartCount: result.chartCount == null ? current.chartCount : result.chartCount,
           target: result.target || current.target,
-          dataTarget: result.dataTarget || current.dataTarget,
+          datasets: refreshed.length ? refreshed : current.datasets,
         });
         notice(
-          Number(result.dataRowCount || 0).toLocaleString() +
-            ' source rows updated in ' +
-            dashboardTarget(result.dataTarget || current.dataTarget) +
-            '; ' +
-            Number(result.rowCount || 0).toLocaleString() +
-            ' report rows updated in ' +
+          Number(result.rowCount || 0).toLocaleString() +
+            ' rows refreshed in ' +
+            refreshed.length +
+            (refreshed.length === 1 ? ' data tab; ' : ' data tabs; ') +
+            Number(result.chartCount || 0) +
+            (Number(result.chartCount) === 1 ? ' chart rebuilt on ' : ' charts rebuilt on ') +
             dashboardTarget(result.target || current.target) +
             '.'
         );
@@ -565,7 +558,7 @@
         !window.confirm(
           'Remove your dashboard "' +
             dashboard.name +
-            '"? Its Data and Dashboard tabs and existing sheet data stay in place.'
+            '"? Its data and dashboard tabs stay in place.'
         )
       )
         return;
@@ -577,7 +570,7 @@
         await api('dmvDeleteDashboard', dashboard.id);
         if (dashboardView.disposed || dashboardView.removals.get(dashboard.id) !== token) return;
         state.dashboards = state.dashboards.filter((item) => item.id !== dashboard.id);
-        notice('Dashboard setup removed. Its Data and Dashboard tabs were kept.');
+        notice('Dashboard setup removed. Its data and dashboard tabs were kept.');
       } catch (error) {
         if (!dashboardView.disposed && dashboardView.removals.get(dashboard.id) === token)
           notice(error.message || 'The dashboard could not be removed.', 'error');
