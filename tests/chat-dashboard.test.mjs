@@ -169,6 +169,28 @@ test('actual chat saves, runs and charts a multi-provider dashboard with one dat
   assert.equal(run.rowCount, 2);
   assert.equal(run.reportRange, 'B3:D5');
   assert.equal(run.dataRange, 'A1:D3');
+  assert.equal(saved.dataUrl, null, 'saving a definition alone creates no output link');
+  assert.equal(saved.reportUrl, null);
+  const outputUrl = (name, start) =>
+    'https://docs.google.com/spreadsheets/d/' +
+    f.book.getId() +
+    '/edit#gid=' +
+    f.book.getSheetByName(name).getSheetId() +
+    '&range=' +
+    start;
+  assert.equal(run.dataUrl, outputUrl('Campaign data', 'A1'));
+  assert.equal(run.reportUrl, outputUrl('Campaign dashboard', 'B3'));
+  assert.equal(reply.events[0].action, 'saved');
+  assert.equal(reply.events[1].action, 'refreshed');
+  assert.deepEqual(
+    reply.events[1].links.map((link) => link.url),
+    [run.reportUrl, run.dataUrl]
+  );
+  assert.match(
+    results.get('chart').value.url,
+    new RegExp('#gid=' + f.book.getSheetByName('Campaign dashboard').getSheetId() + '&range=')
+  );
+  assert.equal(plain(f.api.dmvListDashboards())[0].reportUrl, run.reportUrl);
   assert.deepEqual(
     run.columns.map((column) => column.key),
     ['campaign', 'currency', 'spend__sum']
@@ -349,6 +371,7 @@ test('post-commit receipt failure remains visible as a sheet write and recoverab
   );
   assert.match(output.reply.events.find((event) => event.kind === 'write').text, /Updated.*tabs/);
   assert.equal(f.state.batches.length, 1);
+  assert.equal(output.reply.events.find((event) => event.kind === 'write').links.length, 2);
   assert.ok(f.book.getSheetByName('Campaign dashboard'));
   const id = output.results.get('save').value.id;
   assert.equal(f.readOutput(id + '-report'), null);
@@ -390,6 +413,10 @@ test('ordinary write_to_sheet reports completed cells when its ownership receipt
   } finally {
     f.state.user.setProperty = set;
   }
+  assert.equal(
+    output.reply.events.find((event) => event.kind === 'write').links[0].label,
+    'Single report'
+  );
   assert.deepEqual(
     output.reply.events.map((event) => event.kind),
     ['report', 'write', 'error']

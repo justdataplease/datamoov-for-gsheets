@@ -5,7 +5,6 @@ function onOpen(e) {
     .createAddonMenu()
     .addItem('Open DataMoov', 'showSidebar')
     .addItem('Open DataMoov in a window', 'showWindow')
-    .addItem('Refresh reports', 'dmvRefreshAll')
     .addToUi();
 }
 
@@ -14,7 +13,9 @@ function onInstall(e) {
 }
 
 function showSidebar() {
-  var html = HtmlService.createTemplateFromFile('dmv_sidebar').evaluate().setTitle('DataMoov');
+  var html = HtmlService.createTemplateFromFile('dmv_sidebar')
+    .evaluate()
+    .setTitle('DataMoov by JustDataPlease');
   SpreadsheetApp.getUi().showSidebar(html);
 }
 
@@ -22,10 +23,10 @@ function showSidebar() {
 function showWindow() {
   var html = HtmlService.createTemplateFromFile('dmv_sidebar')
     .evaluate()
-    .setTitle('DataMoov')
+    .setTitle('DataMoov by JustDataPlease')
     .setWidth(520)
     .setHeight(760);
-  SpreadsheetApp.getUi().showModelessDialog(html, 'DataMoov');
+  SpreadsheetApp.getUi().showModelessDialog(html, 'DataMoov by JustDataPlease');
 }
 
 function include(filename) {

@@ -17,17 +17,22 @@ network destination is the AI provider you configure.
    **Maximum rows per chat report** sets the default and ceiling for each fetched report,
    from 1 to 20,000 rows (initially 1,000). The model can request fewer rows; it cannot exceed
    your setting. Increase it if a complete report reaches the limit.
-   **Instructions for the assistant** supplies general standing context. **Source instructions**
-   lets you save separate rules for each connector, such as campaign naming conventions,
-   attribution or SQL table guidance. General and all source instructions share a 100,000-character
-   budget, with a live counter. Source rules are included once for each source with a saved
-   connection. Settings remain private; long instructions are compressed into bounded pieces,
-   and a new version replaces the old pointer only after every piece has been saved.
-3. Add at least one connection in **Connections**. The chat uses your own private connections;
-   sharing or copying report definitions does not supply another user's connection or credentials.
+   **Instructions for the assistant** supplies general standing context.
+3. Add at least one connection in **Connections**. To set account-specific rules, open that
+   connection's **Edit > Chat instructions** section and choose **Save chat instructions**.
+   Rules can describe campaign naming, attribution or SQL tables for that particular connection;
+   two accounts on the same platform can have different rules. General and connection instructions
+   share a 100,000-character limit, shown by the live counters.
+   Earlier source-wide instructions remain inherited defaults until a connection saves its own
+   rules. The editor shows the inherited text; migrating one account keeps the defaults for the
+   others. Remaining legacy defaults count toward the same limit.
+   Instructions stay in private Google properties and are sent to your chosen AI provider as
+   context. Long instructions are compressed into bounded pieces; a new version becomes active
+   only after every piece has been saved. The chat uses your own private connections; sharing or
+   copying report definitions does not supply another user's connection or credentials.
 
-Usage is billed by the AI provider to your key. A question typically costs a few model calls
-plus one report fetch.
+Usage is billed by the AI provider to your key. A question uses model calls plus any required
+source fetches; multi-account and period comparisons can require several fetches.
 
 ## What the chat can do
 
@@ -104,14 +109,27 @@ For example: **"Create a monthly Google Ads and Facebook performance dashboard, 
 clicks and impressions by campaign. Save the combined data in Marketing data, put the summary
 and a chart in Marketing dashboard, and make it refreshable."** Chat saves the queries,
 dates, column mappings, grouping and ranking rules, then runs the dashboard. It explains the
-sources, where it wrote each output and how to refresh it. Charts and optional formatting are
-created separately from the two-table write.
+sources, whether the setup was saved and outputs updated, links to both tabs, and how to refresh
+it. Dashboard requests include suitable native charts unless you ask for tables only. Charts and
+optional formatting are created separately from the two-table write; a later chart failure does
+not mean the tables were never written.
 
 The saved card appears under **Reports > Dashboards**. **Refresh dashboard** fetches every source
 again and rebuilds both tabs without an AI call or cached chat rows. Its status shows the current
-source, combination, summary and write phases. The card also shows sources, output tab names,
-last refresh, row counts and failures. **Create in chat** opens a draft request you can edit.
+source, combination, summary and write phases. The card also shows sources, links to available
+output tabs, last refresh, row counts and failures. Saving a plan and refreshing its output are
+reported as separate completed actions. **Create in chat** opens a draft request you can edit.
 Removing the saved setup preserves its existing tabs.
+
+A request such as **"Create a marketing performance week vs previous period"** follows the same
+saved-dashboard workflow, including after you answer a source-selection question. A simple
+question about spend or performance remains an analysis unless you request a spreadsheet report.
+The default comparison uses the last completed Monday-to-Sunday week and its preceding week,
+resolved in the spreadsheet timezone. The saved plan uses `lastWeek` and `previousWeek`, with one
+query per account per period and source labels identifying both account and period. Three accounts
+therefore use six queries. Refresh advances both weeks; explicit fixed dates remain fixed.
+The summary groups by week, account/period and currency. The eight-query limit permits up to four
+accounts for this two-period setup; the chat should ask you to narrow a larger selection.
 
 Refresh uses each query's saved row limit and resolves relative date presets again. Invoking
 refresh through Chat also checks the current chat row cap; the sidebar uses the saved limits.
@@ -159,6 +177,11 @@ Values that come back from providers are framed as data, not instructions.
   and says what is missing.
 - If the AI provider fails after a tool already wrote to the sheet, the answer says so and
   lists the completed steps; nothing that happened is hidden.
+- Within one turn, repeated `run_report` requests reuse a complete result only when the validated
+  configuration, selected fields, resolved dates and connection/credential revisions match.
+  **Reused** appears in Actions. A lower requested row cap still applies; results are never
+  truncated to fit. A new turn or changed query fetches again. Dashboard refresh always fetches
+  fresh sources.
 - Results are staged in your private user cache for one hour. Each answer's activity lines
   carry the result ids into the next turn, so "now chart that" reuses the cached result
   instead of running the report again; after an hour the chat runs it again.
@@ -175,7 +198,7 @@ Values that come back from providers are framed as data, not instructions.
 
 | Tool | Purpose |
 | --- | --- |
-| `run_report` | Run a report of a saved connection; returns a `resultId`, columns, row count, statistics and samples |
+| `run_report` | Run a report of a saved connection; reuse exact complete queries within the turn; return a `resultId`, columns, row count, statistics and samples |
 | `discover_fields` | Account-specific fields (GA4 custom definitions, HubSpot/Zendesk properties, SQL result columns), with a `search` filter |
 | `describe_database` | Tables and columns of the schemas/datasets a SQL connection scoped for chat, with a `search` filter on table names |
 | `combine_results` | Append complete fetched results with matching column maps and a source label; preserves currency and source caveats |
@@ -190,7 +213,7 @@ Values that come back from providers are framed as data, not instructions.
 | `create_pivot` | Create a native pivot on a new tab from a validated source range |
 | `list_dashboards` | List private saved dashboards for this spreadsheet |
 | `save_dashboard` | Save source queries, mappings, aggregation rules and two output destinations |
-| `run_dashboard` | Fetch fresh source data and atomically refresh both saved outputs |
+| `run_dashboard` | Fetch fresh source data and atomically refresh both saved outputs; return their tab links and row counts |
 
 Providers are adapted in `src/dmv_ai.js`: Anthropic Messages API, OpenAI Chat Completions
 and Gemini `generateContent`, each with its own tool-call format, normalized to one shape for

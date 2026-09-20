@@ -121,6 +121,7 @@ function dmvChatSaveDashboard_(session, input) {
   var saved = dmvSaveDashboard(plan);
   session.events.push({
     kind: 'dashboard',
+    action: 'saved',
     text:
       'Saved dashboard "' +
       saved.name +
@@ -151,6 +152,8 @@ function dmvChatRunDashboard_(session, input) {
     if (error.sheetUpdated)
       session.events.push({
         kind: 'write',
+        links: dmvChatDashboardLinks_(error),
+        action: 'updated_incomplete',
         text:
           'Updated the data and report tabs, but could not finish saving refresh status. ' +
           error.message,
@@ -159,6 +162,8 @@ function dmvChatRunDashboard_(session, input) {
   }
   session.events.push({
     kind: 'dashboard',
+    action: 'refreshed',
+    links: dmvChatDashboardLinks_(result),
     text: 'Refreshed every source in the saved dashboard.',
   });
   session.events.push({
@@ -175,4 +180,13 @@ function dmvChatRunDashboard_(session, input) {
       '.',
   });
   return result;
+}
+
+function dmvChatDashboardLinks_(result) {
+  return [
+    { label: 'Report: ' + result.target.sheetName, url: result.reportUrl },
+    { label: 'Data: ' + result.dataTarget.sheetName, url: result.dataUrl },
+  ].filter(function (link) {
+    return !!link.url;
+  });
 }

@@ -277,8 +277,10 @@ function dmvChatCreatePivot_(session, input) {
     Sheets.Spreadsheets.batchUpdate({ requests: requests }, session.spreadsheetId);
     if (session.sheetNames && session.sheetNames.indexOf(target) < 0)
       session.sheetNames.push(target);
+    var url = dmvSheetUrl_(session.spreadsheet, sheetId, 'A1');
     session.events.push({
       kind: 'write',
+      links: [{ label: target, url: url }],
       text:
         'Created a native pivot table on ' + target + ' from ' + source.getName() + '!' + area.a1,
     });
@@ -287,6 +289,7 @@ function dmvChatCreatePivot_(session, input) {
       sheetName: target,
       anchorCell: 'A1',
       nativePivot: true,
+      url: url,
       sourceSheet: source.getName(),
       sourceRange: area.a1,
       rowGroups: rows.length,

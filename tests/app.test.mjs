@@ -69,7 +69,6 @@ test('open and install entry points build the Extensions add-on menu with existi
     assert.deepEqual(menu.items, [
       { label: 'Open DataMoov', handler: 'showSidebar' },
       { label: 'Open DataMoov in a window', handler: 'showWindow' },
-      { label: 'Refresh reports', handler: 'dmvRefreshAll' },
     ]);
     for (const item of menu.items) assert.equal(typeof app[item.handler], 'function', item.handler);
   }
@@ -96,7 +95,7 @@ test('sidebar uses the production template and includes only its two approved pa
   app.showSidebar();
   assert.deepEqual(requestedTemplates, ['dmv_sidebar']);
   assert.deepEqual(displayed, [output]);
-  assert.equal(output.title, 'DataMoov');
+  assert.equal(output.title, 'DataMoov by JustDataPlease');
   for (const name of ['dmv_styles', 'dmv_client', 'dmv_client_chat']) {
     assert.equal(app.include(name), readFileSync(join(sourceRoot, name + '.html'), 'utf8'));
   }

@@ -442,3 +442,32 @@ test('post-commit dashboard state failures disclose updated tabs with safe metad
   assert.equal(f.state.batches.length, 1);
   assert.ok(f.readOutput(saved.id + '-report'));
 });
+
+test('dashboard refresh freezes all relative periods at one local date across a week boundary', () => {
+  const f = fixture();
+  f.book.timezone = 'Europe/Athens';
+  f.advance(Date.parse('2026-09-20T20:59:59.900Z') - Date.parse('2026-09-18T12:00:00Z'));
+  f.input.sources[0].dateRange = { preset: 'lastWeek' };
+  f.input.sources[1].dateRange = { preset: 'previousWeek' };
+  const saved = f.save();
+  const observed = [];
+  f.onFetch = (account, ctx) => {
+    observed.push({ account, start: ctx.startDate, end: ctx.endDate });
+    if (observed.length === 1) f.advance(200);
+  };
+  f.run(saved.id);
+  assert.deepEqual(observed, [
+    { account: 'one', start: '2026-09-07', end: '2026-09-13' },
+    { account: 'two', start: '2026-08-31', end: '2026-09-06' },
+  ]);
+  assert.deepEqual(plain(f.record(saved.id).sources.map((source) => source.dateRange)), [
+    { preset: 'lastWeek' },
+    { preset: 'previousWeek' },
+  ]);
+  f.run(saved.id);
+  assert.deepEqual(observed.slice(2), [
+    { account: 'one', start: '2026-09-14', end: '2026-09-20' },
+    { account: 'two', start: '2026-09-07', end: '2026-09-13' },
+  ]);
+  assert.equal(f.state.batches.length, 2);
+});

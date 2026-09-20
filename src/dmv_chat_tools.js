@@ -243,9 +243,45 @@ function dmvChatRunReport_(session, input) {
   } catch (error) {
     throw new Error(error.message + ' ' + dmvChatReportHint_(session, input));
   }
+  var connection = dmvReadConnection_(query.connectionId),
+    revision = dmvConnectionRevision_(connection),
+    definition = dmvDefinition_(dmvConnector_(query.connectorId), query.reportType),
+    dates = dmvReportDates_(definition, query, session.spreadsheet);
+  // Reuse only complete identical queries within this turn. Relative date aliases share a
+  // key only when they resolve to exactly the same dates; row limits are enforced separately.
+  var identity = Object.assign({}, query, {
+    fields: query.fields.slice().sort(),
+    dateRange: dates,
+    connectionRevision: revision,
+  });
+  delete identity.maxRows;
+  var key = dmvOutputDigest_(JSON.stringify(dmvCanonical_(identity))),
+    reusedId = session.reportResults && session.reportResults[key],
+    reused = reusedId && session.results[reusedId];
   var result;
   try {
-    result = dmvFetchReport_(query, session.spreadsheet, session.deadline);
+    if (reused) {
+      if (reused.rows.length > query.maxRows)
+        throw new Error('The complete report exceeds the requested row limit.');
+      session.events.push({
+        kind: 'report',
+        text:
+          'Reused ' +
+          reused.source +
+          ' - ' +
+          reused.rows.length.toLocaleString() +
+          ' rows' +
+          (dates.startDate ? ' - ' + dates.startDate + ' to ' + dates.endDate : ''),
+        ref: reusedId,
+      });
+      var description = dmvChatDescribe_(session, reused, reusedId);
+      description.reused = true;
+      return description;
+    }
+    // Freeze this fetch to the resolved window used in the identity, including at midnight.
+    var fetchQuery = Object.assign({}, query);
+    if (definition.dateRange) fetchQuery.dateRange = Object.assign({ preset: 'custom' }, dates);
+    result = dmvFetchReport_(fetchQuery, session.spreadsheet, session.deadline);
   } catch (error) {
     var message = error.message;
     if (/row limit|too many rows|more than .*rows/i.test(message))
@@ -272,6 +308,17 @@ function dmvChatRunReport_(session, input) {
     source: dmvChatSourceLabel_(session, query),
   };
   var id = dmvChatStoreResult_(session, stored);
+  if (result.metadata.complete === true) {
+    try {
+      // A credential/connection edit during the fetch must not seed a reusable stale entry.
+      if (dmvConnectionRevision_(dmvReadConnection_(query.connectionId)) === revision) {
+        if (!session.reportResults) session.reportResults = Object.create(null);
+        session.reportResults[key] = id;
+      }
+    } catch (ignored) {
+      /* Reuse is optional; a completed fetch remains available to this turn. */
+    }
+  }
   session.events.push({
     kind: 'report',
     text: 'Ran ' + stored.source + ' · ' + result.rows.length.toLocaleString() + ' rows',
@@ -993,13 +1040,28 @@ function dmvChatWriteSheet_(session, input) {
     spreadsheetId: session.spreadsheetId,
     target: { sheetName: sheetName, startCell: cell.a1 },
   };
-  dmvLocked_(function () {
-    dmvWorkbookLocked_(function () {
-      if (session.spreadsheet.getSheetByName(sheetName)) dmvChatSheetTarget_(session, sheetName);
-      dmvWriteReport_(session.spreadsheet, report, normalized);
+  var sheetUpdated = false;
+  try {
+    dmvLocked_(function () {
+      dmvWorkbookLocked_(function () {
+        if (session.spreadsheet.getSheetByName(sheetName)) dmvChatSheetTarget_(session, sheetName);
+        dmvWriteReport_(session.spreadsheet, report, normalized);
+        sheetUpdated = true;
+      });
+      dmvChatPruneReceipts_(session.spreadsheetId);
     });
-    dmvChatPruneReceipts_(session.spreadsheetId);
-  });
+  } catch (error) {
+    if (sheetUpdated || error.sheetUpdated) {
+      error.sheetUpdated = true;
+      var committedUrl = dmvSheetLink_(session.spreadsheet, report.target);
+      session.events.push({
+        kind: 'write',
+        text: 'Updated ' + sheetName + '. ' + error.message,
+        links: committedUrl ? [{ label: sheetName, url: committedUrl }] : [],
+      });
+    }
+    throw error;
+  }
   var sheet = session.spreadsheet.getSheetByName(sheetName);
   var area = {
     sheetName: sheetName,
@@ -1016,8 +1078,10 @@ function dmvChatWriteSheet_(session, input) {
     cell.a1 +
     ':' +
     dmvChatA1_(cell.row + area.rows - 1, cell.column + result.columns.length - 1);
+  var url = dmvSheetUrl_(session.spreadsheet, sheet.getSheetId(), cell.a1);
   session.events.push({
     kind: 'write',
+    links: [{ label: sheetName, url: url }],
     text: 'Wrote ' + result.rows.length.toLocaleString() + ' rows to ' + range,
     ref: input.resultId + ' at ' + range,
   });
@@ -1025,6 +1089,7 @@ function dmvChatWriteSheet_(session, input) {
   return {
     ok: true,
     range: range,
+    url: url,
     rows: result.rows.length,
     columns: result.columns.map(function (column) {
       return column.label || column.key;
@@ -1310,8 +1375,10 @@ function dmvChatCreateChart_(session, input) {
     );
   });
   var reply = response && response.replies && response.replies[0] && response.replies[0].addChart;
+  var url = dmvSheetUrl_(session.spreadsheet, area.sheetId, dmvChatA1_(anchor.row, anchor.column));
   session.events.push({
     kind: 'chart',
+    links: [{ label: area.sheetName, url: url }],
     text:
       'Added a ' +
       String(input.chartType).toLowerCase() +
@@ -1323,6 +1390,7 @@ function dmvChatCreateChart_(session, input) {
   return {
     ok: true,
     chartId: reply && reply.chart ? reply.chart.chartId : null,
+    url: url,
     sheetName: area.sheetName,
     anchorCell: dmvChatA1_(anchor.row, anchor.column),
     title: title,

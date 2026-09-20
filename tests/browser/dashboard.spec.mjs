@@ -301,6 +301,14 @@ test('preview dashboard can be created, refreshed into two tabs and removed from
   await card(page).getByRole('button', { name: 'Refresh dashboard' }).click();
   await expect(card(page).getByRole('button', { name: 'Refreshing...' })).toBeDisabled();
   await expect(card(page).locator('.status')).toHaveText('Up to date');
+  await expect(card(page).getByRole('link', { name: 'Combined Data' })).toHaveAttribute(
+    'href',
+    'https://docs.google.com/spreadsheets/d/datamoov-preview-only/edit#gid=901&range=A1'
+  );
+  await expect(card(page).getByRole('link', { name: 'Monthly Report' })).toHaveAttribute(
+    'href',
+    'https://docs.google.com/spreadsheets/d/datamoov-preview-only/edit#gid=902&range=A1'
+  );
   await expect(card(page)).toContainText('576 source · 12 report');
   await expect(page.locator('#notice')).toContainText(
     '576 source rows updated in Combined Data; 12 report rows updated in Monthly Report.'

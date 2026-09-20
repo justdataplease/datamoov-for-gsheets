@@ -17,7 +17,10 @@
             ><svg viewBox="0 0 24 24">
               <path d="M5 5h5v14H5zM13 5h5v9h-5zM13 17h5v2h-5z" fill="currentColor" /></svg
           ></span>
-          <div><strong>DataMoov</strong><span>YOUR DATA, IN SHEETS</span></div>
+          <div class="brand-title">
+            <strong>DataMoov <small>by JustDataPlease</small></strong
+            ><span>YOUR DATA, IN SHEETS</span>
+          </div>
         </div>
         <div class="heading-actions">
           <button
@@ -181,6 +184,7 @@
                   <option value="last30" selected>Last 30 days</option>
                   <option value="last90">Last 90 days</option>
                   <option value="lastWeek">Last week (Mon–Sun)</option>
+                  <option value="previousWeek">Week before last (Mon-Sun)</option>
                   <option value="thisMonth">This month</option>
                   <option value="lastMonth">Last month</option>
                   <option value="thisYear">This year</option>
@@ -458,6 +462,36 @@
               </button>
             </fieldset>
           </form>
+          <section
+            class="settings-card connection-chat-settings"
+            aria-labelledby="connection-chat-heading"
+          >
+            <h2 id="connection-chat-heading">Chat instructions</h2>
+            <p class="field-help">
+              Private guidance for this connection only: business context, campaign naming, datasets
+              or how its numbers should be interpreted.
+            </p>
+            <p id="connection-chat-status" class="field-help" role="status" aria-live="polite">
+              Save this connection first, then edit it to add chat instructions.
+            </p>
+            <label for="connection-chat-instructions">Instructions for this connection</label>
+            <textarea
+              id="connection-chat-instructions"
+              rows="4"
+              maxlength="100000"
+              disabled
+              aria-describedby="connection-chat-status connection-chat-count"
+              placeholder="e.g. Use the marketing dataset. Brand campaigns start with BR_. Compare completed weeks."
+            ></textarea>
+            <p
+              id="connection-chat-count"
+              class="field-help instruction-count"
+              aria-live="polite"
+            ></p>
+            <button type="button" id="save-connection-chat" class="button secondary full" disabled>
+              Save chat instructions
+            </button>
+          </section>
         </section>
         <section id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
           <div class="section-heading">
@@ -524,18 +558,8 @@
                   Standing context sent with every question: your business, naming conventions,
                   preferred tabs or chart styles.
                 </p>
-                <label for="ai-instruction-source">Source instructions</label>
-                <select id="ai-instruction-source"></select>
-                <textarea
-                  id="ai-source-instructions"
-                  rows="4"
-                  maxlength="100000"
-                  aria-label="Instructions for the selected source"
-                  aria-describedby="ai-source-instructions-help ai-instruction-count"
-                  placeholder="e.g. For this source, group costs by campaign and keep currencies separate."
-                ></textarea>
-                <p id="ai-source-instructions-help" class="field-help">
-                  Added to your general instructions when this source is connected in chat.
+                <p class="field-help">
+                  Set account-specific chat instructions under Connections &gt; Edit connection.
                 </p>
                 <p
                   id="ai-instruction-count"

@@ -571,6 +571,10 @@ function installPreview(initial) {
         lastRun: new Date().toISOString(),
         lastRowCount: 12,
         lastDataRowCount: 576,
+        dataUrl:
+          'https://docs.google.com/spreadsheets/d/datamoov-preview-only/edit#gid=901&range=A1',
+        reportUrl:
+          'https://docs.google.com/spreadsheets/d/datamoov-preview-only/edit#gid=902&range=A1',
       });
       return {
         ok: true,
@@ -580,13 +584,78 @@ function installPreview(initial) {
         updatedAt: saved.lastRun,
         target: copy(saved.target),
         dataTarget: copy(saved.dataTarget),
+        dataUrl: saved.dataUrl,
+        reportUrl: saved.reportUrl,
       };
     },
     dmvDeleteDashboard(id) {
       data.dashboards = (data.dashboards || []).filter((item) => item.id !== id);
       return { ok: true };
     },
-    dmvAiSettings: () => copy(data.ai),
+    dmvAiSettings() {
+      return {
+        ...copy(data.ai),
+        instructionCharacters:
+          (data.ai.instructions || '').length +
+          Object.values(data.ai.sourceInstructions || {}).reduce(
+            (sum, value) => sum + value.length,
+            0
+          ) +
+          Object.values(data.ai.connectionInstructions || {}).reduce(
+            (sum, value) => sum + value.length,
+            0
+          ),
+        maxInstructionCharacters: 100000,
+      };
+    },
+    dmvConnectionChatInstructions(connectionId) {
+      const connection = data.connections.find((item) => item.id === connectionId);
+      if (!connection) throw new Error('This connection no longer exists.');
+      const map = data.ai.connectionInstructions || {};
+      const stored = Object.hasOwn(map, connectionId);
+      const instructions = stored ? map[connectionId] : '';
+      const legacy = data.ai.sourceInstructions?.[connection.connectorId] || '';
+      return {
+        connectionId,
+        connectorId: connection.connectorId,
+        label: connection.label,
+        configured: !!data.ai.configured,
+        instructions,
+        effectiveInstructions: stored ? instructions : legacy,
+        inherited: !stored && !!legacy,
+        totalCharacters: handlers.dmvAiSettings().instructionCharacters,
+        replacedCharacters:
+          instructions.length +
+          (legacy &&
+          !data.connections.some(
+            (item) =>
+              item.id !== connectionId &&
+              item.connectorId === connection.connectorId &&
+              !Object.hasOwn(map, item.id)
+          )
+            ? legacy.length
+            : 0),
+        maxCharacters: 100000,
+        revision: data.ai.instructionRevision || 0,
+      };
+    },
+    dmvSaveConnectionChatInstructions(input) {
+      const current = handlers.dmvConnectionChatInstructions(input.connectionId);
+      if (!current.configured) throw new Error('Set up your AI provider in Settings first.');
+      if (input.revision !== current.revision)
+        throw new Error('Instructions changed. Reopen this connection before saving.');
+      if (
+        typeof input.instructions !== 'string' ||
+        current.totalCharacters - current.replacedCharacters + input.instructions.length > 100000
+      )
+        throw new Error('Keep all instructions within 100,000 characters combined.');
+      data.ai.connectionInstructions ||= {};
+      if (current.replacedCharacters > current.instructions.length)
+        delete data.ai.sourceInstructions[current.connectorId];
+      data.ai.connectionInstructions[input.connectionId] = input.instructions;
+      data.ai.instructionRevision = current.revision + 1;
+      return handlers.dmvConnectionChatInstructions(input.connectionId);
+    },
     dmvSaveAiSettings(input) {
       const provider = data.ai.providers.find((item) => item.id === input.provider);
       if (!provider) throw new Error('Choose a supported AI provider.');
@@ -619,7 +688,11 @@ function installPreview(initial) {
         throw new Error('Choose an available source for its chat instructions.');
       if (
         instructions.length +
-          Object.values(sourceInstructions).reduce((total, value) => total + value.length, 0) >
+          Object.values(sourceInstructions).reduce((total, value) => total + value.length, 0) +
+          Object.values(data.ai.connectionInstructions || {}).reduce(
+            (total, value) => total + value.length,
+            0
+          ) >
         100000
       )
         throw new Error(
@@ -632,13 +705,14 @@ function installPreview(initial) {
         debug,
         maxRows,
         sourceInstructions: copy(sourceInstructions),
+        instructionRevision: (data.ai.instructionRevision || 0) + 1,
         configured: true,
         provider: provider.id,
         providerLabel: provider.label,
         model: input.model || provider.defaultModel,
         instructions,
       };
-      return copy(data.ai);
+      return handlers.dmvAiSettings();
     },
     dmvDeleteAiSettings() {
       data.ai = { configured: false, debug: true, maxRows: 1000, providers: data.ai.providers };
@@ -709,7 +783,15 @@ function installPreview(initial) {
           result.target.sheetName +
           '**\n\nUse **Reports > Dashboards > Refresh dashboard** to fetch both sources and rebuild both tabs. (Sample preview data.)';
         const events = [
-          { kind: 'dashboard', text: 'Saved dashboard with 2 sources.' },
+          {
+            kind: 'dashboard',
+            action: 'refreshed',
+            text: 'Saved dashboard with 2 sources.',
+            links: [
+              { label: 'Report: ' + result.target.sheetName + ' (preview)', url: result.reportUrl },
+              { label: 'Data: ' + result.dataTarget.sheetName + ' (preview)', url: result.dataUrl },
+            ],
+          },
           { kind: 'write', text: 'Updated the data and report tabs.' },
         ];
         return finish({
@@ -742,7 +824,16 @@ function installPreview(initial) {
           text: 'Ran Google Ads (Marketing account) · Daily campaign performance · 248 rows',
         },
         { kind: 'summary', text: 'Summarized 248 rows into 6' },
-        { kind: 'write', text: 'Wrote 6 rows to Spend by campaign!A1:C7' },
+        {
+          kind: 'write',
+          text: 'Wrote 6 rows to Spend by campaign!A1:C7',
+          links: [
+            {
+              label: 'Spend by campaign (preview)',
+              url: 'https://docs.google.com/spreadsheets/d/datamoov-preview-only/edit#gid=903&range=A1',
+            },
+          ],
+        },
       ];
       if (/chart/i.test(text))
         events.push({

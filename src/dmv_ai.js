@@ -56,12 +56,20 @@ function dmvAiRead_() {
     var savedInstructions = dmvAiReadInstructions_(settings.instructionRef, all);
     settings.instructions = savedInstructions.instructions;
     settings.sourceInstructions = savedInstructions.sourceInstructions;
+    settings.connectionInstructions = savedInstructions.connectionInstructions;
   }
   settings.sourceInstructions = settings.sourceInstructions || {};
+  // Deleted connections no longer use instructions. Ignore their pieces when reading;
+  // the next successful settings save removes them from the private instruction document.
+  var overrides = settings.connectionInstructions || {};
+  settings.connectionInstructions = Object.create(null);
+  Object.keys(overrides).forEach(function (id) {
+    if (all[dmvKey_('connection', id)]) settings.connectionInstructions[id] = overrides[id];
+  });
   return settings;
 }
 
-function dmvAiInstructionInput_(instructions, sourceInstructions) {
+function dmvAiInstructionInput_(instructions, sourceInstructions, connectionInstructions) {
   if (typeof instructions !== 'string') throw new Error('Chat instructions must be text.');
   if (
     !sourceInstructions ||
@@ -84,16 +92,53 @@ function dmvAiInstructionInput_(instructions, sourceInstructions) {
     text = text.trim().replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
     if (text) sources[id] = text;
   });
+  connectionInstructions = connectionInstructions === undefined ? {} : connectionInstructions;
+  if (
+    !connectionInstructions ||
+    Object.prototype.toString.call(connectionInstructions) !== '[object Object]'
+  )
+    throw new Error('Connection instructions must be an object.');
+  var connections = Object.create(null);
+  Object.keys(connectionInstructions).forEach(function (id) {
+    if (!/^[a-zA-Z0-9-]{1,80}$/.test(id))
+      throw new Error('Choose a valid connection for its chat instructions.');
+    var text = connectionInstructions[id];
+    if (typeof text !== 'string') throw new Error('Connection instructions must be text.');
+    total += text.length;
+    // An empty override intentionally suppresses a legacy source default.
+    connections[id] = text.trim().replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+  });
   if (total > DMV_AI.maxInstructionsLength)
     throw new Error(
-      'Chat instructions are too long. General and source instructions together may contain at most 100,000 characters.'
+      'Chat instructions are too long. General, source and connection instructions together may contain at most 100,000 characters.'
     );
   return {
     instructions: instructions
       .trim()
       .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ''),
     sourceInstructions: sources,
+    connectionInstructions: connections,
   };
+}
+
+function dmvAiInstructionCharacters_(settings) {
+  if (!settings) return 0;
+  return [settings.sourceInstructions || {}, settings.connectionInstructions || {}].reduce(
+    function (total, instructions) {
+      return Object.keys(instructions).reduce(function (count, id) {
+        return count + instructions[id].length;
+      }, total);
+    },
+    (settings.instructions || '').length
+  );
+}
+
+// Overrides apply to one private connection; legacy source instructions remain defaults.
+function dmvAiConnectionInstructions_(settings, connection) {
+  var overrides = (settings && settings.connectionInstructions) || {};
+  if (Object.prototype.hasOwnProperty.call(overrides, connection.id))
+    return overrides[connection.id];
+  return ((settings && settings.sourceInstructions) || {})[connection.connectorId] || '';
 }
 
 function dmvAiInstructionPrefix_(generation) {
@@ -124,7 +169,11 @@ function dmvAiReadInstructions_(ref, all) {
     var payload = JSON.parse(
       Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(encoded))).getDataAsString()
     );
-    return dmvAiInstructionInput_(payload.instructions, payload.sourceInstructions);
+    return dmvAiInstructionInput_(
+      payload.instructions,
+      payload.sourceInstructions,
+      payload.connectionInstructions
+    );
   } catch (ignored) {
     throw new Error(
       'Saved chat instructions are missing or damaged. Restore the private settings before using chat.'
@@ -153,6 +202,7 @@ function dmvAiWriteSettings_(settings) {
         JSON.stringify({
           instructions: settings.instructions,
           sourceInstructions: settings.sourceInstructions,
+          connectionInstructions: settings.connectionInstructions || {},
         })
       )
     ).getBytes()
@@ -169,6 +219,7 @@ function dmvAiWriteSettings_(settings) {
   });
   delete stored.instructions;
   delete stored.sourceInstructions;
+  delete stored.connectionInstructions;
   if (old && old.instructionRef && old.instructionRef.digest === stored.instructionRef.digest) {
     stored.instructionRef = old.instructionRef;
     dmvSave_('ai', stored);
@@ -220,6 +271,8 @@ function dmvAiSummary_(settings) {
     return {
       configured: false,
       debug: true,
+      instructionCharacters: 0,
+      maxInstructionCharacters: DMV_AI.maxInstructionsLength,
       maxRows: DMV_LIMITS.defaultRows,
       providers: dmvAiCatalog_(),
     };
@@ -230,6 +283,9 @@ function dmvAiSummary_(settings) {
     model: settings.model,
     instructions: settings.instructions || '',
     sourceInstructions: settings.sourceInstructions || {},
+    connectionInstructions: settings.connectionInstructions || {},
+    instructionCharacters: dmvAiInstructionCharacters_(settings),
+    maxInstructionCharacters: DMV_AI.maxInstructionsLength,
     maxRows: dmvAiMaxRows_(settings),
     debug: settings.debug !== false,
     providers: dmvAiCatalog_(),
@@ -265,7 +321,8 @@ function dmvSaveAiSettings(input) {
         : input.instructions,
       input.sourceInstructions === undefined
         ? (previous && previous.sourceInstructions) || {}
-        : input.sourceInstructions
+        : input.sourceInstructions,
+      (previous && previous.connectionInstructions) || {}
     );
     var maxRows = input.maxRows === undefined ? dmvAiMaxRows_(previous) : input.maxRows;
     if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > DMV_LIMITS.maxRows)
@@ -284,11 +341,75 @@ function dmvSaveAiSettings(input) {
       apiKey: apiKey,
       instructions: instructionInput.instructions,
       sourceInstructions: instructionInput.sourceInstructions,
+      connectionInstructions: instructionInput.connectionInstructions,
       maxRows: maxRows,
       revision: previous ? (previous.revision || 0) + 1 : 1,
     };
     dmvAiWriteSettings_(settings);
     return dmvAiSummary_(settings);
+  });
+}
+
+function dmvAiConnectionDefaultReleasable_(connection, settings) {
+  if (!settings || !settings.sourceInstructions[connection.connectorId]) return false;
+  var overrides = settings.connectionInstructions || {};
+  return !dmvList_('connection').some(function (other) {
+    return (
+      other.id !== connection.id &&
+      other.connectorId === connection.connectorId &&
+      !Object.prototype.hasOwnProperty.call(overrides, other.id)
+    );
+  });
+}
+
+function dmvConnectionChatInstructionsSummary_(connection, settings) {
+  var overrides = (settings && settings.connectionInstructions) || {};
+  var inherited = !Object.prototype.hasOwnProperty.call(overrides, connection.id);
+  var instructions = inherited ? '' : overrides[connection.id];
+  return {
+    connectionId: connection.id,
+    connectorId: connection.connectorId,
+    label: connection.label,
+    configured: !!settings,
+    instructions: instructions,
+    effectiveInstructions: dmvAiConnectionInstructions_(settings, connection),
+    inherited: inherited,
+    totalCharacters: dmvAiInstructionCharacters_(settings),
+    replacedCharacters:
+      instructions.length +
+      (dmvAiConnectionDefaultReleasable_(connection, settings)
+        ? settings.sourceInstructions[connection.connectorId].length
+        : 0),
+    maxCharacters: DMV_AI.maxInstructionsLength,
+    revision: settings ? settings.revision || 0 : 0,
+  };
+}
+
+function dmvConnectionChatInstructions(connectionId) {
+  return dmvConnectionChatInstructionsSummary_(dmvRead_('connection', connectionId), dmvAiRead_());
+}
+
+function dmvSaveConnectionChatInstructions(input) {
+  return dmvLocked_(function () {
+    input = input || {};
+    var connection = dmvRead_('connection', input.connectionId);
+    var previous = dmvAiRead_();
+    if (!previous) throw new Error('Add an AI provider and API key under Settings first.');
+    if (!Number.isInteger(input.revision) || input.revision !== (previous.revision || 0))
+      throw new Error('Chat settings changed. Reopen the connection instructions and try again.');
+    var overrides = Object.assign(Object.create(null), previous.connectionInstructions);
+    overrides[connection.id] = input.instructions;
+    var defaults = Object.assign({}, previous.sourceInstructions);
+    // Once the last account has its own rule, remove the migrated source default.
+    // This also permits replacing a full-size inherited rule without double-counting it.
+    if (dmvAiConnectionDefaultReleasable_(connection, previous))
+      delete defaults[connection.connectorId];
+    var instructions = dmvAiInstructionInput_(previous.instructions || '', defaults, overrides);
+    var settings = Object.assign({}, previous, instructions, {
+      revision: (previous.revision || 0) + 1,
+    });
+    dmvAiWriteSettings_(settings);
+    return dmvConnectionChatInstructionsSummary_(connection, settings);
   });
 }
 
@@ -531,10 +652,17 @@ var dmvAiGemini_ = {
         }),
       };
     });
+    // Gemini's output limit includes thinking. Keep room for the answer and reduce
+    // reasoning effort on the verified default model; other models keep their own defaults.
+    var flash38 = settings.model === 'gemini-3.8-flash';
+    var generationConfig = {
+      maxOutputTokens: request.maxTokens || (flash38 ? 16384 : DMV_AI.maxOutputTokens),
+    };
+    if (flash38) generationConfig.thinkingConfig = { thinkingLevel: 'LOW' };
     var body = {
       systemInstruction: { parts: [{ text: request.system }] },
       contents: contents,
-      generationConfig: { maxOutputTokens: request.maxTokens || DMV_AI.maxOutputTokens },
+      generationConfig: generationConfig,
     };
     if (request.tools && request.tools.length)
       body.tools = [
@@ -579,11 +707,14 @@ var dmvAiGemini_ = {
           )
         );
     });
-    var stop = toolCalls.length
-      ? 'tool'
-      : { STOP: 'end', MAX_TOKENS: 'length', SAFETY: 'refusal', RECITATION: 'refusal' }[
-          candidate.finishReason
-        ];
+    // A cut-off response may contain a function call; the chat must recover its
+    // answer without executing actions from that incomplete response.
+    var stop =
+      candidate.finishReason === 'MAX_TOKENS'
+        ? 'length'
+        : toolCalls.length
+          ? 'tool'
+          : { STOP: 'end', SAFETY: 'refusal', RECITATION: 'refusal' }[candidate.finishReason];
     // Parts are replayed as-is so thought signatures on function calls survive the tool round.
     return { text: text.join('\n'), toolCalls: toolCalls, stop: stop || 'end', raw: parts };
   },

@@ -95,3 +95,23 @@ function dmvWorkbookLocked_(callback) {
     lock.releaseLock();
   }
 }
+
+// Links are derived only from the active workbook and a verified destination tab.
+function dmvSheetUrl_(spreadsheet, sheetId, range) {
+  var id = String(spreadsheet.getId());
+  if (!/^[A-Za-z0-9_-]+$/.test(id) || !Number.isInteger(sheetId) || sheetId < 0) return null;
+  var url = 'https://docs.google.com/spreadsheets/d/' + id + '/edit#gid=' + sheetId;
+  if (typeof range === 'string' && /^[A-Z]+[1-9][0-9]*(?::[A-Z]+[1-9][0-9]*)?$/.test(range))
+    url += '&range=' + encodeURIComponent(range);
+  return url;
+}
+
+function dmvSheetLink_(spreadsheet, target, range) {
+  try {
+    var sheet = target && spreadsheet.getSheetByName(target.sheetName);
+    return sheet ? dmvSheetUrl_(spreadsheet, sheet.getSheetId(), range || target.startCell) : null;
+  } catch (ignored) {
+    // A missing link must not change the outcome of an already committed write.
+    return null;
+  }
+}

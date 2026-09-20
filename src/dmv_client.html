@@ -435,6 +435,35 @@
         });
       return request.promise;
     }
+    function sheetLink(label, value) {
+      if (typeof value !== 'string') return null;
+      try {
+        const url = new URL(value);
+        if (
+          url.origin !== 'https://docs.google.com' ||
+          url.username ||
+          url.password ||
+          url.search ||
+          !/^\/spreadsheets\/d\/[A-Za-z0-9_-]+\/edit$/.test(url.pathname) ||
+          !/^#gid=\d+(?:&range=[A-Z]+[1-9]\d*(?:(?:%3A|:)[A-Z]+[1-9]\d*)?)?$/.test(url.hash)
+        )
+          return null;
+        const link = el('a', 'sheet-output-link', label);
+        link.href = url.href;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        return link;
+      } catch {
+        return null;
+      }
+    }
+    function dashboardDetail(label, target, url) {
+      const name = dashboardTarget(target);
+      const row = detail(label, name);
+      const link = sheetLink(name, url);
+      if (link) row.lastElementChild.replaceChildren(link);
+      return row;
+    }
     function dashboardTarget(target) {
       return typeof target === 'string' ? target : target?.sheetName || 'Not configured';
     }
@@ -494,8 +523,8 @@
         top.append(names, el('span', 'status ' + status[1], status[0]));
         content.append(
           top,
-          detail('Data tab', dashboardTarget(dashboard.dataTarget)),
-          detail('Report tab', dashboardTarget(dashboard.target)),
+          dashboardDetail('Data tab', dashboard.dataTarget, dashboard.dataUrl),
+          dashboardDetail('Report tab', dashboard.target, dashboard.reportUrl),
           detail('Updated', timeLabel(dashboard.lastRun))
         );
         if (dashboard.lastDataRowCount != null || dashboard.lastRowCount != null)
@@ -549,6 +578,8 @@
         const current = state.dashboards.find((item) => item.id === dashboard.id) || dashboard;
         upsert(state.dashboards, {
           ...current,
+          dataUrl: result.dataUrl || current.dataUrl,
+          reportUrl: result.reportUrl || current.reportUrl,
           status: 'success',
           lastError: null,
           statusMessage: '',
@@ -1239,6 +1270,103 @@
         }
       }
     }
+    const connectionChat = { epoch: 0, saved: null, saving: false };
+    function updateConnectionChatCount() {
+      const saved = connectionChat.saved;
+      if (!saved) return;
+      const draft = $('connection-chat-instructions').value;
+      const unchanged = draft === saved.effectiveInstructions;
+      const count = unchanged
+        ? saved.totalCharacters
+        : saved.totalCharacters - saved.replacedCharacters + draft.length;
+      const over = count > saved.maxCharacters;
+      $('connection-chat-count').textContent =
+        count.toLocaleString() +
+        ' / ' +
+        saved.maxCharacters.toLocaleString() +
+        ' characters across all instructions';
+      $('connection-chat-count').className =
+        'field-help instruction-count' + (over ? ' error' : '');
+      $('connection-chat-instructions').setCustomValidity(
+        over ? 'Keep all instructions within 100,000 characters combined.' : ''
+      );
+      $('save-connection-chat').disabled =
+        !saved.configured || connectionChat.saving || unchanged || over;
+    }
+    async function loadConnectionChat(connectionId) {
+      const epoch = ++connectionChat.epoch;
+      connectionChat.saved = null;
+      connectionChat.saving = false;
+      $('connection-chat-instructions').value = '';
+      $('connection-chat-instructions').disabled = true;
+      $('connection-chat-instructions').setCustomValidity('');
+      $('save-connection-chat').disabled = true;
+      $('save-connection-chat').textContent = 'Save chat instructions';
+      $('connection-chat-count').textContent = '';
+      $('connection-chat-status').textContent = connectionId
+        ? 'Loading private chat instructions...'
+        : 'Save this connection first, then edit it to add chat instructions.';
+      if (!connectionId) return;
+      try {
+        const saved = await api('dmvConnectionChatInstructions', connectionId);
+        if (epoch !== connectionChat.epoch || state.connectionId !== connectionId) return;
+        connectionChat.saved = saved;
+        $('connection-chat-instructions').value = saved.effectiveInstructions || '';
+        $('connection-chat-instructions').disabled = !saved.configured;
+        $('connection-chat-status').textContent = !saved.configured
+          ? 'Set up your AI provider in Settings to add chat instructions.'
+          : saved.inherited
+            ? 'Showing your previous source instructions. Edit and save to customize this connection.'
+            : 'Used only when this connection is included in chat. Saved separately from credentials.';
+        updateConnectionChatCount();
+      } catch (error) {
+        if (epoch === connectionChat.epoch)
+          $('connection-chat-status').textContent =
+            error.message || 'Could not load chat instructions. Reopen this connection to retry.';
+      }
+    }
+    $('connection-chat-instructions').addEventListener('input', updateConnectionChatCount);
+    $('save-connection-chat').addEventListener('click', async () => {
+      const saved = connectionChat.saved;
+      if (
+        !saved ||
+        connectionChat.saving ||
+        !saved.configured ||
+        !$('connection-chat-instructions').reportValidity()
+      )
+        return;
+      const epoch = connectionChat.epoch;
+      connectionChat.saving = true;
+      $('save-connection-chat').disabled = true;
+      $('save-connection-chat').textContent = 'Saving...';
+      $('connection-chat-instructions').disabled = true;
+      try {
+        const result = await api('dmvSaveConnectionChatInstructions', {
+          connectionId: saved.connectionId,
+          instructions: $('connection-chat-instructions').value,
+          revision: saved.revision,
+        });
+        if (epoch !== connectionChat.epoch) return;
+        connectionChat.saved = result;
+        $('connection-chat-instructions').value = result.effectiveInstructions || '';
+        $('connection-chat-status').textContent =
+          'Chat instructions saved privately for this connection.';
+        api('dmvAiSettings')
+          .then((summary) => window.dmvChatUi?.updateAiSettings(summary))
+          .catch(() => {});
+      } catch (error) {
+        if (epoch === connectionChat.epoch)
+          $('connection-chat-status').textContent =
+            error.message || 'Chat instructions could not be saved. Your draft is kept.';
+      } finally {
+        if (epoch === connectionChat.epoch) {
+          connectionChat.saving = false;
+          $('connection-chat-instructions').disabled = false;
+          $('save-connection-chat').textContent = 'Save chat instructions';
+          updateConnectionChatCount();
+        }
+      }
+    });
     function resetConnection(connectorId) {
       state.connectionId = null;
       state.connectionReturnTo = 'connections';
@@ -1249,6 +1377,7 @@
       $('connection-editor-title').textContent = 'Add a connection';
       $('save-connection').textContent = 'Save connection';
       renderAuth();
+      loadConnectionChat(null);
     }
     function openConnectionEditor(connectorId, returnTo = 'connections') {
       resetConnection(connectorId);
@@ -1268,6 +1397,7 @@
       $('connection-editor-title').textContent = 'Edit connection';
       $('save-connection').textContent = 'Save changes';
       renderAuth(connection);
+      loadConnectionChat(connection.id);
       tab('connect');
       $('connection-label').focus();
     }
@@ -1803,7 +1933,17 @@
       dashboardView.disposed = true;
       resetDashboards();
     });
-    window.dmvSidebar = { api, el, button, notice, provider, state, tab, refreshDashboards };
+    window.dmvSidebar = {
+      api,
+      el,
+      button,
+      notice,
+      provider,
+      state,
+      tab,
+      refreshDashboards,
+      sheetLink,
+    };
     tab('reports');
     bootstrap();
   })();

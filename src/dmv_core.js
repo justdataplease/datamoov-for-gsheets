@@ -151,9 +151,12 @@ function dmvDateRange_(range, today) {
       start = new Date(end.getTime() - 89 * 86400000);
       break;
     case 'lastWeek':
-      // The most recent complete Monday-to-Sunday week: back to this week's Monday, then the
-      // Sunday before it and the six days before that.
-      end = new Date(day.getTime() - (((day.getUTCDay() + 6) % 7) + 1) * 86400000);
+    case 'previousWeek':
+      // Complete Monday-to-Sunday weeks: last week, or the week immediately before it.
+      end = new Date(
+        day.getTime() -
+          (((day.getUTCDay() + 6) % 7) + 1 + (range.preset === 'previousWeek' ? 7 : 0)) * 86400000
+      );
       start = new Date(end.getTime() - 6 * 86400000);
       break;
     case 'thisYear':

@@ -263,7 +263,7 @@ test('clarification options keep transcript replay and final actions stay visibl
   await expect(page.locator('.chat-actions')).toHaveAttribute('open', '');
 });
 
-test('row limits and per-source instructions save while the combined character limit is enforced', async ({
+test('row limits and general instructions retain legacy source rules within the combined limit', async ({
   page,
 }) => {
   await configuredChat(page);
@@ -272,31 +272,42 @@ test('row limits and per-source instructions save while the combined character l
   await expect(page.locator('#ai-instructions')).toHaveAttribute('maxlength', '100000');
   await page.locator('#ai-max-rows').fill('2500');
   await page.locator('#ai-instructions').fill('General context');
-  await page.locator('#ai-instruction-source').selectOption('google_ads');
-  await page.locator('#ai-source-instructions').fill('Google Ads context');
-  await page.locator('#ai-instruction-source').selectOption('facebook_ads');
-  await page.locator('#ai-source-instructions').fill('Facebook context');
-  await page.locator('#ai-instruction-source').selectOption('google_ads');
-  await expect(page.locator('#ai-source-instructions')).toHaveValue('Google Ads context');
+  await page.evaluate(
+    () =>
+      new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler((saved) => {
+            window.dmvChatUi.updateAiSettings(saved);
+            resolve();
+          })
+          .withFailureHandler(reject)
+          .dmvSaveAiSettings({
+            provider: 'anthropic',
+            sourceInstructions: {
+              google_ads: 'Google Ads context',
+              facebook_ads: 'Facebook context',
+            },
+          });
+      })
+  );
+  await expect(page.locator('#ai-instruction-source')).toHaveCount(0);
   await page.locator('#ai-save').click();
   await expect(page.locator('#ai-settings')).not.toHaveAttribute('open', '');
   await expect(page.locator('#ai-row-limit')).toHaveText('2,500 rows per report');
   await page.locator('#ai-settings summary').click();
   await expect(page.locator('#ai-max-rows')).toHaveValue('2500');
-  await page.locator('#ai-instruction-source').selectOption('facebook_ads');
-  await expect(page.locator('#ai-source-instructions')).toHaveValue('Facebook context');
   await page.locator('#ai-max-rows').fill('20001');
   expect(await page.locator('#ai-max-rows').evaluate((node) => node.checkValidity())).toBe(false);
   await page.locator('#ai-max-rows').fill('2500');
   await page.locator('#ai-instructions').fill('x'.repeat(99990));
   await expect(page.locator('#ai-instruction-count')).toHaveClass(/error/);
-  expect(
-    await page.locator('#ai-source-instructions').evaluate((node) => node.checkValidity())
-  ).toBe(false);
+  expect(await page.locator('#ai-instructions').evaluate((node) => node.checkValidity())).toBe(
+    false
+  );
   await page.locator('#ai-instructions').fill('General context');
-  expect(
-    await page.locator('#ai-source-instructions').evaluate((node) => node.checkValidity())
-  ).toBe(true);
+  expect(await page.locator('#ai-instructions').evaluate((node) => node.checkValidity())).toBe(
+    true
+  );
 });
 
 test('a failed first request can be cleared with New chat', async ({ page }) => {
@@ -322,10 +333,6 @@ test('unsaved AI settings survive bootstrap refresh and reopening Settings', asy
   await page.locator('#ai-max-rows').fill('8000');
   await page.locator('#ai-debug').uncheck();
   await page.locator('#ai-instructions').fill('Draft general instructions');
-  await page.locator('#ai-instruction-source').selectOption('google_ads');
-  await page.locator('#ai-source-instructions').fill('Draft Google rules');
-  await page.locator('#ai-instruction-source').selectOption('facebook_ads');
-  await page.locator('#ai-source-instructions').fill('Draft Facebook rules');
   await page.evaluate(
     () =>
       new Promise((resolve, reject) => {
@@ -345,9 +352,6 @@ test('unsaved AI settings survive bootstrap refresh and reopening Settings', asy
   await expect(page.locator('#ai-max-rows')).toHaveValue('8000');
   await expect(page.locator('#ai-debug')).not.toBeChecked();
   await expect(page.locator('#ai-instructions')).toHaveValue('Draft general instructions');
-  await expect(page.locator('#ai-source-instructions')).toHaveValue('Draft Facebook rules');
-  await page.locator('#ai-instruction-source').selectOption('google_ads');
-  await expect(page.locator('#ai-source-instructions')).toHaveValue('Draft Google rules');
 });
 
 test('debug off hides routine completed actions but keeps live progress and partial-write failures', async ({

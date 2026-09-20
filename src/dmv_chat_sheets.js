@@ -651,7 +651,7 @@ function dmvChatEditSheet_(session, input) {
       }
     }
     dmvChatSheetDeadline_(session);
-    Sheets.Spreadsheets.batchUpdate({ requests: requests }, session.spreadsheetId);
+    var response = Sheets.Spreadsheets.batchUpdate({ requests: requests }, session.spreadsheetId);
     if (tokenKey) {
       try {
         CacheService.getUserCache().remove(tokenKey);
@@ -659,8 +659,18 @@ function dmvChatEditSheet_(session, input) {
         /* The changed fingerprint still prevents replay. */
       }
     }
+    var outputName = input.newName || input.sheetName;
+    var created =
+      response && response.replies && response.replies[0] && response.replies[0].addSheet;
+    var outputId = sheet
+      ? sheet.getSheetId()
+      : created && created.properties && created.properties.sheetId;
+    var url = Number.isInteger(outputId)
+      ? dmvSheetUrl_(session.spreadsheet, outputId, area ? area.a1 : 'A1')
+      : dmvSheetLink_(session.spreadsheet, { sheetName: outputName }, area ? area.a1 : 'A1');
     session.events.push({
       kind: 'write',
+      links: url ? [{ label: outputName, url: url }] : [],
       text:
         input.action === 'create_sheet'
           ? 'Created tab ' + input.newName
@@ -682,7 +692,8 @@ function dmvChatEditSheet_(session, input) {
     return {
       ok: true,
       action: input.action,
-      sheetName: input.newName || input.sheetName,
+      sheetName: outputName,
+      url: url,
       range: area ? area.a1 : null,
     };
   });

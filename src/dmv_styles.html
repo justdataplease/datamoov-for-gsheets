@@ -9,7 +9,7 @@
     --wash: #f7f8fc;
     --success: #237753;
     --danger: #b73e46;
-    --radius: 12px;
+    --radius: 8px;
     font-family:
       Inter,
       -apple-system,
@@ -66,16 +66,18 @@
     gap: 12px;
   }
   .brand {
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 10px;
   }
   .brand-mark {
+    flex-shrink: 0;
     width: 34px;
     height: 34px;
     background: var(--primary);
     color: white;
-    border-radius: 10px;
+    border-radius: 6px;
     display: grid;
     place-items: center;
     box-shadow: 0 3px 7px #5146d620;
@@ -90,6 +92,19 @@
     letter-spacing: -0.7px;
     display: block;
     line-height: 1.05;
+  }
+  .brand-title {
+    min-width: 0;
+  }
+  .brand strong small {
+    display: block;
+    margin-top: 4px;
+    font-size: 10px;
+    font-weight: 550;
+    letter-spacing: 0;
+    line-height: 1.2;
+    color: var(--muted);
+    white-space: nowrap;
   }
   .brand div > span {
     display: block;
@@ -263,7 +278,7 @@
     font-weight: 650;
     padding: 3px 6px;
     white-space: nowrap;
-    border-radius: 20px;
+    border-radius: 6px;
     background: #f0f2f6;
     color: #687183;
     margin-left: auto;
@@ -916,7 +931,7 @@
     border: 1px solid #dfdbff;
     background: #f4f2ff;
     color: var(--primary);
-    border-radius: 14px;
+    border-radius: 6px;
     padding: 5px 10px;
     font-size: 10px;
     font-weight: 600;
@@ -934,7 +949,7 @@
     margin-bottom: 12px;
   }
   .chat-message {
-    border-radius: 10px;
+    border-radius: 6px;
     padding: 10px 12px;
     font-size: 11px;
     line-height: 1.6;
@@ -965,7 +980,7 @@
     margin-bottom: 14px;
     padding: 12px;
     border: 1px solid var(--line);
-    border-radius: 10px;
+    border-radius: 6px;
     background: var(--wash);
     font-size: 11px;
     overflow-wrap: anywhere;
@@ -1152,6 +1167,10 @@
     min-height: 40px;
   }
   @media (min-width: 380px) {
+    .brand strong small {
+      display: inline-block;
+      margin: 0 0 0 3px;
+    }
     main {
       padding-left: 23px;
       padding-right: 23px;
@@ -1200,5 +1219,27 @@
       animation: none !important;
       transition: none !important;
     }
+  }
+  .connection-chat-settings {
+    margin-top: 18px;
+    padding: 16px;
+  }
+  .connection-chat-settings h2 {
+    margin-top: 0;
+    font-size: 15px;
+  }
+  .chat-output-links {
+    margin-top: 12px;
+  }
+  .chat-output-links p {
+    margin-bottom: 4px;
+  }
+  .chat-output-links ul {
+    margin: 0;
+    padding-left: 18px;
+  }
+  .sheet-output-link {
+    color: var(--primary);
+    overflow-wrap: anywhere;
   }
 </style>

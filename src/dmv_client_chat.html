@@ -2,7 +2,7 @@
   (function () {
     'use strict';
     const $ = (id) => document.getElementById(id);
-    const { api, el, button, notice, provider, state, tab } = window.dmvSidebar;
+    const { api, el, button, notice, provider, state, tab, sheetLink } = window.dmvSidebar;
     // generation changes on every reset; a reply from an older generation is dropped.
     const chat = {
       ai: null,
@@ -12,8 +12,6 @@
       settingsDirty: false,
       generation: 0,
       active: null,
-      sourceInstructions: Object.create(null),
-      instructionSource: '',
     };
 
     function providerInfo(id) {
@@ -38,46 +36,32 @@
       $('ai-instructions').value = configured ? chat.ai.instructions || '' : '';
       $('ai-max-rows').value = chat.ai?.maxRows || 1000;
       $('ai-debug').checked = chat.ai?.debug !== false;
-      chat.sourceInstructions = Object.assign(
-        Object.create(null),
-        chat.ai?.sourceInstructions || {}
-      );
-      const sources = $('ai-instruction-source');
-      const previousSource = sources.value;
-      sources.replaceChildren();
-      for (const source of state.catalog) {
-        const option = el('option', '', source.label);
-        option.value = source.id;
-        sources.append(option);
-      }
-      if (state.catalog.some((source) => source.id === previousSource))
-        sources.value = previousSource;
-      chat.instructionSource = sources.value;
-      $('ai-source-instructions').value = chat.sourceInstructions[chat.instructionSource] || '';
       updateInstructionCount();
       $('ai-remove').hidden = !configured;
       $('ai-test').hidden = !configured;
     }
-    function saveSourceDraft() {
-      if (!chat.instructionSource) return;
-      const value = $('ai-source-instructions').value;
-      if (value) chat.sourceInstructions[chat.instructionSource] = value;
-      else delete chat.sourceInstructions[chat.instructionSource];
-    }
     function updateInstructionCount() {
-      saveSourceDraft();
+      const stored = Number.isFinite(chat.ai?.instructionCharacters)
+        ? chat.ai.instructionCharacters
+        : (chat.ai?.instructions || '').length +
+          Object.values(chat.ai?.sourceInstructions || {}).reduce(
+            (total, value) => total + String(value).length,
+            0
+          ) +
+          Object.values(chat.ai?.connectionInstructions || {}).reduce(
+            (total, value) => total + String(value).length,
+            0
+          );
       const count =
-        $('ai-instructions').value.length +
-        Object.values(chat.sourceInstructions).reduce(
-          (total, value) => total + String(value).length,
-          0
-        );
+        stored - (chat.ai?.instructions || '').length + $('ai-instructions').value.length;
       const over = count > 100000;
       $('ai-instruction-count').textContent =
         count.toLocaleString() + ' / 100,000 characters across all instructions';
       $('ai-instruction-count').className = 'field-help instruction-count' + (over ? ' error' : '');
-      $('ai-source-instructions').setCustomValidity(
-        over ? 'Keep all general and source instructions within 100,000 characters combined.' : ''
+      $('ai-instructions').setCustomValidity(
+        over
+          ? 'Keep all general and connection instructions within 100,000 characters combined.'
+          : ''
       );
     }
     function updateProviderFields(model) {
@@ -356,11 +340,33 @@
           row.append(button(option, 'chip', () => send('Use ' + option + '.')));
         node.append(row);
       }
-      if (extra.dashboard) {
+      const recovering = extra.events?.some((event) => event.action === 'updated_incomplete');
+      const saved = recovering || extra.events?.some((event) => event.kind === 'dashboard');
+      const refreshed = extra.events?.some(
+        (event) => event.kind === 'dashboard' && event.action === 'refreshed'
+      );
+      const written = extra.events?.some(
+        (event) => event.kind === 'write' || event.kind === 'chart'
+      );
+      if (saved) {
+        const savedOnly = extra.events.some((event) => event.action === 'saved') && !refreshed;
         const guidance = el(
           'p',
-          'field-help',
-          'Your dashboard is saved under Reports > Dashboards. Use Refresh dashboard there whenever you need new data. '
+          'field-help chat-dashboard-status',
+          recovering
+            ? 'Dashboard tabs updated; saving refresh status needs recovery. '
+            : refreshed
+              ? 'Dashboard saved and refreshed. '
+              : savedOnly
+                ? written
+                  ? 'Dashboard setup saved. Check the action details for its refresh status. '
+                  : 'Dashboard setup saved. Its output has not been refreshed in this reply. '
+                : 'Your dashboard is saved. '
+        );
+        guidance.append(
+          document.createTextNode(
+            'Find it under Reports > Dashboards and use Refresh dashboard for new data. '
+          )
         );
         guidance.append(
           button('View dashboards', 'text-button', () => {
@@ -369,6 +375,28 @@
           })
         );
         node.append(guidance);
+      }
+      if (written || refreshed) {
+        const outputs = el('div', 'chat-output-links');
+        outputs.append(el('p', 'field-help', 'Sheets updated. Open your output:'));
+        const list = el('ul');
+        const seen = new Set();
+        for (const event of extra.events || []) {
+          if (!['write', 'chart', 'dashboard'].includes(event.kind)) continue;
+          for (const output of Array.isArray(event.links) ? event.links : []) {
+            const link = sheetLink(String(output?.label || 'Open sheet'), output?.url);
+            if (!link) continue;
+            const key = link.href.split('&range=')[0];
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const item = el('li');
+            item.append(link);
+            list.append(item);
+          }
+        }
+        if (seen.size) outputs.append(list);
+        else outputs.firstElementChild.textContent = 'Sheets updated.';
+        node.append(outputs);
       }
       if (extra.events?.length) {
         const debug = chat.ai?.debug !== false;
@@ -558,14 +586,7 @@
       chat.settingsDirty = true;
     });
     $('ai-provider').addEventListener('change', () => updateProviderFields());
-    $('ai-instruction-source').addEventListener('change', () => {
-      saveSourceDraft();
-      chat.instructionSource = $('ai-instruction-source').value;
-      $('ai-source-instructions').value = chat.sourceInstructions[chat.instructionSource] || '';
-      updateInstructionCount();
-    });
     $('ai-instructions').addEventListener('input', updateInstructionCount);
-    $('ai-source-instructions').addEventListener('input', updateInstructionCount);
     $('ai-form').addEventListener('submit', (event) => {
       event.preventDefault();
       updateInstructionCount();
@@ -577,7 +598,6 @@
         instructions: $('ai-instructions').value.trim(),
         maxRows: Number($('ai-max-rows').value),
         debug: $('ai-debug').checked,
-        sourceInstructions: { ...chat.sourceInstructions },
       };
       const fieldset = $('ai-fields');
       fieldset.disabled = true;
@@ -647,6 +667,12 @@
       setBusy(false);
     });
     window.dmvChatUi = {
+      updateAiSettings(summary) {
+        chat.ai = summary;
+        renderSettings();
+        updateInstructionCount();
+        render();
+      },
       bootstrap(data) {
         chat.ai = data.ai || { configured: false, providers: [] };
         renderSettings();

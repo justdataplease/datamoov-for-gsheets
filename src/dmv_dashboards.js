@@ -215,6 +215,8 @@ function dmvDashboardSummary_(dashboard) {
     }),
     dataTarget: dashboard.dataTarget,
     target: dashboard.target,
+    dataUrl: dmvSheetLink_(dmvSpreadsheet_(), dashboard.dataTarget),
+    reportUrl: dmvSheetLink_(dmvSpreadsheet_(), dashboard.target),
     status: expired ? 'error' : dashboard.status,
     statusMessage: expired
       ? 'The previous refresh was interrupted. Refresh again to retry all sources.'
@@ -311,7 +313,9 @@ function dmvRunDashboard(id, requestedDeadline) {
       requestedDeadline === undefined ? Infinity : requestedDeadline
     ),
     token = dmvId_(),
-    revisions = {};
+    revisions = {},
+    queries = [],
+    today = Utilities.formatDate(new Date(), spreadsheet.getSpreadsheetTimeZone(), 'yyyy-MM-dd');
   dmvDashboardDeadline_(deadline);
   var dashboard = dmvLocked_(function () {
     var current = dmvDashboardHere_(id);
@@ -327,10 +331,20 @@ function dmvRunDashboard(id, requestedDeadline) {
       },
       spreadsheet
     );
-    plan.sources.forEach(function (source) {
+    queries = plan.sources.map(function (source) {
       revisions[source.connectionId] = dmvConnectionRevision_(
         dmvReadConnection_(source.connectionId)
       );
+      var query = dmvValidateQuery_(source, spreadsheet);
+      var definition = dmvDefinition_(dmvConnector_(query.connectorId), query.reportType);
+      // One refresh has one date anchor, even if sequential fetches cross midnight.
+      // Only these execution queries become fixed; the saved relative presets remain reusable.
+      if (definition.dateRange)
+        query.dateRange = Object.assign(
+          { preset: 'custom' },
+          dmvDateRange_(query.dateRange, today)
+        );
+      return query;
     });
     current.status = 'running';
     current.statusMessage = 'Preparing source reports';
@@ -367,8 +381,7 @@ function dmvRunDashboard(id, requestedDeadline) {
       phase(
         'Fetching source ' + (index + 1) + ' of ' + dashboard.sources.length + ': ' + source.label
       );
-      var query = dmvValidateQuery_(source, spreadsheet);
-      var result = dmvFetchReport_(query, spreadsheet, deadline);
+      var result = dmvFetchReport_(queries[index], spreadsheet, deadline);
       dmvDashboardDeadline_(deadline);
       fetchedRows += result.rows.length;
       if (fetchedRows > DMV_LIMITS.maxRows)
@@ -450,6 +463,8 @@ function dmvRunDashboard(id, requestedDeadline) {
         updatedAt: current.lastRun,
         target: current.target,
         dataTarget: current.dataTarget,
+        dataUrl: dmvSheetLink_(spreadsheet, current.dataTarget),
+        reportUrl: dmvSheetLink_(spreadsheet, current.target),
         dataRange: dmvDashboardRange_(current.dataTarget, outputs[0].result),
         reportRange: dmvDashboardRange_(current.target, outputs[1].result),
         dataColumns: raw.columns,
@@ -485,6 +500,8 @@ function dmvRunDashboard(id, requestedDeadline) {
       failure.id = dashboard.id;
       failure.target = dashboard.target;
       failure.dataTarget = dashboard.dataTarget;
+      failure.dataUrl = dmvSheetLink_(spreadsheet, dashboard.dataTarget);
+      failure.reportUrl = dmvSheetLink_(spreadsheet, dashboard.target);
     }
     throw failure;
   }
