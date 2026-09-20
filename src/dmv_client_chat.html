@@ -4,12 +4,23 @@
     const $ = (id) => document.getElementById(id);
     const { api, el, button, notice, provider, state, tab } = window.dmvSidebar;
     // generation changes on every reset; a reply from an older generation is dropped.
-    const chat = { ai: null, transcript: [], busy: false, settingsOpen: false, generation: 0 };
+    const chat = {
+      ai: null,
+      transcript: [],
+      busy: false,
+      settingsOpen: false,
+      settingsDirty: false,
+      generation: 0,
+      active: null,
+      sourceInstructions: Object.create(null),
+      instructionSource: '',
+    };
 
     function providerInfo(id) {
       return (chat.ai?.providers || []).find((item) => item.id === id);
     }
     function renderSettings() {
+      if (chat.settingsDirty) return;
       const configured = Boolean(chat.ai?.configured);
       const select = $('ai-provider');
       const previous = select.value;
@@ -25,8 +36,49 @@
       $('ai-key').placeholder = configured ? 'Saved — leave blank to keep' : '';
       $('ai-key').required = !configured;
       $('ai-instructions').value = configured ? chat.ai.instructions || '' : '';
+      $('ai-max-rows').value = chat.ai?.maxRows || 1000;
+      $('ai-debug').checked = chat.ai?.debug !== false;
+      chat.sourceInstructions = Object.assign(
+        Object.create(null),
+        chat.ai?.sourceInstructions || {}
+      );
+      const sources = $('ai-instruction-source');
+      const previousSource = sources.value;
+      sources.replaceChildren();
+      for (const source of state.catalog) {
+        const option = el('option', '', source.label);
+        option.value = source.id;
+        sources.append(option);
+      }
+      if (state.catalog.some((source) => source.id === previousSource))
+        sources.value = previousSource;
+      chat.instructionSource = sources.value;
+      $('ai-source-instructions').value = chat.sourceInstructions[chat.instructionSource] || '';
+      updateInstructionCount();
       $('ai-remove').hidden = !configured;
       $('ai-test').hidden = !configured;
+    }
+    function saveSourceDraft() {
+      if (!chat.instructionSource) return;
+      const value = $('ai-source-instructions').value;
+      if (value) chat.sourceInstructions[chat.instructionSource] = value;
+      else delete chat.sourceInstructions[chat.instructionSource];
+    }
+    function updateInstructionCount() {
+      saveSourceDraft();
+      const count =
+        $('ai-instructions').value.length +
+        Object.values(chat.sourceInstructions).reduce(
+          (total, value) => total + String(value).length,
+          0
+        );
+      const over = count > 100000;
+      $('ai-instruction-count').textContent =
+        count.toLocaleString() + ' / 100,000 characters across all instructions';
+      $('ai-instruction-count').className = 'field-help instruction-count' + (over ? ' error' : '');
+      $('ai-source-instructions').setCustomValidity(
+        over ? 'Keep all general and source instructions within 100,000 characters combined.' : ''
+      );
     }
     function updateProviderFields(model) {
       const info = providerInfo($('ai-provider').value);
@@ -48,6 +100,8 @@
       const configured = Boolean(chat.ai?.configured);
       // The settings card sits under Settings: open until a key is saved, collapsed afterwards.
       $('ai-settings').open = !configured || chat.settingsOpen;
+      $('ai-row-limit').textContent =
+        Number(chat.ai?.maxRows || 1000).toLocaleString() + ' rows per report';
       const status = $('ai-settings-status');
       status.textContent = configured
         ? chat.ai.providerLabel + ' · ' + chat.ai.model
@@ -56,7 +110,7 @@
       $('chat-setup').hidden = configured;
       $('chat-ready').hidden = !configured;
       $('chat-settings-toggle').hidden = !configured;
-      $('chat-new').hidden = !configured || !chat.transcript.length;
+      $('chat-new').hidden = !configured || !$('chat-messages').childElementCount;
       if (configured)
         $('ai-status').textContent =
           'Using ' +
@@ -103,51 +157,378 @@
       );
       for (const idea of ideas.slice(0, 3)) row.append(button(idea, 'chip', () => send(idea)));
     }
+    // Render model text only through DOM text nodes; no HTML, images or remote resources.
+    function appendInline(parent, text, depth = 0) {
+      if (depth > 6) {
+        parent.append(document.createTextNode(text));
+        return;
+      }
+      let plain = '';
+      const flush = () => {
+        if (plain) parent.append(document.createTextNode(plain));
+        plain = '';
+      };
+      for (let index = 0; index < text.length;) {
+        if (
+          text[index] === '\\' &&
+          index + 1 < text.length &&
+          /[\\`*_\[\]{}()#+.!|>-]/.test(text[index + 1])
+        ) {
+          plain += text[index + 1];
+          index += 2;
+          continue;
+        }
+        const rest = text.slice(index);
+        const image = /^!\[[^\]\n]*\]\([^\n]*?\)/.exec(rest);
+        if (image) {
+          plain += image[0];
+          index += image[0].length;
+          continue;
+        }
+        const code = /^(`+)([^\n]*?)\1(?!`)/.exec(rest);
+        if (code) {
+          flush();
+          parent.append(el('code', '', code[2]));
+          index += code[0].length;
+          continue;
+        }
+        const link = /^\[([^\]\n]+)\]\(([^\s)]+)\)/.exec(rest);
+        if (link) {
+          let url;
+          try {
+            url = new URL(link[2]);
+          } catch {}
+          if (url && ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) {
+            flush();
+            const node = el('a');
+            node.href = url.href;
+            node.target = '_blank';
+            node.rel = 'noopener noreferrer';
+            appendInline(node, link[1], depth + 1);
+            parent.append(node);
+          } else plain += link[0];
+          index += link[0].length;
+          continue;
+        }
+        const marker =
+          rest.startsWith('**') || rest.startsWith('__')
+            ? rest.slice(0, 2)
+            : rest[0] === '*' || rest[0] === '_'
+              ? rest[0]
+              : '';
+        if (
+          marker &&
+          !/\s/.test(rest[marker.length] || ' ') &&
+          !(marker[0] === '_' && /[\p{L}\p{N}]/u.test(text[index - 1] || ''))
+        ) {
+          const end = text.indexOf(marker, index + marker.length);
+          if (end > index + marker.length && !/\s/.test(text[end - 1])) {
+            flush();
+            const node = el(marker.length === 2 ? 'strong' : 'em');
+            appendInline(node, text.slice(index + marker.length, end), depth + 1);
+            parent.append(node);
+            index = end + marker.length;
+            continue;
+          }
+        }
+        plain += text[index++];
+      }
+      flush();
+    }
+    function markdown(text) {
+      const body = el('div', 'chat-text markdown');
+      const lines = String(text || '')
+        .replace(/\r\n?/g, '\n')
+        .split('\n');
+      const fence = (line) => /^\s{0,3}```/.test(line);
+      const heading = (line) => /^(#{1,6})\s+(.+)$/.exec(line);
+      const listItem = (line) => /^\s{0,3}([-+*]|\d+[.)])\s+(.+)$/.exec(line);
+      const tableRule = (line) =>
+        /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line || '');
+      const cells = (line) =>
+        line
+          .trim()
+          .replace(/^\|/, '')
+          .replace(/\|$/, '')
+          .split('|')
+          .map((cell) => cell.trim());
+      for (let index = 0; index < lines.length;) {
+        const line = lines[index];
+        if (!line.trim()) {
+          index++;
+          continue;
+        }
+        if (fence(line)) {
+          const code = [];
+          index++;
+          while (index < lines.length && !fence(lines[index])) code.push(lines[index++]);
+          if (index < lines.length) index++;
+          const pre = el('pre');
+          pre.append(el('code', '', code.join('\n')));
+          body.append(pre);
+          continue;
+        }
+        const title = heading(line);
+        if (title) {
+          const node = el('h' + title[1].length);
+          appendInline(node, title[2]);
+          body.append(node);
+          index++;
+          continue;
+        }
+        if (line.includes('|') && tableRule(lines[index + 1])) {
+          const scroll = el('div', 'chat-table-scroll');
+          scroll.tabIndex = 0;
+          scroll.setAttribute('role', 'region');
+          scroll.setAttribute('aria-label', 'Response table');
+          const table = el('table'),
+            head = el('thead'),
+            header = el('tr');
+          for (const value of cells(line)) {
+            const cell = el('th');
+            cell.scope = 'col';
+            appendInline(cell, value);
+            header.append(cell);
+          }
+          head.append(header);
+          table.append(head);
+          index += 2;
+          const tbody = el('tbody');
+          while (index < lines.length && lines[index].includes('|') && lines[index].trim()) {
+            const row = el('tr');
+            for (const value of cells(lines[index++])) {
+              const cell = el('td');
+              appendInline(cell, value);
+              row.append(cell);
+            }
+            tbody.append(row);
+          }
+          table.append(tbody);
+          scroll.append(table);
+          body.append(scroll);
+          continue;
+        }
+        const first = listItem(line);
+        if (first) {
+          const ordered = /^\d/.test(first[1]),
+            list = el(ordered ? 'ol' : 'ul');
+          if (ordered) list.start = Math.min(Number.parseInt(first[1], 10) || 1, 1000000);
+          while (index < lines.length) {
+            const item = listItem(lines[index]);
+            if (!item || /^\d/.test(item[1]) !== ordered) break;
+            const node = el('li');
+            appendInline(node, item[2]);
+            list.append(node);
+            index++;
+          }
+          body.append(list);
+          continue;
+        }
+        const paragraph = [line];
+        index++;
+        while (
+          index < lines.length &&
+          lines[index].trim() &&
+          !fence(lines[index]) &&
+          !heading(lines[index]) &&
+          !listItem(lines[index]) &&
+          !(lines[index].includes('|') && tableRule(lines[index + 1]))
+        )
+          paragraph.push(lines[index++]);
+        const node = el('p');
+        appendInline(node, paragraph.join('\n'));
+        body.append(node);
+      }
+      return body;
+    }
+    function scrollToMessage(node) {
+      node.scrollIntoView({
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        block: 'nearest',
+      });
+    }
     function addMessage(role, text, extra = {}) {
       const node = el('div', 'chat-message ' + role + (extra.error ? ' error' : ''));
-      node.append(el('div', 'chat-text', text));
-      if (extra.events?.length) {
-        const list = el('ul', 'chat-events');
-        for (const event of extra.events) {
-          const item = el('li', event.kind === 'error' ? 'error' : '', event.text);
-          list.append(item);
-        }
-        node.append(list);
-      }
+      node.append(role === 'assistant' ? markdown(text) : el('div', 'chat-text', text));
       if (extra.options?.length) {
         const row = el('div', 'chip-row');
         for (const option of extra.options)
           row.append(button(option, 'chip', () => send('Use ' + option + '.')));
         node.append(row);
       }
+      if (extra.dashboard) {
+        const guidance = el(
+          'p',
+          'field-help',
+          'Your dashboard is saved under Reports > Dashboards. Use Refresh dashboard there whenever you need new data. '
+        );
+        guidance.append(
+          button('View dashboards', 'text-button', () => {
+            tab('reports');
+            $('dashboards-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          })
+        );
+        node.append(guidance);
+      }
+      if (extra.events?.length) {
+        const debug = chat.ai?.debug !== false;
+        const failed = extra.error || extra.events.some((event) => event.kind === 'error');
+        const written = extra.events.some(
+          (event) => event.kind === 'write' || event.kind === 'chart'
+        );
+        if (debug || failed) {
+          const actions = el('details', 'chat-actions');
+          actions.open = debug;
+          const summary = el(
+            'summary',
+            failed ? 'error' : '',
+            (debug ? 'Actions' : 'Action details') +
+              (failed ? ' \u00b7 Some actions failed' : '') +
+              (failed && written ? ' \u00b7 Sheet updated' : '')
+          );
+          actions.append(summary);
+          const list = el('ul', 'chat-events');
+          for (const event of extra.events) {
+            const item = el('li', event.kind === 'error' ? 'error' : '', event.text);
+            list.append(item);
+          }
+          actions.append(list);
+          node.append(actions);
+        }
+      }
       $('chat-messages').append(node);
-      node.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      scrollToMessage(node);
       return node;
+    }
+    function requestId() {
+      if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+      if (!window.crypto?.getRandomValues)
+        throw new Error('Reload the sidebar to start a secure chat request.');
+      return Array.from(window.crypto.getRandomValues(new Uint8Array(16)), (value) =>
+        value.toString(16).padStart(2, '0')
+      ).join('');
+    }
+    function currentTurn(turn) {
+      return chat.active === turn && turn.generation === chat.generation && !turn.stopped;
+    }
+    function stopProgress() {
+      const turn = chat.active;
+      if (turn) {
+        turn.stopped = true;
+        window.clearTimeout(turn.timer);
+      }
+      chat.active = null;
+      $('chat-working-steps').replaceChildren();
+      $('chat-working-text').textContent = 'Working on your request\u2026';
+    }
+    function renderProgress(turn, result) {
+      if (
+        !currentTurn(turn) ||
+        result?.requestId !== turn.requestId ||
+        result.status === 'unavailable'
+      )
+        return;
+      if (
+        !['running', 'complete', 'failed'].includes(result.status) ||
+        !Array.isArray(result.steps) ||
+        Number(result.updatedAt) < turn.updatedAt
+      )
+        return;
+      turn.updatedAt = Number(result.updatedAt) || turn.updatedAt;
+      turn.steps = result.steps
+        .slice(-60)
+        .filter(
+          (step) =>
+            step &&
+            ['running', 'complete', 'error'].includes(step.state) &&
+            typeof step.text === 'string'
+        );
+      const active =
+        turn.steps.filter((step) => step.state === 'running').at(-1) || turn.steps.at(-1);
+      if (active) $('chat-working-text').textContent = active.text;
+      const list = $('chat-working-steps');
+      list.replaceChildren();
+      for (const step of turn.steps) {
+        const item = el('li', step.state);
+        item.append(
+          el(
+            'span',
+            'visually-hidden',
+            { running: 'In progress', complete: 'Completed', error: 'Failed' }[step.state] + ': '
+          ),
+          document.createTextNode(step.text)
+        );
+        list.append(item);
+      }
+    }
+    function startProgress(turn) {
+      const poll = async () => {
+        if (!currentTurn(turn)) return;
+        let result;
+        try {
+          result = await api('dmvChatProgress', { requestId: turn.requestId });
+        } catch {
+          /* A missing progress update does not interrupt the chat request. */
+        }
+        if (!currentTurn(turn)) return;
+        renderProgress(turn, result);
+        if (result?.requestId === turn.requestId && ['complete', 'failed'].includes(result.status))
+          return;
+        turn.timer = window.setTimeout(poll, 1200);
+      };
+      turn.timer = window.setTimeout(poll, 1200);
     }
     async function send(text) {
       text = String(text || '').trim();
       if (!text || chat.busy || !chat.ai?.configured) return;
       const generation = chat.generation;
+      let turn;
       setBusy(true);
       $('chat-input').value = '';
       $('chat-suggestions').replaceChildren();
       addMessage('user', text);
       try {
-        const reply = await api('dmvChat', { text, transcript: chat.transcript });
-        if (generation !== chat.generation) return;
+        turn = {
+          requestId: requestId(),
+          generation,
+          stopped: false,
+          timer: null,
+          steps: [],
+          updatedAt: 0,
+        };
+        chat.active = turn;
+        startProgress(turn);
+        const reply = await api('dmvChat', {
+          text,
+          transcript: chat.transcript,
+          requestId: turn.requestId,
+        });
+        if (!currentTurn(turn)) return;
         chat.transcript.push(...(reply.transcriptAppend || []));
+        if (reply.events?.some((event) => event.kind === 'dashboard'))
+          window.dmvSidebar.refreshDashboards().catch(() => {
+            // Dashboard status is independent of the completed answer.
+          });
         addMessage('assistant', reply.text || '', {
           events: reply.events,
           options: reply.options,
           error: Boolean(reply.failed),
+          dashboard: reply.events?.some((event) => event.kind === 'dashboard'),
         });
       } catch (error) {
-        if (generation !== chat.generation) return;
+        if (generation !== chat.generation || (turn && !currentTurn(turn))) return;
         addMessage('assistant', error.message || 'The question could not be answered.', {
           error: true,
+          events: turn?.steps
+            .filter((step) => step.state !== 'running')
+            .map((step) => ({
+              kind: step.state === 'error' ? 'error' : 'activity',
+              text: step.text,
+            })),
         });
       } finally {
-        if (generation === chat.generation) {
+        if (generation === chat.generation && (!turn || chat.active === turn)) {
+          stopProgress();
           setBusy(false);
           $('chat-input').focus();
         }
@@ -161,29 +542,49 @@
       $('chat-working').hidden = !busy;
       $('chat-new').disabled = busy;
       $('ai-remove').disabled = busy;
-      $('chat-new').hidden = !chat.transcript.length && !busy;
+      $('chat-new').hidden = !$('chat-messages').childElementCount && !busy;
     }
     function resetConversation() {
+      stopProgress();
       chat.generation++;
       chat.transcript = [];
       $('chat-messages').replaceChildren();
       setBusy(false);
     }
+    $('ai-form').addEventListener('input', () => {
+      chat.settingsDirty = true;
+    });
+    $('ai-form').addEventListener('change', () => {
+      chat.settingsDirty = true;
+    });
     $('ai-provider').addEventListener('change', () => updateProviderFields());
+    $('ai-instruction-source').addEventListener('change', () => {
+      saveSourceDraft();
+      chat.instructionSource = $('ai-instruction-source').value;
+      $('ai-source-instructions').value = chat.sourceInstructions[chat.instructionSource] || '';
+      updateInstructionCount();
+    });
+    $('ai-instructions').addEventListener('input', updateInstructionCount);
+    $('ai-source-instructions').addEventListener('input', updateInstructionCount);
     $('ai-form').addEventListener('submit', (event) => {
       event.preventDefault();
+      updateInstructionCount();
       if (!$('ai-form').reportValidity()) return;
       const input = {
         provider: $('ai-provider').value,
         apiKey: $('ai-key').value,
         model: $('ai-model').value.trim(),
         instructions: $('ai-instructions').value.trim(),
+        maxRows: Number($('ai-max-rows').value),
+        debug: $('ai-debug').checked,
+        sourceInstructions: { ...chat.sourceInstructions },
       };
       const fieldset = $('ai-fields');
       fieldset.disabled = true;
       api('dmvSaveAiSettings', input)
         .then((saved) => {
           chat.ai = saved;
+          chat.settingsDirty = false;
           chat.settingsOpen = false;
           renderSettings();
           render();
@@ -212,6 +613,7 @@
       api('dmvDeleteAiSettings')
         .then((summary) => {
           chat.ai = summary;
+          chat.settingsDirty = false;
           resetConversation();
           renderSettings();
           render();
@@ -238,6 +640,11 @@
         event.preventDefault();
         send($('chat-input').value);
       }
+    });
+    window.addEventListener('pagehide', () => {
+      stopProgress();
+      chat.generation++;
+      setBusy(false);
     });
     window.dmvChatUi = {
       bootstrap(data) {

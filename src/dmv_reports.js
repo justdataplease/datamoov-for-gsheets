@@ -17,6 +17,7 @@ function dmvBootstrap() {
     credentials: dmvCredentialSummaries_(),
     credentialFamilies: dmvFamilyCatalog_(),
     reports: dmvWorkbookReports_(spreadsheet),
+    dashboards: dmvListDashboards(),
     sheetNames: spreadsheet
       .getSheets()
       .filter(function (sheet) {

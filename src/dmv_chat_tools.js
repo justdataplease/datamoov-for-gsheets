@@ -224,6 +224,19 @@ function dmvChatColumn_(result, name, label) {
 
 /* run_report: the existing connector runtime, validated like a saved report. */
 function dmvChatRunReport_(session, input) {
+  input = Object.assign({}, input || {});
+  var configuredRows =
+    session.maxRows === undefined
+      ? DMV_LIMITS.maxRows
+      : dmvAiMaxRows_({ maxRows: session.maxRows });
+  if (input.maxRows === undefined || input.maxRows === null || input.maxRows === '')
+    input.maxRows = session.maxRows === undefined ? DMV_LIMITS.defaultRows : configuredRows;
+  if (!Number.isInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > configuredRows)
+    throw new Error(
+      'Choose a whole-number row limit between 1 and ' +
+        configuredRows.toLocaleString() +
+        '. Increase Maximum rows per chat report under Settings > AI provider when needed (up to 20,000).'
+    );
   var query;
   try {
     query = dmvValidateQuery_(input, session.spreadsheet);
@@ -235,6 +248,11 @@ function dmvChatRunReport_(session, input) {
     result = dmvFetchReport_(query, session.spreadsheet, session.deadline);
   } catch (error) {
     var message = error.message;
+    if (/row limit|too many rows|more than .*rows/i.test(message))
+      message +=
+        ' This fetch allows ' +
+        query.maxRows.toLocaleString() +
+        ' rows. Increase Maximum rows per chat report under Settings > AI provider, or narrow the report; partial data was not used.';
     if (/Unknown or unavailable report field/.test(message))
       message += ' Call discover_fields to list the fields this account supports.';
     throw new Error(message);
@@ -835,9 +853,84 @@ function dmvChatSummarize_(session, input) {
     'limit'
   );
   var totalGroups = output.length;
-  var truncated = totalGroups > limit;
+  var ranking = null;
+  if (input.rankWithin !== undefined || input.limitPerGroup !== undefined) {
+    if (
+      !Array.isArray(input.rankWithin) ||
+      !input.rankWithin.length ||
+      input.limitPerGroup === undefined
+    )
+      throw new Error(
+        'Use rankWithin groupBy columns and limitPerGroup together to rank separately within each group.'
+      );
+    var rankWithin = input.rankWithin.map(function (key) {
+      if (
+        typeof key !== 'string' ||
+        !groupBy.some(function (column) {
+          return column.key === key;
+        })
+      )
+        throw new Error('Every rankWithin column must also be in groupBy.');
+      return key;
+    });
+    if (
+      rankWithin.some(function (key, index) {
+        return rankWithin.indexOf(key) !== index;
+      })
+    )
+      throw new Error('Choose distinct rankWithin columns.');
+    var perGroup = dmvInteger_(
+      input.limitPerGroup,
+      1,
+      DMV_CHAT_RESULTS.maxSummaryRows,
+      'limitPerGroup'
+    );
+    if (!orderBy || !dmvChatNumeric_(sortColumn))
+      throw new Error(
+        'Ranking within groups needs an explicit numeric orderBy metric, such as spend__sum descending.'
+      );
+    if (
+      sortColumn.type === 'currency' &&
+      dmvChatCurrencies_(result, rows).length > 1 &&
+      rankWithin.indexOf((result.metadata || {}).currencyColumn) < 0
+    )
+      throw new Error(
+        'Include currency in rankWithin or filter to one currency before ranking money.'
+      );
+    var partitions = Object.create(null);
+    output = output.filter(function (row) {
+      var key = JSON.stringify(
+        rankWithin.map(function (column) {
+          return row[column];
+        })
+      );
+      partitions[key] = (partitions[key] || 0) + 1;
+      return partitions[key] <= perGroup;
+    });
+    ranking = {
+      within: rankWithin,
+      limitPerGroup: perGroup,
+      orderBy: { field: sortColumn.key, direction: direction === 1 ? 'asc' : 'desc' },
+      totalGroups: totalGroups,
+      selectedGroups: output.length,
+    };
+  }
+  var rankedGroups = output.length;
+  var truncated = rankedGroups > limit;
   output = output.slice(0, limit);
   var summaryMetadata = Object.assign({}, result.metadata || {});
+  if (ranking) {
+    summaryMetadata.ranking = ranking;
+    summaryMetadata.limited = true;
+    summaryMetadata.totalGroups = totalGroups;
+    summaryMetadata.keptGroups = output.length;
+    summaryMetadata.note =
+      'This is a ranking of up to ' +
+      ranking.limitPerGroup +
+      ' rows within each ' +
+      ranking.within.join(', ') +
+      ' group, not the complete report. Ties keep the original group order.';
+  }
   if (
     summaryMetadata.currencyColumn &&
     !columns.some(function (column) {
@@ -853,8 +946,11 @@ function dmvChatSummarize_(session, input) {
   if (truncated) {
     summaryMetadata.limited = true;
     summaryMetadata.totalGroups = totalGroups;
+    summaryMetadata.rankedGroups = rankedGroups;
     summaryMetadata.keptGroups = output.length;
-    summaryMetadata.note = 'This is a limited ranking, not the complete report.';
+    summaryMetadata.note = ranking
+      ? 'The overall limit omitted some ranked rows or groups. Raise limit to include every group; this is not a complete per-group ranking.'
+      : 'This is a limited ranking, not the complete report.';
   }
   var stored = {
     columns: columns,
@@ -871,6 +967,7 @@ function dmvChatSummarize_(session, input) {
   });
   var description = dmvChatDescribe_(session, stored, id);
   description.inputRows = rows.length;
+  if (ranking) description.ranking = ranking;
   if (truncated)
     description.note =
       'Only the first ' +
@@ -897,7 +994,10 @@ function dmvChatWriteSheet_(session, input) {
     target: { sheetName: sheetName, startCell: cell.a1 },
   };
   dmvLocked_(function () {
-    dmvWriteReport_(session.spreadsheet, report, normalized);
+    dmvWorkbookLocked_(function () {
+      if (session.spreadsheet.getSheetByName(sheetName)) dmvChatSheetTarget_(session, sheetName);
+      dmvWriteReport_(session.spreadsheet, report, normalized);
+    });
     dmvChatPruneReceipts_(session.spreadsheetId);
   });
   var sheet = session.spreadsheet.getSheetByName(sheetName);
@@ -966,9 +1066,7 @@ function dmvChatPruneReceipts_(spreadsheetId) {
 function dmvChatReadSheet_(session, input) {
   input = input || {};
   var sheetName = dmvSheetName_(input.sheetName);
-  var sheet = session.spreadsheet.getSheetByName(sheetName);
-  if (!sheet)
-    throw new Error('No tab named "' + sheetName + '". Tabs: ' + session.sheetNames.join(', '));
+  var sheet = dmvChatSheetTarget_(session, sheetName);
   var range;
   if (input.range) {
     var match = /^([A-Z]{1,3})([1-9][0-9]{0,6}):([A-Z]{1,3})([1-9][0-9]{0,6})$/.exec(
@@ -1079,15 +1177,15 @@ var DMV_CHART_TYPES = {
 
 function dmvChatCreateChart_(session, input) {
   input = input || {};
+  if (input.includeFutureRows !== undefined && typeof input.includeFutureRows !== 'boolean')
+    throw new Error('includeFutureRows must be true or false.');
   var type = DMV_CHART_TYPES[String(input.chartType || '').toLowerCase()];
   if (!type)
     throw new Error('chartType must be one of: ' + Object.keys(DMV_CHART_TYPES).join(', '));
   var area = input.resultId ? session.written[input.resultId] : null;
   if (!area) {
     var sheetName = dmvSheetName_(input.sheetName);
-    var sheet = session.spreadsheet.getSheetByName(sheetName);
-    if (!sheet)
-      throw new Error('No tab named "' + sheetName + '". Tabs: ' + session.sheetNames.join(', '));
+    var sheet = dmvChatSheetTarget_(session, sheetName);
     var match = /^([A-Z]{1,3})([1-9][0-9]{0,6}):([A-Z]{1,3})([1-9][0-9]{0,6})$/.exec(
       String(input.range || '').toUpperCase()
     );
@@ -1130,13 +1228,14 @@ function dmvChatCreateChart_(session, input) {
     return area.columns.indexOf(column);
   };
   var gridRange = function (column, skipHeader) {
-    return {
+    var range = {
       sheetId: area.sheetId,
       startRowIndex: area.row - 1 + (skipHeader ? 1 : 0),
-      endRowIndex: area.row - 1 + area.rows,
       startColumnIndex: area.column - 1 + offset(column),
       endColumnIndex: area.column + offset(column),
     };
+    if (!input.includeFutureRows) range.endRowIndex = area.row - 1 + area.rows;
+    return range;
   };
   var title = dmvText_(
     input.title ||
@@ -1178,31 +1277,38 @@ function dmvChatCreateChart_(session, input) {
   var anchor = input.anchorCell
     ? dmvCell_(input.anchorCell)
     : { row: area.row, column: area.column + area.columns.length + 1 };
-  var response = Sheets.Spreadsheets.batchUpdate(
-    {
-      requests: [
-        {
-          addChart: {
-            chart: {
-              spec: spec,
-              position: {
-                overlayPosition: {
-                  anchorCell: {
-                    sheetId: area.sheetId,
-                    rowIndex: anchor.row - 1,
-                    columnIndex: anchor.column - 1,
+  var response = dmvWorkbookLocked_(function () {
+    var currentSheet = dmvChatSheetTarget_(session, area.sheetName);
+    if (currentSheet.getSheetId() !== area.sheetId)
+      throw new Error(
+        'The chart source tab changed. Read or write the table again before charting.'
+      );
+    return Sheets.Spreadsheets.batchUpdate(
+      {
+        requests: [
+          {
+            addChart: {
+              chart: {
+                spec: spec,
+                position: {
+                  overlayPosition: {
+                    anchorCell: {
+                      sheetId: area.sheetId,
+                      rowIndex: anchor.row - 1,
+                      columnIndex: anchor.column - 1,
+                    },
+                    widthPixels: 600,
+                    heightPixels: 360,
                   },
-                  widthPixels: 600,
-                  heightPixels: 360,
                 },
               },
             },
           },
-        },
-      ],
-    },
-    session.spreadsheetId
-  );
+        ],
+      },
+      session.spreadsheetId
+    );
+  });
   var reply = response && response.replies && response.replies[0] && response.replies[0].addChart;
   session.events.push({
     kind: 'chart',

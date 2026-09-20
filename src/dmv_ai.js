@@ -27,7 +27,10 @@ var DMV_AI = {
   maxOutputTokens: 4000,
   maxKeyLength: 400,
   maxModelLength: 80,
-  maxInstructionsLength: 4000,
+  maxInstructionsLength: 100000,
+  instructionPartBytes: 7500,
+  maxInstructionEncodedBytes: 400000,
+  maxPrivateBytes: 450000,
 };
 
 function dmvAiCatalog_() {
@@ -44,21 +47,191 @@ function dmvAiCatalog_() {
 }
 
 function dmvAiRead_() {
-  var raw = dmvStore_().getProperty(dmvKey_('ai', 'settings'));
+  var all = dmvStore_().getProperties();
+  var raw = all[dmvKey_('ai', 'settings')];
   if (!raw) return null;
   var settings = JSON.parse(raw);
   if (!DMV_AI_PROVIDERS[settings.provider] || !settings.apiKey) return null;
+  if (settings.instructionRef) {
+    var savedInstructions = dmvAiReadInstructions_(settings.instructionRef, all);
+    settings.instructions = savedInstructions.instructions;
+    settings.sourceInstructions = savedInstructions.sourceInstructions;
+  }
+  settings.sourceInstructions = settings.sourceInstructions || {};
   return settings;
 }
 
+function dmvAiInstructionInput_(instructions, sourceInstructions) {
+  if (typeof instructions !== 'string') throw new Error('Chat instructions must be text.');
+  if (
+    !sourceInstructions ||
+    Object.prototype.toString.call(sourceInstructions) !== '[object Object]'
+  )
+    throw new Error('Source instructions must be an object.');
+  var catalog = dmvCatalog_();
+  var total = instructions.length;
+  var sources = {};
+  Object.keys(sourceInstructions).forEach(function (id) {
+    if (
+      !catalog.some(function (connector) {
+        return connector.id === id;
+      })
+    )
+      throw new Error('Choose an available source for its chat instructions.');
+    var text = sourceInstructions[id];
+    if (typeof text !== 'string') throw new Error('Source instructions must be text.');
+    total += text.length;
+    text = text.trim().replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+    if (text) sources[id] = text;
+  });
+  if (total > DMV_AI.maxInstructionsLength)
+    throw new Error(
+      'Chat instructions are too long. General and source instructions together may contain at most 100,000 characters.'
+    );
+  return {
+    instructions: instructions
+      .trim()
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ''),
+    sourceInstructions: sources,
+  };
+}
+
+function dmvAiInstructionPrefix_(generation) {
+  return 'dmv:v1:ai-instructions:' + (generation ? generation + ':' : '');
+}
+
+function dmvAiReadInstructions_(ref, all) {
+  try {
+    if (
+      !ref ||
+      !/^[a-zA-Z0-9-]{1,80}$/.test(ref.generation) ||
+      !Number.isInteger(ref.parts) ||
+      ref.parts < 1 ||
+      ref.parts > Math.ceil(DMV_AI.maxInstructionEncodedBytes / DMV_AI.instructionPartBytes)
+    )
+      throw new Error('Invalid reference');
+    var encoded = '';
+    for (var i = 0; i < ref.parts; i++) {
+      var part = all[dmvAiInstructionPrefix_(ref.generation) + i];
+      if (typeof part !== 'string') throw new Error('Missing part');
+      encoded += part;
+    }
+    if (
+      encoded.length > DMV_AI.maxInstructionEncodedBytes ||
+      dmvOutputDigest_(encoded) !== ref.digest
+    )
+      throw new Error('Invalid instructions');
+    var payload = JSON.parse(
+      Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(encoded))).getDataAsString()
+    );
+    return dmvAiInstructionInput_(payload.instructions, payload.sourceInstructions);
+  } catch (ignored) {
+    throw new Error(
+      'Saved chat instructions are missing or damaged. Restore the private settings before using chat.'
+    );
+  }
+}
+
+function dmvAiClearInstructionParts_(keep) {
+  var store = dmvStore_(),
+    prefix = dmvAiInstructionPrefix_();
+  var kept = keep ? dmvAiInstructionPrefix_(keep) : null;
+  Object.keys(store.getProperties()).forEach(function (key) {
+    if (key.indexOf(prefix) === 0 && (!kept || key.indexOf(kept) !== 0)) store.deleteProperty(key);
+  });
+}
+
+// Publish the settings pointer only after all private pieces exist. A failed save keeps the old settings.
+function dmvAiWriteSettings_(settings) {
+  var store = dmvStore_();
+  var oldRaw = store.getProperty(dmvKey_('ai', 'settings'));
+  var old = oldRaw ? JSON.parse(oldRaw) : null;
+  dmvAiClearInstructionParts_(old && old.instructionRef && old.instructionRef.generation);
+  var encoded = Utilities.base64Encode(
+    Utilities.gzip(
+      Utilities.newBlob(
+        JSON.stringify({
+          instructions: settings.instructions,
+          sourceInstructions: settings.sourceInstructions,
+        })
+      )
+    ).getBytes()
+  );
+  if (encoded.length > DMV_AI.maxInstructionEncodedBytes)
+    throw new Error(
+      'Chat instructions are too large for private storage. Shorten them and save again.'
+    );
+  var generation = dmvId_(),
+    prefix = dmvAiInstructionPrefix_(generation);
+  var parts = Math.ceil(encoded.length / DMV_AI.instructionPartBytes);
+  var stored = Object.assign({}, settings, {
+    instructionRef: { generation: generation, parts: parts, digest: dmvOutputDigest_(encoded) },
+  });
+  delete stored.instructions;
+  delete stored.sourceInstructions;
+  if (old && old.instructionRef && old.instructionRef.digest === stored.instructionRef.digest) {
+    stored.instructionRef = old.instructionRef;
+    dmvSave_('ai', stored);
+    return;
+  }
+  var raw = dmvCheckRecordSize_(stored),
+    all = store.getProperties();
+  var used = Object.keys(all).reduce(function (bytes, key) {
+    return bytes + Utilities.newBlob(key + all[key]).getBytes().length;
+  }, 0);
+  if (
+    used + encoded.length + parts * (prefix.length + 4) + Utilities.newBlob(raw).getBytes().length >
+    DMV_AI.maxPrivateBytes
+  )
+    throw new Error(
+      'Private settings storage is full. Shorten chat instructions or finish paused reports, then save again. Your previous settings are unchanged.'
+    );
+  try {
+    for (var i = 0; i < parts; i++)
+      store.setProperty(
+        prefix + i,
+        encoded.slice(i * DMV_AI.instructionPartBytes, (i + 1) * DMV_AI.instructionPartBytes)
+      );
+    store.setProperty(dmvKey_('ai', 'settings'), raw);
+  } catch (error) {
+    // An interrupted save may leave unreferenced pieces; the next save removes them.
+    throw new Error(
+      'Could not save chat settings. Reopen Settings to check the saved version and try again.'
+    );
+  }
+  try {
+    dmvAiClearInstructionParts_(generation);
+  } catch (ignored) {
+    /* Cleanup cannot undo a committed save. */
+  }
+}
+
+function dmvAiMaxRows_(settings) {
+  return settings &&
+    Number.isInteger(settings.maxRows) &&
+    settings.maxRows >= 1 &&
+    settings.maxRows <= DMV_LIMITS.maxRows
+    ? settings.maxRows
+    : DMV_LIMITS.defaultRows;
+}
+
 function dmvAiSummary_(settings) {
-  if (!settings) return { configured: false, providers: dmvAiCatalog_() };
+  if (!settings)
+    return {
+      configured: false,
+      debug: true,
+      maxRows: DMV_LIMITS.defaultRows,
+      providers: dmvAiCatalog_(),
+    };
   return {
     configured: true,
     provider: settings.provider,
     providerLabel: DMV_AI_PROVIDERS[settings.provider].label,
     model: settings.model,
     instructions: settings.instructions || '',
+    sourceInstructions: settings.sourceInstructions || {},
+    maxRows: dmvAiMaxRows_(settings),
+    debug: settings.debug !== false,
     providers: dmvAiCatalog_(),
   };
 }
@@ -86,20 +259,35 @@ function dmvSaveAiSettings(input) {
     if (!apiKey) throw new Error('Paste the API key for ' + provider.label + '.');
     if (apiKey.length > DMV_AI.maxKeyLength || /[\s\u0000-\u001f\u007f]/.test(apiKey))
       throw new Error('The API key contains unsupported characters.');
-    var instructions = dmvText_(
-      input.instructions,
-      'Instructions',
-      DMV_AI.maxInstructionsLength
-    ).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+    var instructionInput = dmvAiInstructionInput_(
+      input.instructions === undefined
+        ? (previous && previous.instructions) || ''
+        : input.instructions,
+      input.sourceInstructions === undefined
+        ? (previous && previous.sourceInstructions) || {}
+        : input.sourceInstructions
+    );
+    var maxRows = input.maxRows === undefined ? dmvAiMaxRows_(previous) : input.maxRows;
+    if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > DMV_LIMITS.maxRows)
+      throw new Error(
+        'Maximum rows per chat report must be a whole number between 1 and ' +
+          DMV_LIMITS.maxRows.toLocaleString() +
+          '.'
+      );
+    var debug = input.debug === undefined ? !previous || previous.debug !== false : input.debug;
+    if (typeof debug !== 'boolean') throw new Error('Show actions must be true or false.');
     var settings = {
+      debug: debug,
       id: 'settings',
       provider: input.provider,
       model: model,
       apiKey: apiKey,
-      instructions: instructions,
+      instructions: instructionInput.instructions,
+      sourceInstructions: instructionInput.sourceInstructions,
+      maxRows: maxRows,
       revision: previous ? (previous.revision || 0) + 1 : 1,
     };
-    dmvSave_('ai', settings);
+    dmvAiWriteSettings_(settings);
     return dmvAiSummary_(settings);
   });
 }
@@ -107,6 +295,11 @@ function dmvSaveAiSettings(input) {
 function dmvDeleteAiSettings() {
   return dmvLocked_(function () {
     dmvStore_().deleteProperty(dmvKey_('ai', 'settings'));
+    try {
+      dmvAiClearInstructionParts_();
+    } catch (ignored) {
+      /* Remove orphans on the next save. */
+    }
     return dmvAiSummary_(null);
   });
 }

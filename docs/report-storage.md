@@ -4,6 +4,8 @@ Saved report definitions live in a hidden tab named `DataMoovReports` inside the
 
 Spreadsheet collaborators can read these definitions, and a spreadsheet copy retains them. Hiding the tab is a convenience, not a privacy boundary. Credentials, connection choices and refresh authorization remain private to each Google user.
 
+Saved multi-source dashboards use a separate private plan scoped to their creator and spreadsheet. Create them in Chat and refresh them from **Reports > Dashboards**. Their two output tables are visible to spreadsheet collaborators, but their setup is not shared or retained in a copy. See [dashboard workflow](chat.md#saved-multi-source-dashboards).
+
 ## Using shared definitions
 
 Use **Reports > Manage report definitions** in the sidebar to show the configuration tab. Normal report creation and editing remain available in the sidebar.

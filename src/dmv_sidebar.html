@@ -88,7 +88,7 @@
           <div class="section-heading">
             <div>
               <h1>Your reports</h1>
-              <p>Fresh numbers. Familiar spreadsheet.</p>
+              <p>Import one source into a table.</p>
             </div>
             <div class="heading-actions">
               <button
@@ -116,12 +116,27 @@
             </div>
           </div>
           <div id="reports-list" class="card-list"></div>
+          <section id="dashboards-section" aria-labelledby="dashboards-heading">
+            <div class="section-heading">
+              <h2 id="dashboards-heading">Dashboards</h2>
+              <button type="button" id="create-dashboard-chat" class="text-button">
+                Create in chat
+              </button>
+            </div>
+            <p class="field-help">
+              Create a dashboard directly in Chat, then refresh it here. It combines sources into a
+              Data tab and a Report tab; no separate saved reports are needed. Your setup stays
+              private.
+            </p>
+            <div id="dashboards-list" class="card-list"></div>
+          </section>
           <button type="button" id="manage-report-definitions" class="button secondary full">
             Manage report definitions
           </button>
           <p class="footnote">
-            Report settings are shared with spreadsheet editors. Your credentials, connections and
-            refresh schedules stay private to your Google account. DataMoov has no servers.
+            Single-source report settings are shared with spreadsheet editors. Your credentials,
+            connections and refresh schedules stay private to your Google account. DataMoov has no
+            servers.
           </p>
         </section>
         <section id="panel-compose" role="tabpanel" aria-labelledby="tab-reports" hidden>
@@ -297,8 +312,7 @@
                 hidden
               >
                 <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M21 6v8a2 2 0 0 1-2 2H8l-5 4V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" />
-                  <path d="M12 7v6M9 10h6" />
+                  <path d="M12 5v14M5 12h14" />
                 </svg>
               </button>
               <button
@@ -330,10 +344,17 @@
             <p id="ai-status" class="field-help"></p>
             <div id="chat-suggestions" class="chip-row" aria-label="Suggestions"></div>
             <div id="chat-messages" class="chat-messages" role="log" aria-live="polite"></div>
-            <p id="chat-working" class="boot-state" hidden>
-              <span class="spinner" aria-hidden="true"></span>Working with your data&hellip; this
-              can take a minute.
-            </p>
+            <div id="chat-working" class="chat-progress" role="status" aria-live="polite" hidden>
+              <div class="chat-progress-current">
+                <span class="spinner" aria-hidden="true"></span>
+                <span id="chat-working-text">Working on your request&hellip;</span>
+              </div>
+              <ol
+                id="chat-working-steps"
+                class="chat-progress-steps"
+                aria-label="Actions in progress"
+              ></ol>
+            </div>
             <form id="chat-form" class="chat-composer">
               <label for="chat-input" class="visually-hidden">Your question</label
               ><textarea
@@ -345,8 +366,8 @@
               ><button type="submit" id="chat-send" class="button primary">Ask</button>
             </form>
             <p class="field-help">
-              The chat runs your saved connections, writes only into empty cells and never changes
-              your accounts.
+              Creates reports and edits sheets when you ask. Your connected accounts are never
+              changed.
             </p>
           </div>
         </section>
@@ -447,7 +468,8 @@
           </div>
           <details id="ai-settings" class="settings-card" aria-label="AI provider settings">
             <summary>
-              <span>AI provider</span
+              <span class="ai-summary-title"
+                >AI provider<small id="ai-row-limit">1,000 rows per report</small></span
               ><span id="ai-settings-status" class="card-status">Not set up</span>
             </summary>
             <form id="ai-form">
@@ -468,21 +490,65 @@
                   Any model this provider serves. Faster models answer sooner; the default is a
                   strong one.
                 </p>
+                <label for="ai-max-rows">Maximum rows per chat report</label>
+                <input
+                  id="ai-max-rows"
+                  type="number"
+                  min="1"
+                  max="20000"
+                  step="1"
+                  value="1000"
+                  required
+                  aria-describedby="ai-max-rows-help"
+                />
+                <p id="ai-max-rows-help" class="field-help">
+                  Applies to each report fetched in chat. Up to 20,000 rows; reports are never
+                  silently truncated.
+                </p>
+                <label for="ai-debug">
+                  <input id="ai-debug" type="checkbox" checked aria-describedby="ai-debug-help" />
+                  Show actions after each answer
+                </label>
+                <p id="ai-debug-help" class="field-help">
+                  Debug activity is shown by default. Live progress and failure notices remain
+                  visible when this is off.
+                </p>
                 <label for="ai-instructions">Instructions for the assistant (optional)</label
                 ><textarea
                   id="ai-instructions"
                   rows="4"
-                  maxlength="4000"
+                  maxlength="100000"
                   placeholder="e.g. We sell furniture in Greece; spend is in EUR. Campaigns named BR_ are brand. Put analysis in the 'Analysis' tab."
                 ></textarea>
                 <p class="field-help">
                   Standing context sent with every question: your business, naming conventions,
                   preferred tabs or chart styles.
                 </p>
+                <label for="ai-instruction-source">Source instructions</label>
+                <select id="ai-instruction-source"></select>
+                <textarea
+                  id="ai-source-instructions"
+                  rows="4"
+                  maxlength="100000"
+                  aria-label="Instructions for the selected source"
+                  aria-describedby="ai-source-instructions-help ai-instruction-count"
+                  placeholder="e.g. For this source, group costs by campaign and keep currencies separate."
+                ></textarea>
+                <p id="ai-source-instructions-help" class="field-help">
+                  Added to your general instructions when this source is connected in chat.
+                </p>
+                <p
+                  id="ai-instruction-count"
+                  class="field-help instruction-count"
+                  aria-live="polite"
+                >
+                  0 / 100,000 characters across all instructions
+                </p>
                 <p class="inline-note">
                   Column names, row samples and aggregates from the reports you run in chat are sent
-                  to this provider. Credentials and full result sets are not. Usage is billed to
-                  your own API key, which stays in your Google account.
+                  to this provider. Credentials are not sent. Small results may be sent whole;
+                  larger results use samples and aggregates. Usage is billed to your own API key,
+                  which stays in your Google account.
                 </p>
                 <div class="action-row">
                   <button type="button" id="ai-test" class="button secondary">Test</button

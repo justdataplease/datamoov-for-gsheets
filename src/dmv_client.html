@@ -9,6 +9,7 @@
       families: [],
       credentialId: null,
       reports: [],
+      dashboards: [],
       limits: { maxRows: 20000, defaultRows: 1000 },
       reportId: null,
       reportDefinitionId: null,
@@ -362,6 +363,261 @@
             : 'Open this report and save your settings before running it.';
         card.append(content, actions);
         list.append(card);
+      }
+    }
+    const dashboardView = {
+      epoch: 0,
+      fetch: null,
+      timer: null,
+      disposed: false,
+      runs: new Map(),
+      removals: new Map(),
+    };
+    function dashboardRunning(dashboard) {
+      return (
+        dashboardView.runs.has(dashboard.id) ||
+        ['running', 'started', 'pending'].includes(dashboard.status)
+      );
+    }
+    function resetDashboards() {
+      dashboardView.epoch++;
+      window.clearTimeout(dashboardView.timer);
+      dashboardView.runs.clear();
+      dashboardView.removals.clear();
+    }
+    function scheduleDashboardPoll() {
+      window.clearTimeout(dashboardView.timer);
+      if (dashboardView.disposed || !state.dashboards.some(dashboardRunning)) return;
+      dashboardView.timer = window.setTimeout(() => {
+        refreshDashboards().catch(() => {
+          // A missed progress update does not interrupt the refresh itself.
+          scheduleDashboardPoll();
+        });
+      }, 2000);
+    }
+    async function refreshDashboards() {
+      if (dashboardView.disposed) return;
+      if (dashboardView.fetch) {
+        const previous = dashboardView.fetch;
+        if (previous.epoch === dashboardView.epoch) return previous.promise;
+        try {
+          await previous.promise;
+        } catch {
+          /* Fetch current state after the old request ends. */
+        }
+        return refreshDashboards();
+      }
+      const request = { epoch: dashboardView.epoch, promise: null };
+      dashboardView.fetch = request;
+      request.promise = api('dmvListDashboards')
+        .then((items) => {
+          if (dashboardView.disposed || request.epoch !== dashboardView.epoch) return;
+          if (!Array.isArray(items)) throw new Error('Dashboard status could not be read.');
+          state.dashboards = items.map((item) => {
+            if (
+              !dashboardView.runs.has(item.id) ||
+              ['running', 'started', 'pending'].includes(item.status)
+            )
+              return item;
+            const previous = state.dashboards.find((saved) => saved.id === item.id);
+            return {
+              ...item,
+              status: 'running',
+              lastError: null,
+              statusMessage: previous?.statusMessage || 'Preparing dashboard refresh...',
+            };
+          });
+          renderDashboards();
+        })
+        .finally(() => {
+          if (dashboardView.fetch === request) dashboardView.fetch = null;
+          scheduleDashboardPoll();
+        });
+      return request.promise;
+    }
+    function dashboardTarget(target) {
+      return typeof target === 'string' ? target : target?.sheetName || 'Not configured';
+    }
+    function createDashboardInChat() {
+      tab('chat');
+      const input = $('chat-input');
+      if (input.disabled) {
+        notice('Wait for the current answer before creating a dashboard.', 'info');
+        return;
+      }
+      input.value =
+        'Create a reusable dashboard combining my connected sources, with a Data tab and a Report tab. Ask me which sources, metrics and date range to use.';
+      input.focus();
+    }
+    function renderDashboards() {
+      const list = $('dashboards-list');
+      list.replaceChildren();
+      if (!state.dashboards.length) {
+        list.append(
+          empty(
+            'Create your first dashboard in Chat',
+            'Choose sources, metrics and dates in one conversation. Your dashboard appears here when saved.'
+          )
+        );
+      }
+      for (const dashboard of state.dashboards) {
+        const card = el('article', 'report-card dashboard-card');
+        card.dataset.dashboardId = dashboard.id;
+        const content = el('div', 'card-content');
+        const top = el('div', 'card-top');
+        const names = el('div');
+        const labels = Array.isArray(dashboard.sourceLabels) ? dashboard.sourceLabels : [];
+        const count = Number.isInteger(dashboard.sourceCount)
+          ? dashboard.sourceCount
+          : labels.length;
+        names.append(
+          el('div', 'card-title', dashboard.name),
+          el(
+            'div',
+            'card-subtitle',
+            count +
+              (count === 1 ? ' source' : ' sources') +
+              (labels.length ? ' · ' + labels.join(', ') : '')
+          )
+        );
+        const running = dashboardRunning(dashboard);
+        const removing = dashboardView.removals.has(dashboard.id);
+        const failed =
+          Boolean(dashboard.lastError) || ['failed', 'error'].includes(dashboard.status);
+        const status = running
+          ? ['Refreshing', 'running']
+          : failed
+            ? ['Needs attention', 'error']
+            : dashboard.lastRun
+              ? ['Up to date', 'success']
+              : ['Ready', ''];
+        top.append(names, el('span', 'status ' + status[1], status[0]));
+        content.append(
+          top,
+          detail('Data tab', dashboardTarget(dashboard.dataTarget)),
+          detail('Report tab', dashboardTarget(dashboard.target)),
+          detail('Updated', timeLabel(dashboard.lastRun))
+        );
+        if (dashboard.lastDataRowCount != null || dashboard.lastRowCount != null)
+          content.append(
+            detail(
+              'Rows',
+              (dashboard.lastDataRowCount == null
+                ? '?'
+                : Number(dashboard.lastDataRowCount).toLocaleString()) +
+                ' source · ' +
+                (dashboard.lastRowCount == null
+                  ? '?'
+                  : Number(dashboard.lastRowCount).toLocaleString()) +
+                ' report'
+            )
+          );
+        if (dashboard.statusMessage)
+          content.append(el('p', 'card-progress', dashboard.statusMessage));
+        if (dashboard.lastError) content.append(el('p', 'card-error', dashboard.lastError));
+        const actions = el('div', 'card-bottom');
+        const remove = button(removing ? 'Removing...' : 'Remove', 'text-button subtle', () =>
+          removeDashboard(dashboard)
+        );
+        const refresh = button(running ? 'Refreshing...' : 'Refresh dashboard', 'run-button', () =>
+          runDashboard(dashboard)
+        );
+        remove.disabled = running || removing;
+        refresh.disabled = running || removing;
+        actions.append(remove, refresh);
+        card.append(content, actions);
+        list.append(card);
+      }
+    }
+    async function runDashboard(dashboard) {
+      if (dashboardRunning(dashboard) || dashboardView.removals.has(dashboard.id)) return;
+      const token = {};
+      dashboardView.epoch++;
+      dashboardView.runs.set(dashboard.id, token);
+      upsert(state.dashboards, {
+        ...dashboard,
+        status: 'running',
+        lastError: null,
+        statusMessage: 'Preparing dashboard refresh...',
+      });
+      renderDashboards();
+      scheduleDashboardPoll();
+      notice('Refreshing ' + dashboard.name + '...', 'info');
+      try {
+        const result = await api('dmvRunDashboard', dashboard.id);
+        if (dashboardView.disposed || dashboardView.runs.get(dashboard.id) !== token) return;
+        const current = state.dashboards.find((item) => item.id === dashboard.id) || dashboard;
+        upsert(state.dashboards, {
+          ...current,
+          status: 'success',
+          lastError: null,
+          statusMessage: '',
+          lastRun: result.updatedAt || new Date().toISOString(),
+          lastRowCount: result.rowCount,
+          lastDataRowCount: result.dataRowCount,
+          target: result.target || current.target,
+          dataTarget: result.dataTarget || current.dataTarget,
+        });
+        notice(
+          Number(result.dataRowCount || 0).toLocaleString() +
+            ' source rows updated in ' +
+            dashboardTarget(result.dataTarget || current.dataTarget) +
+            '; ' +
+            Number(result.rowCount || 0).toLocaleString() +
+            ' report rows updated in ' +
+            dashboardTarget(result.target || current.target) +
+            '.'
+        );
+      } catch (error) {
+        if (dashboardView.disposed || dashboardView.runs.get(dashboard.id) !== token) return;
+        const current = state.dashboards.find((item) => item.id === dashboard.id) || dashboard;
+        upsert(state.dashboards, {
+          ...current,
+          status: 'failed',
+          statusMessage: '',
+          lastError: error.message,
+        });
+        notice(error.message || 'The dashboard could not be refreshed.', 'error');
+      } finally {
+        if (dashboardView.runs.get(dashboard.id) === token) {
+          dashboardView.runs.delete(dashboard.id);
+          dashboardView.epoch++;
+          renderDashboards();
+          refreshDashboards().catch(() => {
+            /* Keep the confirmed result if the list cannot refresh. */
+          });
+        }
+      }
+    }
+    async function removeDashboard(dashboard) {
+      if (dashboardRunning(dashboard) || dashboardView.removals.has(dashboard.id)) return;
+      if (
+        !window.confirm(
+          'Remove your dashboard "' +
+            dashboard.name +
+            '"? Its Data and Report tabs and existing sheet data stay in place.'
+        )
+      )
+        return;
+      const token = {};
+      dashboardView.epoch++;
+      dashboardView.removals.set(dashboard.id, token);
+      renderDashboards();
+      try {
+        await api('dmvDeleteDashboard', dashboard.id);
+        if (dashboardView.disposed || dashboardView.removals.get(dashboard.id) !== token) return;
+        state.dashboards = state.dashboards.filter((item) => item.id !== dashboard.id);
+        notice('Dashboard setup removed. Its Data and Report tabs were kept.');
+      } catch (error) {
+        if (!dashboardView.disposed && dashboardView.removals.get(dashboard.id) === token)
+          notice(error.message || 'The dashboard could not be removed.', 'error');
+      } finally {
+        if (dashboardView.removals.get(dashboard.id) === token) {
+          dashboardView.removals.delete(dashboard.id);
+          dashboardView.epoch++;
+          renderDashboards();
+          scheduleDashboardPoll();
+        }
       }
     }
     function renderConnections() {
@@ -1267,6 +1523,7 @@
       $('data-preview').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
     async function bootstrap() {
+      resetDashboards();
       $('boot-state').hidden = false;
       $('retry-bootstrap').hidden = true;
       try {
@@ -1276,6 +1533,7 @@
         state.credentials = data.credentials || [];
         state.families = data.credentialFamilies || [];
         state.reports = data.reports || [];
+        state.dashboards = data.dashboards || [];
         state.limits = data.limits || state.limits;
         state.target = data.defaultTarget;
         if (data.dateTimezone)
@@ -1287,6 +1545,8 @@
           ...(data.sheetNames || []).map((name) => option(name, name))
         );
         renderReports();
+        renderDashboards();
+        scheduleDashboardPoll();
         renderConnections();
         renderCredentials();
         if (window.dmvChatUi) window.dmvChatUi.bootstrap(data);
@@ -1327,6 +1587,7 @@
         $('tab-' + TABS[next]).focus();
       });
     });
+    $('create-dashboard-chat').addEventListener('click', createDashboardInChat);
     $('new-report').addEventListener('click', () => {
       resetReport();
       tab('compose');
@@ -1538,7 +1799,11 @@
     // Inside the larger window there is nothing wider to open.
     if (window.innerWidth >= 440) $('open-window').hidden = true;
     // The chat partial builds on these helpers; nothing else is exposed.
-    window.dmvSidebar = { api, el, button, notice, provider, state, tab };
+    window.addEventListener('pagehide', () => {
+      dashboardView.disposed = true;
+      resetDashboards();
+    });
+    window.dmvSidebar = { api, el, button, notice, provider, state, tab, refreshDashboards };
     tab('reports');
     bootstrap();
   })();

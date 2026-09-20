@@ -180,12 +180,13 @@ export function previewFixture(catalog, aiProviders = [], families = []) {
     credentials,
     connections,
     reports,
+    dashboards: [],
     sheetNames: ['Campaigns', 'Website', 'Deals', 'New report'],
     defaultTarget: { sheetName: 'New report', startCell: 'A1' },
     dateTimezone: 'Europe/Athens',
     limits: { maxRows: 20000, defaultRows: 1000 },
     branding: { name: 'DataMoov' },
-    ai: { configured: false, providers: aiProviders },
+    ai: { configured: false, debug: true, maxRows: 1000, providers: aiProviders },
   };
 }
 
@@ -196,6 +197,7 @@ function installPreview(initial) {
   const data = structuredClone(initial);
   const copy = (value) => structuredClone(value);
   let nextId = 1;
+  const chatProgress = new Map();
   function reportFingerprint(report) {
     return JSON.stringify(
       [
@@ -527,24 +529,119 @@ function installPreview(initial) {
         },
       };
     },
+    dmvListDashboards: () => copy(data.dashboards || []),
+    dmvSaveDashboard(input) {
+      data.dashboards ||= [];
+      const previous = input.id ? data.dashboards.find((item) => item.id === input.id) : null;
+      if (input.id && !previous) throw new Error('Dashboard not found.');
+      const saved = {
+        id: previous?.id || 'dashboard-' + nextId++,
+        name: input.name,
+        sourceCount: input.sources?.length || 2,
+        sourceLabels: input.sources?.map((source) => source.label) || [
+          'Google Ads',
+          'Facebook Ads',
+        ],
+        dataTarget: copy(input.dataTarget || { sheetName: 'Dashboard data', startCell: 'A1' }),
+        target: copy(input.target || { sheetName: 'Performance dashboard', startCell: 'A1' }),
+        status: 'ready',
+        statusMessage: 'Ready to fetch all sources.',
+        revision: (previous?.revision || 0) + 1,
+      };
+      if (previous) Object.assign(previous, saved);
+      else data.dashboards.push(saved);
+      return copy(saved);
+    },
+    async dmvRunDashboard(id) {
+      const saved = (data.dashboards || []).find((item) => item.id === id);
+      if (!saved) throw new Error('Dashboard not found.');
+      saved.status = 'running';
+      saved.lastError = '';
+      for (const phase of [
+        'Fetching every source',
+        'Combining data and building the report',
+        'Updating both tabs',
+      ]) {
+        saved.statusMessage = phase;
+        await new Promise((resolve) => setTimeout(resolve, 650));
+      }
+      Object.assign(saved, {
+        status: 'success',
+        statusMessage: 'Both tabs updated.',
+        lastRun: new Date().toISOString(),
+        lastRowCount: 12,
+        lastDataRowCount: 576,
+      });
+      return {
+        ok: true,
+        id,
+        rowCount: 12,
+        dataRowCount: 576,
+        updatedAt: saved.lastRun,
+        target: copy(saved.target),
+        dataTarget: copy(saved.dataTarget),
+      };
+    },
+    dmvDeleteDashboard(id) {
+      data.dashboards = (data.dashboards || []).filter((item) => item.id !== id);
+      return { ok: true };
+    },
     dmvAiSettings: () => copy(data.ai),
     dmvSaveAiSettings(input) {
       const provider = data.ai.providers.find((item) => item.id === input.provider);
       if (!provider) throw new Error('Choose a supported AI provider.');
       if (!input.apiKey && !(data.ai.configured && data.ai.provider === input.provider))
         throw new Error('Paste the API key for ' + provider.label + '.');
+      const maxRows = input.maxRows === undefined ? data.ai.maxRows || 1000 : input.maxRows;
+      if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 20000)
+        throw new Error(
+          'Maximum rows per chat report must be a whole number between 1 and 20,000.'
+        );
+      const instructions =
+        input.instructions === undefined ? data.ai.instructions || '' : input.instructions;
+      const sourceInstructions =
+        input.sourceInstructions === undefined
+          ? data.ai.sourceInstructions || {}
+          : input.sourceInstructions;
+      if (
+        typeof instructions !== 'string' ||
+        !sourceInstructions ||
+        Array.isArray(sourceInstructions) ||
+        typeof sourceInstructions !== 'object'
+      )
+        throw new Error('Chat instructions must be text.');
+      if (
+        Object.entries(sourceInstructions).some(
+          ([id, text]) =>
+            typeof text !== 'string' || !data.catalog.some((source) => source.id === id)
+        )
+      )
+        throw new Error('Choose an available source for its chat instructions.');
+      if (
+        instructions.length +
+          Object.values(sourceInstructions).reduce((total, value) => total + value.length, 0) >
+        100000
+      )
+        throw new Error(
+          'General and source instructions together may contain at most 100,000 characters.'
+        );
+      const debug = input.debug === undefined ? data.ai.debug !== false : input.debug;
+      if (typeof debug !== 'boolean') throw new Error('Show actions must be true or false.');
       data.ai = {
         ...data.ai,
+        debug,
+        maxRows,
+        sourceInstructions: copy(sourceInstructions),
         configured: true,
         provider: provider.id,
         providerLabel: provider.label,
         model: input.model || provider.defaultModel,
-        instructions: input.instructions || '',
+        instructions,
       };
       return copy(data.ai);
     },
     dmvDeleteAiSettings() {
-      data.ai = { configured: false, providers: data.ai.providers };
+      data.ai = { configured: false, debug: true, maxRows: 1000, providers: data.ai.providers };
       return copy(data.ai);
     },
     dmvTestAi() {
@@ -558,12 +655,74 @@ function installPreview(initial) {
           ' replied: OK (preview, no provider was contacted)',
       };
     },
-    dmvChat(input) {
+    dmvChatProgress(input) {
+      return copy(
+        chatProgress.get(input.requestId) || {
+          requestId: input.requestId,
+          status: 'unavailable',
+          steps: [],
+          updatedAt: 0,
+        }
+      );
+    },
+    async dmvChat(input) {
       if (!data.ai.configured)
         throw new Error('Add an AI provider and API key under Settings first.');
       const text = String(input.text || '');
+      const progress = {
+        requestId: input.requestId,
+        status: 'running',
+        steps: [],
+        updatedAt: Date.now(),
+      };
+      const progressStep = async (label) => {
+        const step = { id: progress.steps.length + 1, state: 'running', text: label };
+        progress.steps.push(step);
+        progress.updatedAt = Date.now();
+        if (input.requestId) chatProgress.set(input.requestId, copy(progress));
+        await new Promise((resolve) =>
+          setTimeout(resolve, window.DATAMOOV_PREVIEW_CHAT_STEP_MS || 600)
+        );
+        step.state = 'complete';
+        progress.updatedAt = Date.now();
+        if (input.requestId) chatProgress.set(input.requestId, copy(progress));
+      };
+      const finish = (reply) => {
+        progress.status = reply.failed ? 'failed' : 'complete';
+        progress.updatedAt = Date.now();
+        if (input.requestId) chatProgress.set(input.requestId, copy(progress));
+        return copy(reply);
+      };
+      await progressStep('Working on your request');
+      if (window.DATAMOOV_PREVIEW_CHAT_REPLY) return finish(window.DATAMOOV_PREVIEW_CHAT_REPLY);
+      if (/dashboard/i.test(text)) {
+        const saved = handlers.dmvSaveDashboard({
+          name: 'Performance dashboard',
+          sources: [{ label: 'Google Ads' }, { label: 'Facebook Ads' }],
+        });
+        await progressStep('Fetching dashboard sources');
+        const result = await handlers.dmvRunDashboard(saved.id);
+        const answer =
+          '**Dashboard created.**\n\n- Data tab: **' +
+          result.dataTarget.sheetName +
+          '**\n- Report tab: **' +
+          result.target.sheetName +
+          '**\n\nUse **Reports > Dashboards > Refresh dashboard** to fetch both sources and rebuild both tabs. (Sample preview data.)';
+        const events = [
+          { kind: 'dashboard', text: 'Saved dashboard with 2 sources.' },
+          { kind: 'write', text: 'Updated the data and report tabs.' },
+        ];
+        return finish({
+          text: answer,
+          events,
+          transcriptAppend: [
+            { role: 'user', text },
+            { role: 'assistant', text: answer, actions: events.map((event) => event.text) },
+          ],
+        });
+      }
       if (/which|\?$/i.test(text) && !/^Use /.test(text) && !/highest|chart/i.test(text)) {
-        return {
+        return finish({
           text: 'Which source do you mean?',
           events: [],
           options: ['Google Ads', 'Facebook Ads'],
@@ -571,8 +730,12 @@ function installPreview(initial) {
             { role: 'user', text },
             { role: 'assistant', text: 'Which source do you mean?', actions: [] },
           ],
-        };
+        });
       }
+      await progressStep('Fetching report data');
+      await progressStep('Summarizing data');
+      await progressStep('Writing to Sheets');
+      if (/chart/i.test(text)) await progressStep('Creating a chart');
       const events = [
         {
           kind: 'report',
@@ -587,8 +750,8 @@ function installPreview(initial) {
           text: 'Added a column chart "Spend by campaign" on Spend by campaign',
         });
       const answer =
-        'Brand search spent EUR 4,120.50, Summer collection EUR 2,310.00 and Remarketing EUR 980.25. The table is in Spend by campaign!A1:C7. (Google Ads, last 30 days; preview data)';
-      return {
+        '**Brand search** spent **EUR 4,120.50**, Summer collection EUR 2,310.00 and Remarketing EUR 980.25. The table is in Spend by campaign!A1:C7. (Google Ads, last 30 days; preview data)';
+      return finish({
         text: answer,
         events,
         options: null,
@@ -596,7 +759,7 @@ function installPreview(initial) {
           { role: 'user', text },
           { role: 'assistant', text: answer, actions: events.map((event) => event.text) },
         ],
-      };
+      });
     },
     dmvRunReport(id) {
       const report = data.reports.find((item) => item.id === id);
@@ -635,7 +798,14 @@ function installPreview(initial) {
                   throw new Error('Simulated request failure. Your form values are preserved.');
                 }
                 const result = handlers[name](...args);
-                if (success) success(result);
+                Promise.resolve(result).then(
+                  (value) => {
+                    if (success) success(value);
+                  },
+                  (error) => {
+                    if (failure) failure(error);
+                  }
+                );
               } catch (error) {
                 if (failure) failure(error);
               }

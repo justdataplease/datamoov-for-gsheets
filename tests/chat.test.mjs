@@ -321,7 +321,7 @@ test('describe_database lists the scoped tables, standing instructions reach the
   const warehouse = f.api.dmvSaveConnection({ connectorId: 'warehouse', label: 'Warehouse main', credentials: { chatSchemas: 'public, sales' } });
   const saved = f.api.dmvSaveAiSettings({ provider: 'anthropic', apiKey: '', instructions: '  Spend is in EUR.\nBrand campaigns start with BR_.  ' });
   assert.equal(saved.instructions, 'Spend is in EUR.\nBrand campaigns start with BR_.');
-  assert.throws(() => f.api.dmvSaveAiSettings({ provider: 'anthropic', apiKey: '', instructions: 'x'.repeat(4001) }), /too long/);
+  assert.throws(() => f.api.dmvSaveAiSettings({ provider: 'anthropic', apiKey: '', instructions: 'x'.repeat(100001) }), /too long/);
   f.state.responses.push(
     anthropic([toolUse('d1', 'describe_database', { connectionId: warehouse.id, search: 'orders' })], 'tool_use'),
     anthropic([toolUse('d2', 'describe_database', { connectionId: f.connection.id })], 'tool_use'),

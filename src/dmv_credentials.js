@@ -238,14 +238,8 @@ function dmvSaveCredential(input, deadline) {
     if (
       changed &&
       consumers.length &&
-      dmvList_('report').some(function (report) {
-        return (
-          report.runToken &&
-          Date.now() - report.startedAt < 300000 &&
-          consumers.some(function (connection) {
-            return connection.id === report.connectionId;
-          })
-        );
+      consumers.some(function (connection) {
+        return dmvConnectionInUse_(connection.id, true);
       })
     )
       throw new Error('Wait for the current refresh to finish before editing this credential.');

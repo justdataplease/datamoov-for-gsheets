@@ -1,3 +1,22 @@
+function dmvConnectionInUse_(id, activeOnly) {
+  function active(item) {
+    return !activeOnly || (item.runToken && Date.now() - item.startedAt < 300000);
+  }
+  return (
+    dmvList_('report').some(function (report) {
+      return report.connectionId === id && active(report);
+    }) ||
+    dmvList_('dashboard').some(function (dashboard) {
+      return (
+        active(dashboard) &&
+        (dashboard.sources || []).some(function (source) {
+          return source.connectionId === id;
+        })
+      );
+    })
+  );
+}
+
 /* Saved connections: a saved credential (or, for older connections, embedded secrets) plus the
    per-connection values. Secrets stay private to the Google user who entered them. */
 function dmvConnectionSummary_(connection) {
@@ -155,16 +174,7 @@ function dmvSaveConnection(input, deadline) {
     var previous = input.id ? dmvRead_('connection', input.id) : null;
     if (previous && previous.connectorId !== input.connectorId)
       throw new Error('Create a separate connection for a different source.');
-    if (
-      previous &&
-      dmvList_('report').some(function (report) {
-        return (
-          report.connectionId === previous.id &&
-          report.runToken &&
-          Date.now() - report.startedAt < 300000
-        );
-      })
-    )
+    if (previous && dmvConnectionInUse_(previous.id, true))
       throw new Error('Wait for the current refresh to finish before editing this connection.');
     if (!previous && dmvList_('connection').length >= DMV_LIMITS.maxConnections)
       throw new Error('Keep at most ' + DMV_LIMITS.maxConnections + ' connections in this app.');
@@ -198,13 +208,10 @@ function dmvSaveConnection(input, deadline) {
       dmvConnectionIdentityKeys_(connector).some(function (key) {
         return String(before[key] || '') !== String(credentials[key] || '');
       });
-    if (
-      selectionChanged &&
-      dmvList_('report').some(function (report) {
-        return report.connectionId === previous.id;
-      })
-    )
-      throw new Error('Create a new connection to change the account used by saved reports.');
+    if (selectionChanged && dmvConnectionInUse_(previous.id, false))
+      throw new Error(
+        'Create a new connection to change the account used by saved reports or dashboards.'
+      );
     // New or changed credentials are checked with the provider before they are saved, so a bad
     // key fails here instead of at the first scheduled refresh. Label-only edits skip the check.
     var verified = changed && (typeof connector.test === 'function' || !!connector.googleScopes);
@@ -277,12 +284,8 @@ function dmvRotateCredentials_(connection, patch) {
 function dmvDeleteConnection(id) {
   return dmvLocked_(function () {
     dmvRead_('connection', id);
-    if (
-      dmvList_('report').some(function (report) {
-        return report.connectionId === id;
-      })
-    )
-      throw new Error('Remove or update the reports using this connection first.');
+    if (dmvConnectionInUse_(id, false))
+      throw new Error('Remove or update the reports and dashboards using this connection first.');
     dmvStore_().deleteProperty(dmvKey_('connection', id));
     return { ok: true };
   });
