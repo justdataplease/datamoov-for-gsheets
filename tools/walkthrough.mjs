@@ -213,8 +213,9 @@ async function run() {
     show: true,
     mark: MARK,
     kicker: 'DataMoov for Google Sheets',
-    title: 'Stop building queries.',
-    text: 'Your marketing, database and CRM data in Sheets — and a chat that knows how to fetch it.',
+    title: 'Dont leave your beloved spreadsheet to get an answer.',
+    text: 'Ask the question where you already work.',
+    note: 'Marketing · CRM · Databases',
   });
   await pause(3400);
   await capture('title');

@@ -128,10 +128,13 @@ const page = `<!doctype html>
   .card .inner { display: grid; gap: 18px; justify-items: center; padding: 40px; }
   .card .tile { width: 108px; height: 108px; border-radius: 26px; background: var(--indigo);
     display: grid; place-items: center; box-shadow: 0 20px 50px -20px rgba(81,70,214,.9); }
-  .card h1 { margin: 0; font-size: 46px; font-weight: 700; letter-spacing: -.035em; }
-  .card p { margin: 0; font-size: 18px; color: #a9a9c4; max-width: 30ch; line-height: 1.5; }
+  .card h1 { margin: 0; font-size: 46px; font-weight: 700; letter-spacing: -.035em;
+    max-width: 17ch; line-height: 1.08; text-wrap: balance; }
+  .card p { margin: 0; font-size: 18px; color: #a9a9c4; max-width: 44ch; line-height: 1.5; }
+  .card .note { margin: 6px 0 0; font-size: 13px; letter-spacing: .14em;
+    text-transform: uppercase; color: #7a7a99; font-weight: 600; max-width: none; }
   .card .kicker { font-size: 11px; letter-spacing: .22em; text-transform: uppercase;
-    color: #7a7a99; font-weight: 600; }
+    color: #7a7a99; font-weight: 600; max-width: none; }
 </style></head>
 <body>
 <div class="app">
@@ -182,6 +185,7 @@ const page = `<!doctype html>
   <p class="kicker" id="card-kicker"></p>
   <h1 id="card-title"></h1>
   <p id="card-text"></p>
+  <p class="note" id="card-note"></p>
 </div></div>
 
 <script>
@@ -357,6 +361,9 @@ const page = `<!doctype html>
       document.getElementById('card-kicker').textContent = options.kicker || '';
       document.getElementById('card-title').textContent = options.title || '';
       document.getElementById('card-text').textContent = options.text || '';
+      var note = document.getElementById('card-note');
+      note.textContent = options.note || '';
+      note.hidden = !options.note;
       document.getElementById('card-tile').innerHTML = options.mark || '';
       node.classList.toggle('on', options.show !== false);
     },
