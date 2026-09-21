@@ -1,0 +1,193 @@
+<title>DataMoov Walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  /* A product demo commits to one dark world: screenshots are light, and they should
+     be the brightest thing on the page. */
+  :root {
+    --ground: #0d0d15;
+    --surface: #17172333;
+    --raised: #1b1b28;
+    --ink: #f2f2f8;
+    --muted: #9a9ab8;
+    --faint: #6a6a88;
+    --line: #262636;
+    --accent: #9b92ff;
+    --accent-deep: #5146d6;
+
+    --display: 'Bricolage Grotesque', 'Segoe UI', system-ui, sans-serif;
+    --body: 'Public Sans', 'Segoe UI', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  img, video { max-width: 100%; display: block; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding-inline: 20px; padding-block: 44px 80px; }
+  h1, h2, h3 { font-family: var(--display); margin: 0; text-wrap: balance; }
+
+  /* Hero ---------------------------------------------------------------- */
+  .brand { display: flex; align-items: center; gap: 11px; margin-bottom: 40px; }
+  .brand .tile { width: 34px; height: 34px; border-radius: 8px; background: var(--accent-deep);
+    color: #fff; display: grid; place-items: center; }
+  .brand .tile svg { width: 22px; height: 22px; }
+  .brand b { font-family: var(--display); font-size: 19px; font-weight: 800; letter-spacing: -.03em; }
+  .brand span { font-size: 12px; color: var(--faint); }
+
+  .hero h1 { font-size: clamp(2.4rem, 1.4rem + 3.6vw, 4.1rem); font-weight: 800;
+    letter-spacing: -.04em; line-height: .98; }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+  .hero .lede { font-size: clamp(1.05rem, .95rem + .5vw, 1.35rem); color: var(--muted);
+    max-width: 56ch; margin: 20px 0 0; }
+  .hero-shot { margin-top: 36px; border-radius: 12px; overflow: hidden;
+    border: 1px solid var(--line); box-shadow: 0 40px 90px -40px #000; }
+
+  /* Video --------------------------------------------------------------- */
+  .film { margin-top: 36px; }
+  .film video { width: 100%; border-radius: 12px; border: 1px solid var(--line);
+    background: #000; box-shadow: 0 40px 90px -40px #000; }
+  .film p { margin: 12px 0 0; font-size: 13px; color: var(--faint); }
+
+  /* Acts ---------------------------------------------------------------- */
+  .act { margin-top: 84px; }
+  .act-head { display: grid; grid-template-columns: auto 1fr; gap: 20px; align-items: start;
+    max-width: 74ch; }
+  .n { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--accent);
+    border: 1px solid var(--line); border-radius: 100px; padding: 5px 11px; margin-top: 6px; }
+  .kicker { font-family: var(--mono); font-size: 11px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--faint); margin: 0 0 8px; }
+  .act h2 { font-size: clamp(1.6rem, 1.2rem + 1.4vw, 2.3rem); font-weight: 700;
+    letter-spacing: -.03em; line-height: 1.1; }
+  .lede { color: var(--muted); margin: 12px 0 0; font-size: 1.02rem; }
+
+  .shots { display: grid; gap: 14px; margin-top: 30px; grid-template-columns: 1fr 1fr; }
+  .shots.three { grid-template-columns: repeat(3, 1fr); }
+  figure { margin: 0; }
+  figure img { border-radius: 9px; border: 1px solid var(--line); background: #fff;
+    box-shadow: 0 20px 46px -28px #000; }
+  figcaption { font-size: 12.5px; color: var(--faint); margin-top: 9px; line-height: 1.5; }
+
+  /* Facts ---------------------------------------------------------------- */
+  .facts { margin-top: 92px; padding-top: 34px; border-top: 1px solid var(--line); }
+  .facts h2 { font-size: 1.5rem; font-weight: 700; letter-spacing: -.02em; }
+  .facts p.sub { color: var(--muted); margin: 8px 0 26px; max-width: 60ch; }
+  .fact-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+    background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .fact { background: var(--raised); padding: 20px 18px; }
+  .fact h3 { font-size: .95rem; font-weight: 700; letter-spacing: -.01em; }
+  .fact p { margin: 7px 0 0; font-size: 13.5px; color: var(--muted); line-height: 1.6; }
+
+  footer { margin-top: 64px; padding-top: 22px; border-top: 1px solid var(--line);
+    display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 13px; color: var(--faint); }
+  footer code { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+  @media (max-width: 860px) {
+    .shots, .shots.three { grid-template-columns: 1fr; }
+    .fact-grid { grid-template-columns: 1fr; }
+    .act-head { grid-template-columns: 1fr; gap: 10px; }
+    .n { justify-self: start; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <div class="brand">
+    <span class="tile"><svg viewBox="0 0 24 24" aria-hidden="true">
+  <path fill="currentColor" opacity=".6" d="M2.405 21.75L4.955 21.75C5.369 21.75 5.705 21.414 5.705 21L5.705 11.5C5.705 11.086 5.369 10.75 4.955 10.75L3.148 10.75C2.778 10.75 2.463 11.02 2.407 11.385C1.915 14.569 1.655 17.779 1.655 21C1.655 21.414 1.991 21.75 2.405 21.75Z"/>
+  <path fill="currentColor" opacity=".6" d="M8.953 21.75L11.492 21.75C11.87 21.75 12.19 21.468 12.236 21.092L13.922 7.382C13.977 6.934 13.629 6.54 13.178 6.54L11.42 6.54C11.072 6.54 10.77 6.78 10.69 7.119C9.618 11.683 8.781 16.255 8.209 20.908C8.154 21.356 8.502 21.75 8.953 21.75Z"/>
+  <path fill="currentColor" d="M15.47 21.75L17.99 21.75C18.348 21.75 18.655 21.498 18.726 21.147L22.326 3.147C22.418 2.683 22.063 2.25 21.59 2.25L19.87 2.25C19.535 2.25 19.241 2.471 19.149 2.793C17.442 8.738 15.947 14.788 14.734 20.853C14.642 21.317 14.997 21.75 15.47 21.75Z"/>
+</svg></span>
+    <b>DataMoov</b><span>for Google Sheets · by JustDataPlease</span>
+  </div>
+
+  <header class="hero">
+    <h1>Dont leave your<br><em>beloved spreadsheet</em><br>to get an answer.</h1>
+    <p class="lede">Ask the question where you already work. The numbers arrive as a tab you can send on — not a paragraph in another window you had to go and set up.</p>
+    <!-- The video carries this shot as its poster; showing it twice is just repetition. -->
+  </header>
+
+  <div class="film">
+    <video controls playsinline preload="metadata" poster="11-dashboard.webp">
+      <source src="datamoov-walkthrough.mp4" type="video/mp4">
+    </video>
+    <p>The full walkthrough — connect, build, ask, and a dashboard from one sentence. Sample data throughout; no provider or spreadsheet is contacted.</p>
+  </div>
+
+  
+  <section class="act">
+    <div class="act-head">
+      <span class="n">01</span>
+      <div>
+        <p class="kicker">Connect</p>
+        <h2>One account, once.</h2>
+        <p class="lede">Pick a source and DataMoov tells you exactly where its credentials come from, with links straight to the right console. It tests the connection before it saves it, and the credential is reused by every connection that needs it.</p>
+      </div>
+    </div>
+    <div class="shots">
+      <figure><img src="02-connections.webp" alt="Every connected source carries its own official mark." loading="lazy" width="1400"><figcaption>Every connected source carries its own official mark.</figcaption></figure><figure><img src="03-credentials-guide.webp" alt="Each source explains where its credentials come from." loading="lazy" width="1400"><figcaption>Each source explains where its credentials come from.</figcaption></figure>
+    </div>
+  </section>
+  <section class="act">
+    <div class="act-head">
+      <span class="n">02</span>
+      <div>
+        <p class="kicker">Build</p>
+        <h2>The familiar way still works.</h2>
+        <p class="lede">Source, account, report, date range, columns, destination. Preview the rows before a single cell is touched. Then a refresh — daily, hourly or on demand — replaces exactly the cells that report wrote last time and leaves every other cell alone.</p>
+      </div>
+    </div>
+    <div class="shots three">
+      <figure><img src="04-report-builder.webp" alt="Source, account, report, dates, columns, destination." loading="lazy" width="1400"><figcaption>Source, account, report, dates, columns, destination.</figcaption></figure><figure><img src="05-report-preview.webp" alt="Preview the rows before anything is written." loading="lazy" width="1400"><figcaption>Preview the rows before anything is written.</figcaption></figure><figure><img src="06-report-written.webp" alt="The rows land in the tab you named." loading="lazy" width="1400"><figcaption>The rows land in the tab you named.</figcaption></figure>
+    </div>
+  </section>
+  <section class="act">
+    <div class="act-head">
+      <span class="n">03</span>
+      <div>
+        <p class="kicker">Or skip it</p>
+        <h2>Just ask.</h2>
+        <p class="lede">A question in plain language runs a real report to answer it — the same validation, the same fetcher, the same writer. You see every step it took, the answer sits in the chat, and the table lands in its own tab.</p>
+      </div>
+    </div>
+    <div class="shots">
+      <figure><img src="09-chat-typed.webp" alt="Ask in plain language." loading="lazy" width="1400"><figcaption>Ask in plain language.</figcaption></figure><figure><img src="10-chat-answer.webp" alt="The answer in chat, the table in the sheet, every step shown." loading="lazy" width="1400"><figcaption>The answer in chat, the table in the sheet, every step shown.</figcaption></figure>
+    </div>
+  </section>
+  <section class="act">
+    <div class="act-head">
+      <span class="n">04</span>
+      <div>
+        <p class="kicker">Dashboards</p>
+        <h2>Ask for the whole thing.</h2>
+        <p class="lede">One sentence produces a saved plan: datasets, scorecards, tables and native Sheets charts. Refresh rebuilds all of it — every tab it owns, data and charts together — without calling the model again.</p>
+      </div>
+    </div>
+    <div class="shots">
+      <figure><img src="11-dashboard.webp" alt="Scorecards, tables and native Sheets charts." loading="lazy" width="1400"><figcaption>Scorecards, tables and native Sheets charts.</figcaption></figure><figure><img src="12-dashboard-card.webp" alt="The saved dashboard lists every tab it owns." loading="lazy" width="1400"><figcaption>The saved dashboard lists every tab it owns.</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="facts">
+    <h2>What holds it together</h2>
+    <p class="sub">
+      A reporting tool earns trust by what it refuses to do. These are the guarantees the
+      implementation actually makes.
+    </p>
+    <div class="fact-grid">
+      <div class="fact"><h3>No backend</h3><p>DataMoov has no servers. Every request goes from your spreadsheet straight to the service you connected.</p></div><div class="fact"><h3>Your credentials</h3><p>You bring your own service account, OAuth client or token. Keys are stored in your Google account and never returned to the browser.</p></div><div class="fact"><h3>Four scopes</h3><p>The add-on asks only for spreadsheets, external requests, triggers and the sidebar — no Google API scope for any provider.</p></div><div class="fact"><h3>Nothing half-written</h3><p>A report is fetched and validated in full before one atomic write. Too large for one run, and it pauses and resumes itself.</p></div><div class="fact"><h3>Your edits win</h3><p>A refresh verifies the cells it wrote last time. Edit one inside that range and DataMoov stops rather than overwrite you.</p></div><div class="fact"><h3>Private by default</h3><p>Reports, dashboards, schedules and connections are private to you. Sharing the spreadsheet shares the output, nothing else.</p></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Recorded from the local preview with sample data.</span>
+    <span>justdataplease.com</span>
+  </footer>
+</div>
