@@ -2,13 +2,13 @@
 
 **Privacy first.** DataMoov has no backend that collects or stores data from your connected accounts. Report output lives in your spreadsheet; credentials and temporary processing state are stored in your own Google account. Requests go to your configured source providers, and optional AI chat sends selected data and context to the AI provider you choose.
 
-A free (for personal and noncommercial use) alternative to Supermetrics that runs in Google Apps Script, with the source available here. Pull Google Ads (including YouTube), Facebook Ads, LinkedIn Ads, Microsoft Ads, GA4, Search Console, HubSpot, Zendesk, PostgreSQL, BigQuery, Snowflake and GitHub data into a tab, keep it fresh on a schedule, or ask for it in plain language and let the chat write the table and the chart.
+A free (for personal and commercial use) alternative to Supermetrics that runs in Google Apps Script, with the source available here. Pull Google Ads (including YouTube), Facebook Ads, LinkedIn Ads, Microsoft Ads, GA4, Search Console, HubSpot, Zendesk, PostgreSQL, BigQuery, Snowflake and GitHub data into a tab, keep it fresh on a schedule, or ask for it in plain language and let the chat write the table and the chart.
 
 Created with ♥ by [justdataplease.com](https://justdataplease.com).
 
 ## Google Workspace Marketplace™ overview
 
-**Short description:** Privacy-first Google Sheets™ connectors and AI reporting. Free for personal and noncommercial use.
+**Short description:** Privacy-first Google Sheets™ connectors and AI reporting. Free for personal and commercial use.
 
 DataMoov puts privacy first: no DataMoov server collects or stores data from your connected accounts. Reports live in your spreadsheet, while credentials and temporary results stay in your own Google storage. Build reports in the sidebar, preview your data, choose an output tab and refresh on demand or on an hourly, daily or weekly schedule.
 
@@ -21,7 +21,7 @@ DataMoov puts privacy first: no DataMoov server collects or stores data from you
 
 DataMoov runs in Google Apps Script™ with no telemetry. It uses your own Google storage for private credentials, cached results and continuation checkpoints. Bring your own provider token, service account or OAuth credentials; setup guides are included. Chat sends your prompts, relevant connection and report metadata, column names, statistics, row samples and aggregates to your chosen AI provider. Results of 20 rows or fewer may be sent whole. Provider credentials are not included in model messages.
 
-The add-on requests spreadsheet access to read and write reports, external requests to contact configured providers, trigger access for schedules, and permission to display its sidebar. Provider access and configuration are required; refresh times depend on Google triggers and quotas. AI and source-provider charges may apply. Free for personal and noncommercial use; commercial use requires permission.
+The add-on requests spreadsheet access to read and write reports, external requests to contact configured providers, trigger access for schedules, and permission to display its sidebar. Provider access and configuration are required; refresh times depend on Google triggers and quotas. AI and source-provider charges may apply. Free for personal and commercial use.
 
 Google Sheets™, Google Ads™, YouTube™, Google Analytics™, Google Search Console™, BigQuery™, Gemini™, Google Apps Script™ and Google Workspace Marketplace™ are trademarks of Google LLC.
 
