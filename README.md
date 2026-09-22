@@ -1,4 +1,4 @@
-# DataMoov for Google Sheets
+# DataMoov for Google Sheets™
 
 **Privacy first.** DataMoov has no backend that collects or stores data from your connected accounts. Report output lives in your spreadsheet; credentials and temporary processing state are stored in your own Google account. Requests go to your configured source providers, and optional AI chat sends selected data and context to the AI provider you choose.
 
@@ -6,22 +6,24 @@ A free (for personal and noncommercial use) alternative to Supermetrics that run
 
 Created with ♥ by [justdataplease.com](https://justdataplease.com).
 
-## Google Workspace Marketplace overview
+## Google Workspace Marketplace™ overview
 
-**Short description:** Privacy-first Google Sheets connectors and AI reporting. Free for personal and noncommercial use.
+**Short description:** Privacy-first Google Sheets™ connectors and AI reporting. Free for personal and noncommercial use.
 
 DataMoov puts privacy first: no DataMoov server collects or stores data from your connected accounts. Reports live in your spreadsheet, while credentials and temporary results stay in your own Google storage. Build reports in the sidebar, preview your data, choose an output tab and refresh on demand or on an hourly, daily or weekly schedule.
 
-- **Connect your sources:** Google Ads (including YouTube campaigns), Facebook Ads, LinkedIn Ads, Microsoft Ads, Google Analytics 4, Search Console, HubSpot, Zendesk, PostgreSQL, BigQuery, Snowflake and GitHub.
-- **Choose the report you need:** Select accounts, dates and columns, discover supported custom fields, or use read-only SQL for PostgreSQL, BigQuery and Snowflake.
-- **Protect your spreadsheet:** DataMoov validates the complete report before updating output and stops if someone edited or moved its previous results. Reports support up to 20,000 rows within provider and Apps Script limits.
+- **Connect your sources:** Google Ads™ (including YouTube™ campaigns), Facebook Ads, LinkedIn Ads, Microsoft Ads, Google Analytics™ 4, Google Search Console™, HubSpot, Zendesk, PostgreSQL, BigQuery™, Snowflake and GitHub.
+- **Choose the report you need:** Select accounts, dates and columns, discover supported custom fields, or use read-only SQL for PostgreSQL, BigQuery™ and Snowflake.
+- **Protect your spreadsheet:** DataMoov validates the complete report before updating output and stops if someone edited or moved its previous results. Reports support up to 20,000 rows within provider and Google Apps Script™ limits.
 - **Share report setups:** Definitions travel with the spreadsheet, including SQL and other report settings. Each collaborator supplies their own connection and approves their own schedules; credentials and refresh state remain private.
-- **Ask questions and create charts:** Optional chat uses your own Anthropic, OpenAI or Google Gemini API key to summarize data, combine platform reports, write tables and add native Sheets charts. Ask for last month's spend, clicks and impressions by week or campaign across your connected advertising accounts. Currency totals remain separate.
+- **Ask questions and create charts:** Optional chat uses your own Anthropic, OpenAI or Google Gemini™ API key to summarize data, combine platform reports, write tables and add native Google Sheets™ charts. Ask for last month's spend, clicks and impressions by week or campaign across your connected advertising accounts. Currency totals remain separate.
 - **Build refreshable dashboards in Chat:** Ask for a performance dashboard. Chat fetches each dataset into its own tab and builds a Dashboard tab with scorecards, native charts and the tables behind them, with the data sources printed in the sheet. Refresh everything later from the sidebar without another AI call. Live actions, dataset names and links to every tab make each step visible.
 
-DataMoov runs in Google Apps Script with no telemetry. It uses your own Google storage for private credentials, cached results and continuation checkpoints. Bring your own provider token, service account or OAuth credentials; setup guides are included. Chat sends your prompts, relevant connection and report metadata, column names, statistics, row samples and aggregates to your chosen AI provider. Results of 20 rows or fewer may be sent whole. Provider credentials are not included in model messages.
+DataMoov runs in Google Apps Script™ with no telemetry. It uses your own Google storage for private credentials, cached results and continuation checkpoints. Bring your own provider token, service account or OAuth credentials; setup guides are included. Chat sends your prompts, relevant connection and report metadata, column names, statistics, row samples and aggregates to your chosen AI provider. Results of 20 rows or fewer may be sent whole. Provider credentials are not included in model messages.
 
 The add-on requests spreadsheet access to read and write reports, external requests to contact configured providers, trigger access for schedules, and permission to display its sidebar. Provider access and configuration are required; refresh times depend on Google triggers and quotas. AI and source-provider charges may apply. Free for personal and noncommercial use; commercial use requires permission.
+
+Google Sheets™, Google Ads™, YouTube™, Google Analytics™, Google Search Console™, BigQuery™, Gemini™, Google Apps Script™ and Google Workspace Marketplace™ are trademarks of Google LLC.
 
 ## Why DataMoov
 
