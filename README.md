@@ -88,14 +88,14 @@ A client ID and secret alone do not grant account access: the refresh token must
 
 You remain responsible for the OAuth client's Cloud project and API access. Google Ads needs production API access (Explorer or higher) approved for that project, plus advertising-account permission for the authorized identity. A legacy developer token is optional. Enable the relevant GA4, BigQuery or Search Console APIs in the credentials' Cloud project. Microsoft Ads needs a developer token and a Microsoft OAuth app with the `msads.manage` scope. PostgreSQL needs a trusted TLS certificate, a read-only role, and network access from Google's IP ranges. Snowflake uses your account hostname, a role limited to reading the required tables, and a programmatic access token or a pasted OAuth token; its network policy must permit Apps Script requests. See [marketing setup](docs/marketing-connectors.md) and [business connectors](docs/business-connectors.md).
 
-The sidebar has four tabs: **Reports** (the list, with the builder behind the + button), **Chat**, **Connections** (the list, with the editor behind +) and **Settings** (AI provider and credentials). Google Sheets sidebars are 300 px wide; **Extensions → DataMoov → Open DataMoov in a window** (or the ⤡ button in the header) opens the same UI in a larger window that leaves the sheet usable.
+The sidebar has four tabs: **Reports** (the list, with the builder behind the + button), **Chat**, **Connections** (the list, with the editor behind +) and **Settings** (AI provider and credentials). Google Sheets sidebars are 300 px wide; **Extensions → DataMoov → Launch Window** (or the ⤡ button in the header) opens the same UI in a larger window that leaves the sheet usable.
 
 ## Install in your spreadsheet
 
 1. Open the spreadsheet you want to report into and choose **Extensions → Apps Script**. Name the project **DataMoov**: the project name is what appears in the Extensions menu.
 2. Copy every file under `src/` into the project, keeping the same names. Files under `src/connectors/` become `connectors/<name>`. Replace the manifest with `src/appsscript.json` (enable **Show "appsscript.json" manifest file** in project settings).
 3. Turn on the **Google Sheets API** advanced service if the editor asks for it, then reload the spreadsheet.
-4. Choose **Extensions → DataMoov → Open DataMoov**, grant the requested permissions, add a connection, and build your first report.
+4. Choose **Extensions → DataMoov → Launch Sidebar**, grant the requested permissions, add a connection, and build your first report.
 
 Developers can instead push with [clasp](https://github.com/google/clasp): run `npm ci --ignore-scripts`, `npm run login`, then `DATAMOOV_DEV_SPREADSHEET_ID=<your spreadsheet id> node tools/create-dev.mjs` once and `npm run push:dev` for each release. For a production spreadsheet, record it in `data/production-project.json` with `"production": true` and run `npm run push:prod` with `DATAMOOV_CONFIRM=<scriptId>`.
 

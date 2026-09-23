@@ -3,8 +3,8 @@ function onOpen(e) {
   // Add-ons open before authorization (AuthMode.NONE), so only the Extensions menu is built here.
   SpreadsheetApp.getUi()
     .createAddonMenu()
-    .addItem('Open DataMoov', 'showSidebar')
-    .addItem('Open DataMoov in a window', 'showWindow')
+    .addItem('Launch Sidebar', 'showSidebar')
+    .addItem('Launch Window', 'showWindow')
     .addToUi();
 }
 

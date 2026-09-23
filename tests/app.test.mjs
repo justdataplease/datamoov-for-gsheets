@@ -147,8 +147,8 @@ test('open and install entry points build the Extensions add-on menu with existi
   for (const menu of menus) {
     assert.equal(menu.added, true);
     assert.deepEqual(menu.items, [
-      { label: 'Open DataMoov', handler: 'showSidebar' },
-      { label: 'Open DataMoov in a window', handler: 'showWindow' },
+      { label: 'Launch Sidebar', handler: 'showSidebar' },
+      { label: 'Launch Window', handler: 'showWindow' },
     ]);
     for (const item of menu.items) assert.equal(typeof app[item.handler], 'function', item.handler);
   }
