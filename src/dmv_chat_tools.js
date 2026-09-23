@@ -1251,6 +1251,17 @@ function dmvChatCreateChart_(session, input) {
   if (!type)
     throw new Error('chartType must be one of: ' + Object.keys(DMV_CHART_TYPES).join(', '));
   var area = input.resultId ? session.written[input.resultId] : null;
+  if (input.resultId && !area) {
+    var writtenIds = Object.keys(session.written);
+    throw new Error(
+      'resultId ' +
+        String(input.resultId).slice(0, 80) +
+        ' is not a table written by write_to_sheet in this chat. ' +
+        (writtenIds.length
+          ? 'Written resultIds: ' + writtenIds.join(', ') + '.'
+          : 'Call write_to_sheet first, or pass sheetName plus range.')
+    );
+  }
   if (!area) {
     var sheetName = dmvSheetName_(input.sheetName);
     var sheet = dmvChatSheetTarget_(session, sheetName);

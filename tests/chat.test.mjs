@@ -246,6 +246,19 @@ test('read_sheet types columns from the user tab, discover_fields filters by sea
   assert.deepEqual(f.state.charts[0].spec.pieChart.domain.sourceRange.sources[0], { sheetId: sheet.id, startRowIndex: 1, endRowIndex: 3, startColumnIndex: 4, endColumnIndex: 5 });
   assert.throws(() => f.api.dmvChatCreateChart_(session, { sheetName: 'Output', range: 'E1:G3', chartType: 'line', xColumn: 'Month', seriesColumns: ['Missing'] }), /Unknown series column "Missing"\. Result columns are: Month, Orders, Note/);
   assert.throws(() => f.api.dmvChatCreateChart_(session, { resultId: read.resultId, chartType: 'pie', xColumn: 'Month', seriesColumns: ['orders', 'note'] }), /exactly one series/);
+  assert.throws(() => f.api.dmvChatCreateChart_(session, { resultId: 'r_unknown', chartType: 'bar', xColumn: 'Month', seriesColumns: ['orders'] }), new RegExp('resultId r_unknown is not a table written by write_to_sheet in this chat\. Written resultIds: ' + read.resultId + '\.'));
+  assert.throws(() => f.api.dmvChatCreateChart_(f.api.dmvChatSession_(f.book), { resultId: 'r_unknown', chartType: 'bar', xColumn: 'Month', seriesColumns: ['orders'] }), /Call write_to_sheet first/);
+  const tools = f.api.dmvChatTools_(session);
+  const failedChart = f.api.dmvChatRunTool_(session, tools, { name: 'create_chart', id: 'c1', input: { resultId: 'r_unknown', chartType: 'bar', xColumn: 'Month', seriesColumns: ['orders'] } });
+  assert.equal(failedChart.isError, true);
+  const errorEvent = session.events.find((event) => event.kind === 'error');
+  assert.equal(errorEvent.tool, 'create_chart');
+  assert.equal(errorEvent.recovered, undefined);
+  f.api.dmvChatRunTool_(session, tools, { name: 'read_sheet', id: 'r2', input: { sheetName: 'Output' } });
+  assert.equal(errorEvent.recovered, undefined, 'a different tool succeeding does not clear the failure');
+  const retried = f.api.dmvChatRunTool_(session, tools, { name: 'create_chart', id: 'c2', input: { resultId: read.resultId, chartType: 'bar', xColumn: 'Month', seriesColumns: ['orders'], anchorCell: 'I20' } });
+  assert.equal(retried.isError, false);
+  assert.equal(errorEvent.recovered, true, 'a successful retry of the same tool marks the failure recovered');
 });
 
 test('OpenAI and Gemini adapters translate tools, tool calls and tool results into their own shapes', () => {

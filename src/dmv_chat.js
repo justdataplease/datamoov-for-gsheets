@@ -772,7 +772,12 @@ function dmvChatRunTool_(session, tools, call) {
     return { content: JSON.stringify({ error: 'Unknown tool ' + call.name + '.' }), isError: true };
   var eventOffset = session.events.length;
   try {
-    return { content: dmvChatToolResult_(tool.run(session, call.input)), isError: false };
+    var content = dmvChatToolResult_(tool.run(session, call.input));
+    // A later success of the same tool means the model corrected its earlier failed call.
+    session.events.forEach(function (event) {
+      if (event.kind === 'error' && event.tool === call.name) event.recovered = true;
+    });
+    return { content: content, isError: false };
   } catch (error) {
     var message = dmvSafeError_(error, {});
     if (
@@ -782,7 +787,7 @@ function dmvChatRunTool_(session, tools, call) {
       })
     )
       session.events.push({ kind: 'write', text: 'The spreadsheet was updated. ' + message });
-    session.events.push({ kind: 'error', text: call.name + ': ' + message });
+    session.events.push({ kind: 'error', tool: call.name, text: call.name + ': ' + message });
     return { content: JSON.stringify({ error: message }), isError: true };
   }
 }

@@ -325,6 +325,30 @@ test('a failed first request can be cleared with New chat', async ({ page }) => 
   await expect(page.locator('#chat-new')).toBeHidden();
 });
 
+test('a failed step the model retried successfully is reported as recovered', async ({ page }) => {
+  await configuredChat(page);
+  await controlledChat(page);
+  await send(page, 'Chart the report');
+  await page.evaluate(() =>
+    window.chatProbe.chats[0].succeed({
+      text: 'Chart added.',
+      events: [
+        { kind: 'write', text: 'Wrote 50 rows' },
+        { kind: 'error', tool: 'create_chart', recovered: true, text: 'create_chart: bad id' },
+        { kind: 'chart', text: 'Added a bar chart' },
+      ],
+      transcriptAppend: [],
+    })
+  );
+  const summary = page.locator('.chat-actions summary');
+  await expect(summary).toHaveText('Actions · Recovered from 1 failed step');
+  await expect(summary).not.toHaveClass(/error/);
+  await expect(page.locator('.chat-events li.error')).toHaveCount(0);
+  await expect(page.locator('.chat-events li').nth(1)).toHaveText(
+    'create_chart: bad id (retried successfully)'
+  );
+});
+
 test('unsaved AI settings survive bootstrap refresh and reopening Settings', async ({ page }) => {
   await configuredChat(page);
   await page.locator('#chat-settings-toggle').click();

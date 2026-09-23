@@ -400,7 +400,9 @@
       }
       if (extra.events?.length) {
         const debug = chat.ai?.debug !== false;
-        const failed = extra.error || extra.events.some((event) => event.kind === 'error');
+        const errors = extra.events.filter((event) => event.kind === 'error');
+        const failed = extra.error || errors.some((event) => !event.recovered);
+        const recovered = failed ? 0 : errors.length;
         const written = extra.events.some(
           (event) => event.kind === 'write' || event.kind === 'chart'
         );
@@ -412,12 +414,21 @@
             failed ? 'error' : '',
             (debug ? 'Actions' : 'Action details') +
               (failed ? ' \u00b7 Some actions failed' : '') +
+              (recovered
+                ? ' \u00b7 Recovered from ' +
+                  recovered +
+                  (recovered === 1 ? ' failed step' : ' failed steps')
+                : '') +
               (failed && written ? ' \u00b7 Sheet updated' : '')
           );
           actions.append(summary);
           const list = el('ul', 'chat-events');
           for (const event of extra.events) {
-            const item = el('li', event.kind === 'error' ? 'error' : '', event.text);
+            const item = el(
+              'li',
+              event.kind === 'error' && !event.recovered ? 'error' : '',
+              event.text + (event.recovered ? ' (retried successfully)' : '')
+            );
             list.append(item);
           }
           actions.append(list);
