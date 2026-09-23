@@ -7,7 +7,7 @@ network destination is the AI provider you configure.
 
 ## Setup
 
-1. Open **Extensions → DataMoov → Launch Sidebar**, choose **Settings** (the Chat tab points
+1. Open **Extensions → DataMoov → Open**, choose **Settings** (the Chat tab points
    there until a key is saved).
 2. Under **AI provider** pick Anthropic, OpenAI or Google Gemini, paste an API key from your
    own account, keep or change the model name, then **Save** and **Test**. The card collapses

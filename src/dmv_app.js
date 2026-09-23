@@ -1,11 +1,7 @@
 /** Entry points. Runs as a Google Workspace Marketplace add-on or as a script bound to one spreadsheet. */
 function onOpen(e) {
   // Add-ons open before authorization (AuthMode.NONE), so only the Extensions menu is built here.
-  SpreadsheetApp.getUi()
-    .createAddonMenu()
-    .addItem('Launch Sidebar', 'showSidebar')
-    .addItem('Launch Window', 'showWindow')
-    .addToUi();
+  SpreadsheetApp.getUi().createAddonMenu().addItem('Open', 'showSidebar').addToUi();
 }
 
 function onInstall(e) {
