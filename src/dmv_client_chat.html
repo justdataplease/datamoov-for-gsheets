@@ -411,7 +411,7 @@
           actions.open = debug;
           const summary = el(
             'summary',
-            failed ? 'error' : '',
+            failed ? 'error' : recovered ? 'recovered' : '',
             (debug ? 'Actions' : 'Action details') +
               (failed ? ' \u00b7 Some actions failed' : '') +
               (recovered

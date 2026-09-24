@@ -342,7 +342,8 @@ test('a failed step the model retried successfully is reported as recovered', as
   );
   const summary = page.locator('.chat-actions summary');
   await expect(summary).toHaveText('Actions · Recovered from 1 failed step');
-  await expect(summary).not.toHaveClass(/error/);
+  await expect(summary).toHaveClass(/recovered/);
+  await expect(summary).toHaveCSS('color', 'rgb(35, 119, 83)');
   await expect(page.locator('.chat-events li.error')).toHaveCount(0);
   await expect(page.locator('.chat-events li').nth(1)).toHaveText(
     'create_chart: bad id (retried successfully)'
