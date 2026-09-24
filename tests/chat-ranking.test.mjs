@@ -75,7 +75,7 @@ test('ranking rejects incomplete controls, unknown or duplicate partitions, and 
   for (const patch of [
     { rankWithin: undefined }, { limitPerGroup: undefined }, { rankWithin: [] },
     { rankWithin: ['spend'] }, { rankWithin: ['missing'] }, { rankWithin: ['date', 'date'] },
-    { limitPerGroup: 0 }, { limitPerGroup: 20001 }, { limitPerGroup: 1.5 },
+    { limitPerGroup: 0 }, { limitPerGroup: 30001 }, { limitPerGroup: 1.5 },
     { orderBy: undefined }, { orderBy: { field: 'campaign', direction: 'desc' } },
   ]) assert.throws(() => f.api.dmvChatSummarize_(f.session, { ...f.input, ...patch }), /rankWithin|limitPerGroup|Ranking/);
 });

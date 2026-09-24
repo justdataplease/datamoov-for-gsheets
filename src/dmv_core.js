@@ -1,8 +1,8 @@
 /* DataMoov's shared report contract. Provider behavior lives in connectors/. */
 var DMV_CONNECTORS;
 var DMV_LIMITS = {
-  maxRows: 20000,
-  defaultRows: 1000,
+  maxRows: 30000,
+  defaultRows: 10000,
   // Chat fetches whole accounts and aggregates server-side, so its initial cap is higher.
   chatDefaultRows: 10000,
   maxColumns: 80,

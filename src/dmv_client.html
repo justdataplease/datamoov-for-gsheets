@@ -10,7 +10,7 @@
       credentialId: null,
       reports: [],
       dashboards: [],
-      limits: { maxRows: 20000, defaultRows: 1000 },
+      limits: { maxRows: 30000, defaultRows: 10000 },
       reportId: null,
       connectionId: null,
       connectionReturnTo: 'connections',
@@ -1388,7 +1388,7 @@
       $('save-report').textContent = 'Save report';
       fillProviders($('report-provider'), connectorId);
       $('row-limit').value = state.limits.defaultRows || 1000;
-      $('row-limit').max = state.limits.maxRows || 20000;
+      $('row-limit').max = state.limits.maxRows || 30000;
       $('target-sheet').value = state.target?.sheetName || 'DataMoov report';
       $('target-cell').value = state.target?.startCell || 'A1';
       changeProvider();

@@ -84,7 +84,7 @@ test('editing a connection retains blank saved secrets and replaces explicitly s
 test('validation rejects invalid config, duplicate fields, dates and limits before provider execution', () => {
   const f = fixture();
   for (const overrides of [
-    { config: {} }, { fields: ['count', 'count'] }, { maxRows: 0 }, { maxRows: 20001 },
+    { config: {} }, { fields: ['count', 'count'] }, { maxRows: 0 }, { maxRows: 30001 },
     { target: { sheetName: 'Bad/name', startCell: 'A1' } },
     { dateRange: { preset: 'custom', startDate: '2026-02-30', endDate: '2026-03-01' } },
     { dateRange: { preset: 'custom', startDate: '2026-09-03', endDate: '2026-09-01' } },

@@ -8,7 +8,7 @@ var DMV_CHAT_RESULTS = {
   sampleHead: 5,
   sampleTail: 3,
   inlineRows: 20,
-  maxSummaryRows: 20000,
+  maxSummaryRows: 30000,
   readMaxRows: 500,
   maxDescribedTables: 60,
   readMaxColumns: 30,
@@ -237,7 +237,9 @@ function dmvChatRunReport_(session, input) {
     throw new Error(
       'Choose a whole-number row limit between 1 and ' +
         configuredRows.toLocaleString() +
-        '. Increase Maximum rows per chat report under Settings > AI provider when needed (up to 20,000).'
+        '. Increase Maximum rows per chat report under Settings > AI provider when needed (up to ' +
+        DMV_LIMITS.maxRows.toLocaleString() +
+        ').'
     );
   var query;
   try {
@@ -578,7 +580,11 @@ function dmvChatCombine_(session, input, minimum) {
       });
     }
     if (rows.length + result.rows.length > DMV_LIMITS.maxRows)
-      throw new Error('Combined results exceed 20,000 rows. Narrow each report first.');
+      throw new Error(
+        'Combined results exceed ' +
+          DMV_LIMITS.maxRows.toLocaleString() +
+          ' rows. Narrow each report first.'
+      );
     result.rows.forEach(function (original) {
       var row = { source: label };
       mapping.forEach(function (entry) {
@@ -798,7 +804,7 @@ function dmvChatSummarize_(session, input) {
         }),
       };
       order.push(id);
-      if (order.length > 20000)
+      if (order.length > DMV_CHAT_RESULTS.maxSummaryRows)
         throw new Error('Too many groups. Add filters or fewer groupBy columns.');
     }
     group.count++;
@@ -1243,6 +1249,28 @@ var DMV_CHART_TYPES = {
   pie: 'PIE',
 };
 
+// A new chart without an explicit anchor goes below the charts already beside the table,
+// so asking for a different chart never hides an earlier one.
+function dmvChatFreeChartAnchor_(session, sheetId, anchor) {
+  var response = Sheets.Spreadsheets.get(session.spreadsheetId, {
+    fields: 'sheets(properties.sheetId,charts(chartId,position))',
+  });
+  var row = anchor.row;
+  ((response && response.sheets) || []).forEach(function (item) {
+    if (!item.properties || item.properties.sheetId !== sheetId) return;
+    (item.charts || []).forEach(function (chart) {
+      var overlay = chart.position && chart.position.overlayPosition;
+      if (!overlay || !overlay.anchorCell) return;
+      var column = (overlay.anchorCell.columnIndex || 0) + 1;
+      // A 600px chart spans about six default columns; others sit elsewhere on the tab.
+      if (column < anchor.column - 5 || column > anchor.column + 5) return;
+      var height = (overlay.offsetYPixels || 0) + (overlay.heightPixels || 360);
+      row = Math.max(row, (overlay.anchorCell.rowIndex || 0) + 1 + Math.ceil(height / 21) + 1);
+    });
+  });
+  return { row: row, column: anchor.column };
+}
+
 function dmvChatCreateChart_(session, input) {
   input = input || {};
   if (input.includeFutureRows !== undefined && typeof input.includeFutureRows !== 'boolean')
@@ -1367,6 +1395,7 @@ function dmvChatCreateChart_(session, input) {
       throw new Error(
         'The chart source tab changed. Read or write the table again before charting.'
       );
+    if (!input.anchorCell) anchor = dmvChatFreeChartAnchor_(session, area.sheetId, anchor);
     return Sheets.Spreadsheets.batchUpdate(
       {
         requests: [

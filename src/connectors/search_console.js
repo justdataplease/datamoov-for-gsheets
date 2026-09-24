@@ -37,44 +37,51 @@ function dmvSearchConsoleFetch_(ctx) {
     .map(function (field) {
       return field.key;
     });
-  // One request covers the 20,000-row maximum; one extra row detects overflow.
-  ctx.checkDeadline();
-  var payload = ctx.http({
-    url: connection.base + '/searchAnalytics/query',
-    method: 'post',
-    retrySafe: true,
-    headers: connection.headers,
-    body: {
-      startDate: ctx.startDate,
-      endDate: ctx.endDate,
-      dimensions: dimensions,
-      rowLimit: Math.min(25000, ctx.maxRows + 1),
-      startRow: 0,
-      type: 'web',
-    },
-  });
-  if (!payload || payload.error) throw new Error('Search Console did not return a report.');
-  var page = payload.rows === undefined ? [] : payload.rows;
-  if (!Array.isArray(page)) throw new Error('Search Console returned invalid rows.');
+  // Search Console returns at most 25,000 rows per request, so pages advance by startRow until
+  // a short page. Fetching one row past the limit detects overflow instead of truncating.
   var rows = [];
-  dmvAppendPage_(
-    rows,
-    page.map(function (item) {
-      if (
-        dimensions.length &&
-        (!Array.isArray(item.keys) || item.keys.length !== dimensions.length)
-      )
-        throw new Error('Search Console returned a malformed row.');
-      var row = {};
-      columns.forEach(function (field) {
-        if (field.role === 'dimension')
-          row[field.key] = dmvTextValue_(item.keys[dimensions.indexOf(field.key)]);
-        else row[field.key] = dmvNumber_(item[field.key]);
-      });
-      return row;
-    }),
-    ctx.maxRows
-  );
+  var wanted = ctx.maxRows + 1;
+  for (var startRow = 0; startRow < wanted;) {
+    ctx.checkDeadline();
+    var rowLimit = Math.min(25000, wanted - startRow);
+    var payload = ctx.http({
+      url: connection.base + '/searchAnalytics/query',
+      method: 'post',
+      retrySafe: true,
+      headers: connection.headers,
+      body: {
+        startDate: ctx.startDate,
+        endDate: ctx.endDate,
+        dimensions: dimensions,
+        rowLimit: rowLimit,
+        startRow: startRow,
+        type: 'web',
+      },
+    });
+    if (!payload || payload.error) throw new Error('Search Console did not return a report.');
+    var page = payload.rows === undefined ? [] : payload.rows;
+    if (!Array.isArray(page)) throw new Error('Search Console returned invalid rows.');
+    dmvAppendPage_(
+      rows,
+      page.map(function (item) {
+        if (
+          dimensions.length &&
+          (!Array.isArray(item.keys) || item.keys.length !== dimensions.length)
+        )
+          throw new Error('Search Console returned a malformed row.');
+        var row = {};
+        columns.forEach(function (field) {
+          if (field.role === 'dimension')
+            row[field.key] = dmvTextValue_(item.keys[dimensions.indexOf(field.key)]);
+          else row[field.key] = dmvNumber_(item[field.key]);
+        });
+        return row;
+      }),
+      ctx.maxRows
+    );
+    if (page.length < rowLimit) break;
+    startRow += page.length;
+  }
   return {
     columns: columns,
     rows: rows,

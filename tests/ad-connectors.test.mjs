@@ -181,6 +181,20 @@ test('Microsoft Ads submits, polls, downloads the zipped CSV and parses typed ce
   assert.deepEqual(plain(f.report('microsoft_ads').fetch(f.context('microsoft_ads', { accountId: '111', customerId: '222', developerToken: 'd', authMode: 'token', accessToken: 'tok' }, {})).rows), [], 'success without a URL is an empty report');
 });
 
+test('Search Console pages past its 25,000-row request cap and still detects overflow', () => {
+  const f = load(['search_console']);
+  const credentials = { siteUrl: 'sc-domain:example.com', authMode: 'token', accessToken: 'g-token' };
+  const page = (count, offset) => Array.from({ length: count }, (_, index) => ({ keys: ['q' + (offset + index)], clicks: 1 }));
+  f.state.responses.push({ body: { rows: page(25000, 0) } }, { body: { rows: page(10, 25000) } });
+  const output = f.report('search_console').fetch(f.context('search_console', credentials, { fields: ['query', 'clicks'], maxRows: 30000 }));
+  assert.equal(output.rows.length, 25010);
+  assert.deepEqual([request(f, 0).body.startRow, request(f, 0).body.rowLimit], [0, 25000]);
+  assert.deepEqual([request(f, 1).body.startRow, request(f, 1).body.rowLimit], [25000, 5001]);
+  assert.equal(f.state.http.length, 2, 'a short page ends paging');
+  f.state.responses.push({ body: { rows: page(25000, 0) } }, { body: { rows: page(5001, 25000) } });
+  assert.throws(() => f.report('search_console').fetch(f.context('search_console', credentials, { fields: ['query', 'clicks'], maxRows: 30000 })), /exceeds the row limit/);
+});
+
 test('Search Console pages search analytics, discovers properties and asks no scope of the add-on itself', () => {
   const f = load(['search_console']);
   const connector = f.api.DMV_CONNECTORS.search_console;

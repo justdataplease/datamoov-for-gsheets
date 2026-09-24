@@ -787,11 +787,11 @@ test('journal recovery never adopts manually edited cells as dashboard-owned out
 test('combined row and cumulative workbook capacity limits stop every output', () => {
   const f = fixture();
   f.input.datasets.forEach((dataset) => {
-    dataset.maxRows = 20000;
+    dataset.maxRows = 30000;
   });
   f.setRows(
     'one',
-    Array.from({ length: 10001 }, () => ({
+    Array.from({ length: 15001 }, () => ({
       date: '2026-08-01',
       campaign: 'One',
       spend: 1,
@@ -800,14 +800,14 @@ test('combined row and cumulative workbook capacity limits stop every output', (
   );
   f.setRows(
     'two',
-    Array.from({ length: 10001 }, () => ({
+    Array.from({ length: 15001 }, () => ({
       date: '2026-08-02',
       campaign: 'Two',
       spend: 2,
       clicks: 2,
     }))
   );
-  assert.throws(() => f.run(f.save().id), /datasets exceed 20,000 rows together/);
+  assert.throws(() => f.run(f.save().id), /datasets exceed 30,000 rows together/);
   assert.equal(f.state.batches.length, 0);
   for (const name of f.tabs) assert.equal(f.tab(name), null);
   const g = fixture();

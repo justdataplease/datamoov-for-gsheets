@@ -259,6 +259,11 @@ test('read_sheet types columns from the user tab, discover_fields filters by sea
   const retried = f.api.dmvChatRunTool_(session, tools, { name: 'create_chart', id: 'c2', input: { resultId: read.resultId, chartType: 'bar', xColumn: 'Month', seriesColumns: ['orders'], anchorCell: 'I20' } });
   assert.equal(retried.isError, false);
   assert.equal(errorEvent.recovered, true, 'a successful retry of the same tool marks the failure recovered');
+  const count = f.state.charts.length;
+  const another = f.api.dmvChatCreateChart_(session, { resultId: read.resultId, chartType: 'line', xColumn: 'Month', seriesColumns: ['orders'], title: 'Orders trend' });
+  assert.equal(another.anchorCell, 'I39', 'a new chart goes below the charts at I1 and I20 instead of on top of them');
+  assert.equal(f.state.charts.length, count + 1, 'earlier charts stay');
+  assert.equal(f.api.dmvChatCreateChart_(session, { resultId: read.resultId, chartType: 'line', xColumn: 'Month', seriesColumns: ['orders'], anchorCell: 'I1' }).anchorCell, 'I1', 'an explicit anchor is honored');
 });
 
 test('OpenAI and Gemini adapters translate tools, tool calls and tool results into their own shapes', () => {

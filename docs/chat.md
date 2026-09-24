@@ -15,7 +15,7 @@ network destination is the AI provider you configure.
    your private script properties and is never shown again; leave the field blank when
    editing to keep it. The **Create a key** link opens the provider's key page.
    **Maximum rows per chat report** sets the default and ceiling for each fetched report,
-   from 1 to 20,000 rows (initially 10,000). The model can request fewer rows; it cannot exceed
+   from 1 to 30,000 rows (initially 10,000). The model can request fewer rows; it cannot exceed
    your setting. Increase it if a complete report reaches the limit.
    **Instructions for the assistant** supplies general standing context.
 3. Add at least one connection in **Connections**. To set account-specific rules, fill
@@ -100,7 +100,7 @@ destination updated before it can be renamed.
 
 Ask, for example: "Create a pivot of Marketing data with campaign as rows and summed clicks as values."
 Chat creates a real Sheets pivot in a new tab, using an explicit source range with headers, up to
-20,000 data rows and 80 columns. It validates the requested fields and numeric aggregates first.
+30,000 data rows and 80 columns. It validates the requested fields and numeric aggregates first.
 The range may include future blank rows within the existing sheet grid, so later values inside
 that range participate automatically. Data outside it requires a larger source range.
 Native date grouping requires actual Sheets date cells; ISO dates written as text cannot be
@@ -156,7 +156,7 @@ Limits and guarantees:
 - 1 to 6 datasets and up to 12 tiles (scorecard groups, charts, tables), at least one chart.
   Charts keep up to 12 series; by default 400 dates or 15 categories, tables 50 rows (1,000 at
   most). A shortened tile says so in its title, for example "top 15 of 129".
-- Datasets together hold at most 20,000 rows, and the whole refresh is one roughly 200-second run
+- Datasets together hold at most 30,000 rows, and the whole refresh is one roughly 200-second run
   written in one Sheets request; there is no continuation or schedule for dashboards yet. Keep
   datasets lean: a custom query without `segments.date` returns totals for the period instead of
   one row per day.
@@ -201,7 +201,7 @@ Values that come back from providers are framed as data, not instructions.
 ## Guarantees
 
 - Every fetch goes through the report runtime: your configured chat row cap (initially 10,000,
-  at most 20,000), column caps, deadline and host allowlists. Reports fail instead
+  at most 30,000), column caps, deadline and host allowlists. Reports fail instead
   of truncating.
 - Report writes go through the report writer: only empty cells, or cells the chat wrote earlier at
   the same anchor and that were not edited since, are ever replaced. Formulas and manual edits
@@ -261,4 +261,4 @@ They do not certify any provider's live behavior or pricing.
 
 ### Multi-platform comparisons
 
-Chat can use `combine_results` to append fetched reports with explicit matching column maps and a source label per platform/account, then `summarize` by week or campaign. It never invents rows or exchanges currencies. Currency is required for combined monetary results, and mixed currencies cannot be aggregated without grouping or filtering by currency. Weekly buckets start Monday and include only dates inside the requested range; the first and last buckets of a month may be partial weeks. Google Ads already includes YouTube campaigns, so a YouTube subset is not an additional platform total. GA4 acquisition metrics are not substituted for advertising clicks or spend. Full summaries support up to 20,000 groups within the shared row and size limits.
+Chat can use `combine_results` to append fetched reports with explicit matching column maps and a source label per platform/account, then `summarize` by week or campaign. It never invents rows or exchanges currencies. Currency is required for combined monetary results, and mixed currencies cannot be aggregated without grouping or filtering by currency. Weekly buckets start Monday and include only dates inside the requested range; the first and last buckets of a month may be partial weeks. Google Ads already includes YouTube campaigns, so a YouTube subset is not an additional platform total. GA4 acquisition metrics are not substituted for advertising clicks or spend. Full summaries support up to 30,000 groups within the shared row and size limits.

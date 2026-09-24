@@ -296,7 +296,7 @@ test('row limits and general instructions retain legacy source rules within the 
   await expect(page.locator('#ai-row-limit')).toHaveText('2,500 rows per report');
   await page.locator('#ai-settings summary').click();
   await expect(page.locator('#ai-max-rows')).toHaveValue('2500');
-  await page.locator('#ai-max-rows').fill('20001');
+  await page.locator('#ai-max-rows').fill('30001');
   expect(await page.locator('#ai-max-rows').evaluate((node) => node.checkValidity())).toBe(false);
   await page.locator('#ai-max-rows').fill('2500');
   await page.locator('#ai-instructions').fill('x'.repeat(99990));

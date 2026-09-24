@@ -480,12 +480,12 @@ function dmvSaveDashboard(input) {
           runToken: 'x'.repeat(80),
           startedAt: Date.now(),
           lastRun: new Date().toISOString(),
-          lastRowCount: 20000,
+          lastRowCount: DMV_LIMITS.maxRows,
           chartIds: plan.tiles.map(function () {
             return 2000000000;
           }),
           outputs: dashboard.outputs.map(function (output) {
-            return Object.assign({ rows: 20000 }, output);
+            return Object.assign({ rows: DMV_LIMITS.maxRows }, output);
           }),
         })
       );
@@ -1154,13 +1154,19 @@ function dmvRunDashboard(id, requestedDeadline) {
           reason +=
             ' This dataset allows ' +
             queries[index].maxRows.toLocaleString() +
-            ' rows. Increase Maximum rows per chat report under Settings > AI provider (up to 20,000), or ask Chat to narrow this dataset.';
+            ' rows. Increase Maximum rows per chat report under Settings > AI provider (up to ' +
+            DMV_LIMITS.maxRows.toLocaleString() +
+            '), or ask Chat to narrow this dataset.';
         throw new Error(dataset.label + ': ' + reason);
       }
       dmvDashboardDeadline_(deadline);
       fetchedRows += result.rows.length;
       if (fetchedRows > DMV_LIMITS.maxRows)
-        throw new Error('The dashboard datasets exceed 20,000 rows together. Narrow them.');
+        throw new Error(
+          'The dashboard datasets exceed ' +
+            DMV_LIMITS.maxRows.toLocaleString() +
+            ' rows together. Narrow them.'
+        );
       var resultId = dmvChatResultId_();
       session.results[resultId] = result;
       fetched[dataset.id] = resultId;

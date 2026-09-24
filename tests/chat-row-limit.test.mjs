@@ -65,10 +65,10 @@ test('chat maxRows defaults to 10000 and remains private and retained on omitted
 
 test('chat maxRows accepts integer boundaries and rejects malformed values without changing settings', () => {
   const f = fixture();
-  for (const maxRows of [1, 20000])
+  for (const maxRows of [1, 30000])
     assert.equal(f.api.dmvSaveAiSettings({ provider: 'anthropic', maxRows }).maxRows, maxRows);
   const before = f.state.user.getProperty(key);
-  for (const maxRows of [0, -1, 20001, 1.5, '1000', '', null, true, {}, [], Infinity, NaN]) {
+  for (const maxRows of [0, -1, 30001, 1.5, '1000', '', null, true, {}, [], Infinity, NaN]) {
     assert.throws(() => f.api.dmvSaveAiSettings({ provider: 'anthropic', maxRows }), /whole number/);
     assert.equal(f.state.user.getProperty(key), before);
   }
