@@ -231,8 +231,12 @@
         ' rows fetched. Existing sheet output is unchanged. Resume continues this report; the hourly scheduler also resumes it.'
       );
     }
+    // The Reports tab lists saved reports and dashboards, so its counter covers both.
+    function renderTabCount() {
+      $('report-count').textContent = String(state.reports.length + state.dashboards.length);
+    }
     function renderReports() {
-      $('report-count').textContent = String(state.reports.length);
+      renderTabCount();
       const list = $('reports-list');
       list.replaceChildren();
       if (!state.reports.length)
@@ -461,6 +465,7 @@
       input.focus();
     }
     function renderDashboards() {
+      renderTabCount();
       const list = $('dashboards-list');
       list.replaceChildren();
       if (!state.dashboards.length) {
