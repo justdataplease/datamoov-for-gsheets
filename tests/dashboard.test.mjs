@@ -682,6 +682,50 @@ test('money stays split by currency on scorecards, charts and tables, and a limi
   assert.equal(f.state.batches.length, 1);
 });
 
+test('tiles filter their rows and compute ratios from summed counts', () => {
+  const f = fixture();
+  f.input.tiles = [
+    {
+      title: 'Totals',
+      type: 'kpi',
+      metrics: [{ field: 'spend', agg: 'sum' }],
+      ratios: [{ key: 'cpc', label: 'CPC', numerator: 'spend', denominator: 'clicks' }],
+    },
+    {
+      title: 'Second only',
+      type: 'column',
+      groupBy: ['campaign'],
+      metrics: [{ field: 'clicks', agg: 'sum' }],
+      filters: [{ field: 'source', op: 'eq', value: 'Source 2' }],
+    },
+    {
+      title: 'Efficiency',
+      type: 'table',
+      groupBy: ['campaign'],
+      ratios: [{ key: 'cpc', label: 'CPC', numerator: 'spend', denominator: 'clicks' }],
+      orderBy: { field: 'cpc', direction: 'asc' },
+    },
+  ];
+  const saved = f.save();
+  assert.deepEqual(plain(f.plan(saved.id).tiles[1].filters), [{ field: 'source', op: 'eq', value: 'Source 2' }]);
+  const result = f.run(saved.id);
+  assert.deepEqual(result.scorecards, [
+    { label: 'Spend (EUR)', value: 10 },
+    { label: 'CPC (EUR)', value: 1.6667 },
+  ]);
+  const chartData = rowsOf(f, 'Dashboard report (chart data)'),
+    second = find(chartData, 'Second only');
+  assert.deepEqual(chartData.slice(second + 1, second + 3), [['Campaign', 'Clicks'], ['Second', 4]]);
+  const page = rowsOf(f, 'Dashboard report'),
+    efficiency = find(page, 'Efficiency');
+  assert.deepEqual(page.slice(efficiency + 1), [['Campaign', 'CPC'], ['=literal', 1.5], ['Second', 1.75]]);
+  f.input.tiles[0].ratios[0].denominator = 'impressions';
+  assert.throws(() => f.save(), /"Totals": unknown column "impressions"/);
+  f.input.tiles[0].ratios[0].denominator = 'clicks';
+  f.input.tiles[1].filters = [{ field: 'source', op: 'like', value: 'x' }];
+  assert.throws(() => f.save(), /"Second only": each filter needs field, op/);
+});
+
 test('row limits do not make duplicate dataset queries distinct', () => {
   const f = fixture();
   f.input.datasets[1] = {

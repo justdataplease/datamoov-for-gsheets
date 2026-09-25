@@ -155,6 +155,8 @@ function dmvValidateDashboard_(input, spreadsheet) {
       'limit',
       'rankWithin',
       'limitPerGroup',
+      'filters',
+      'ratios',
     ]);
     var title = dmvText_(tile.title, 'Tile title', 120, true);
     var type = String(tile.type || '');
@@ -226,6 +228,54 @@ function dmvValidateDashboard_(input, spreadsheet) {
       metricKeys[metric.field + '__' + agg] = true;
       return { field: known(metric.field), agg: agg };
     });
+    // Ratios and filters are summarize settings; their columns are checked like metrics.
+    if (!Array.isArray(tile.ratios || []) || (tile.ratios || []).length > 8)
+      throw new Error('"' + title + '": choose at most eight ratios.');
+    var ratios = (tile.ratios || []).map(function (ratio) {
+      dmvDashboardObject_(ratio, ['key', 'label', 'numerator', 'denominator', 'percent']);
+      if (
+        typeof ratio.key !== 'string' ||
+        !/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(ratio.key) ||
+        metricKeys[ratio.key] ||
+        (ratio.percent !== undefined && typeof ratio.percent !== 'boolean') ||
+        ['numerator', 'denominator'].some(function (side) {
+          return typeof ratio[side] !== 'string' || !ratio[side] || ratio[side].length > 150;
+        })
+      )
+        throw new Error(
+          '"' + title + '": each ratio needs a distinct key, a numerator and a denominator column.'
+        );
+      metricKeys[ratio.key] = true;
+      var entry = {
+        key: ratio.key,
+        numerator: known(ratio.numerator),
+        denominator: known(ratio.denominator),
+      };
+      if (typeof ratio.label === 'string' && ratio.label) entry.label = ratio.label.slice(0, 80);
+      if (ratio.percent === true) entry.percent = true;
+      return entry;
+    });
+    if (!Array.isArray(tile.filters || []) || (tile.filters || []).length > 8)
+      throw new Error('"' + title + '": choose at most eight filters.');
+    var filters = (tile.filters || []).map(function (filter) {
+      dmvDashboardObject_(filter, ['field', 'op', 'value']);
+      if (
+        typeof filter.field !== 'string' ||
+        !filter.field ||
+        filter.field.length > 150 ||
+        ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'in'].indexOf(filter.op) < 0 ||
+        !(typeof filter.value === 'string'
+          ? filter.value.length <= 200
+          : typeof filter.value === 'number' && isFinite(filter.value))
+      )
+        throw new Error(
+          '"' +
+            title +
+            '": each filter needs field, op (eq, ne, gt, gte, lt, lte, contains, in) and a text or number value.'
+        );
+      return { field: known(filter.field), op: filter.op, value: filter.value };
+    });
+    var values = metrics.length + ratios.length;
     var bucket = tile.dateBucket || 'day';
     if (['day', 'week', 'month', 'year'].indexOf(bucket) < 0)
       throw new Error('Choose day, week, month or year date grouping.');
@@ -237,22 +287,24 @@ function dmvValidateDashboard_(input, spreadsheet) {
       dateBucket: bucket,
       metrics: metrics,
     };
+    if (ratios.length) validated.ratios = ratios;
+    if (filters.length) validated.filters = filters;
     if (type === 'kpi') {
-      if (groupBy.length || !metrics.length)
-        throw new Error('"' + title + '": a kpi tile takes metrics and no groupBy.');
-      kpis += metrics.length;
+      if (groupBy.length || !values)
+        throw new Error('"' + title + '": a kpi tile takes metrics or ratios and no groupBy.');
+      kpis += values;
     } else if (type === 'table') {
-      if (!groupBy.length && !metrics.length)
-        throw new Error('"' + title + '": a table needs groupBy columns or metrics.');
+      if (!groupBy.length && !values)
+        throw new Error('"' + title + '": a table needs groupBy columns, metrics or ratios.');
     } else {
-      if (!groupBy.length || groupBy.length > 2 || !metrics.length)
+      if (!groupBy.length || groupBy.length > 2 || !values)
         throw new Error(
           '"' +
             title +
-            '": a chart needs metrics and one groupBy column for its axis; a second groupBy column splits it into series.'
+            '": a chart needs metrics or ratios and one groupBy column for its axis; a second groupBy column splits it into series.'
         );
-      if ((groupBy.length === 2 || type === 'pie') && metrics.length !== 1)
-        throw new Error('"' + title + '": a pie or split chart takes exactly one metric.');
+      if ((groupBy.length === 2 || type === 'pie') && values !== 1)
+        throw new Error('"' + title + '": a pie or split chart takes exactly one metric or ratio.');
       if (type === 'pie' && groupBy.length !== 1)
         throw new Error('"' + title + '": a pie chart takes one groupBy column.');
     }
@@ -646,29 +698,41 @@ function dmvDashboardLabel_(value) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+// One scorecard per metric or ratio, split by currency when the money is mixed.
 function dmvDashboardCards_(session, resultId, tile) {
-  var base = dmvChatResult_(session, resultId);
   var cards = [];
-  tile.metrics.forEach(function (metric) {
-    var column = dmvChatColumn_(base, metric.field, 'metric');
-    var summary = dmvDashboardSummarize_(session, resultId, { metrics: [metric], limit: 50 });
-    var value = summary.columns[summary.columns.length - 1];
-    // Money always names its currency, so neither a reader nor the chat has to guess it.
-    var single = value.type === 'currency' ? (summary.metadata || {}).currency : '';
-    summary.rows.forEach(function (row) {
-      var split =
-        summary.columns.length > 1
-          ? ' (' + row[summary.columns[0].key] + ')'
-          : single
-            ? ' (' + single + ')'
-            : '';
-      cards.push({
-        label: dmvDashboardLabel_(value.label || column.key) + split,
-        value: row[value.key] === null || row[value.key] === undefined ? '' : row[value.key],
-        type: value.type,
+  tile.metrics
+    .map(function (metric) {
+      return { metrics: [metric] };
+    })
+    .concat(
+      (tile.ratios || []).map(function (ratio) {
+        return { metrics: [], ratios: [ratio] };
+      })
+    )
+    .forEach(function (spec) {
+      var summary = dmvDashboardSummarize_(
+        session,
+        resultId,
+        Object.assign({ filters: tile.filters, limit: 50 }, spec)
+      );
+      var value = summary.columns[summary.columns.length - 1];
+      // Money always names its currency, so neither a reader nor the chat has to guess it.
+      var single = value.type === 'currency' ? (summary.metadata || {}).currency : '';
+      summary.rows.forEach(function (row) {
+        var split =
+          summary.columns.length > 1
+            ? ' (' + row[summary.columns[0].key] + ')'
+            : single
+              ? ' (' + single + ')'
+              : '';
+        cards.push({
+          label: dmvDashboardLabel_(value.label) + split,
+          value: row[value.key] === null || row[value.key] === undefined ? '' : row[value.key],
+          type: value.type,
+        });
       });
     });
-  });
   return cards;
 }
 
@@ -680,6 +744,8 @@ function dmvDashboardChartTable_(session, resultId, tile) {
     groupBy: tile.groupBy,
     dateBucket: tile.dateBucket,
     metrics: tile.metrics,
+    ratios: tile.ratios,
+    filters: tile.filters,
     limit: DMV_LIMITS.maxRows,
   });
   var dimensions = summary.columns.filter(function (column) {
@@ -775,7 +841,7 @@ function dmvDashboardTable_(session, resultId, tile) {
     metrics: tile.metrics,
     limit: tile.limit || DMV_DASHBOARD.tableRows,
   };
-  ['orderBy', 'rankWithin', 'limitPerGroup'].forEach(function (key) {
+  ['orderBy', 'rankWithin', 'limitPerGroup', 'ratios', 'filters'].forEach(function (key) {
     if (tile[key] !== undefined) spec[key] = tile[key];
   });
   var summary = dmvDashboardSummarize_(session, resultId, spec);

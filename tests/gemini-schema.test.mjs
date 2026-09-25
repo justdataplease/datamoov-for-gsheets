@@ -181,7 +181,9 @@ test('the complete Gemini toolset uses JSON Schema and retains nested constraint
   assert.equal(tiles.minItems, 1);
   assert.equal(tiles.maxItems, 12);
   const tile = tiles.items;
-  assert.deepEqual(tile.required, ['title', 'type', 'metrics']);
+  assert.deepEqual(tile.required, ['title', 'type']);
+  assert.deepEqual(tile.properties.ratios.items.required, ['key', 'numerator', 'denominator']);
+  assert.deepEqual(tile.properties.filters, schemas.summarize.properties.filters);
   assert.deepEqual(tile.properties.type.enum, [
     'kpi',
     'table',

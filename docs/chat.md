@@ -156,6 +156,9 @@ analysis unless you ask for a dashboard.
 Limits and guarantees:
 
 - 1 to 6 datasets and up to 12 tiles (scorecard groups, charts, tables), at least one chart.
+  A tile can restrict its rows with filters (Brand campaigns only, one country) and show
+  ratios such as CPC, CTR, CPA or ROAS, computed from the summed counts of each group rather
+  than by averaging a rate column.
   Charts keep up to 12 series; by default 400 dates or 15 categories, tables 50 rows (1,000 at
   most). A shortened tile says so in its title, for example "top 15 of 129".
 - Datasets together hold at most 30,000 rows, and the whole refresh is one roughly 200-second run
@@ -236,7 +239,7 @@ Values that come back from providers are framed as data, not instructions.
 | `discover_fields` | Account-specific fields (GA4 custom definitions, HubSpot/Zendesk properties, SQL result columns), with a `search` filter |
 | `describe_database` | Tables and columns of the schemas/datasets a SQL connection scoped for chat, with a `search` filter on table names |
 | `combine_results` | Append complete fetched results with matching column maps and a source label; preserves currency and source caveats |
-| `summarize` | Group, filter, aggregate and sort a result server-side; rankWithin and limitPerGroup select top rows separately per month or other group; rates and averages cannot be summed |
+| `summarize` | Group, filter, aggregate and sort a result server-side; ratios (CPC, CTR, CPA, ROAS) divide two per-group sums; rankWithin and limitPerGroup select top rows separately per month or other group; rates and averages cannot be summed |
 | `write_to_sheet` | Write a result as a formatted table through the protected writer |
 | `read_sheet` | Read a tab into a result |
 | `create_chart` | Add a line, column, bar, area, scatter or pie chart over a written table |

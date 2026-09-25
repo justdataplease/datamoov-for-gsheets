@@ -221,6 +221,12 @@ test('summarize refuses to sum rates, lists columns on typos, filters, buckets d
   assert.throws(() => f.api.dmvChatSummarize_(session, { resultId: described.resultId, groupBy: ['campagn'] }), /Unknown groupBy column "campagn"\. Result columns are: date, campaign, spend, clicks, ctr/);
   const monthly = f.api.dmvChatSummarize_(session, { resultId: described.resultId, groupBy: ['date'], dateBucket: 'month', metrics: [{ field: 'clicks', agg: 'sum' }, { field: 'ctr', agg: 'avg' }, { field: 'campaign', agg: 'count_distinct' }] });
   assert.deepEqual(plain(monthly.rows), [{ date: '2026-09', clicks__sum: 270, ctr__avg: 0.1167, campaign__count_distinct: 2 }]);
+  // A ratio divides two per-group sums; the sums it needs stay hidden unless asked for.
+  const rates = f.api.dmvChatSummarize_(session, { resultId: described.resultId, groupBy: ['campaign'], ratios: [{ key: 'cpc', numerator: 'spend', denominator: 'clicks' }, { key: 'share', label: 'Click share', numerator: 'clicks', denominator: 'clicks', percent: true }], orderBy: { field: 'cpc', direction: 'desc' } });
+  assert.deepEqual(plain(rates.columns).map((column) => [column.key, column.label, column.type, column.additive]), [['campaign', 'Campaign', 'text', undefined], ['cpc', 'cpc', 'currency', false], ['share', 'Click share', 'percent', false]]);
+  assert.deepEqual(plain(rates.rows), [{ campaign: 'Generic', cpc: 0.25, share: 1 }, { campaign: 'Brand', cpc: 0.122, share: 1 }]);
+  assert.throws(() => f.api.dmvChatSummarize_(session, { resultId: described.resultId, ratios: [{ key: 'bad', numerator: 'ctr', denominator: 'clicks' }] }), /numerator "ctr" must be a summable column/);
+  assert.throws(() => f.api.dmvChatSummarize_(session, { resultId: described.resultId, metrics: [{ field: 'spend', agg: 'sum' }], ratios: [{ key: 'spend__sum', numerator: 'spend', denominator: 'clicks' }] }), /already a column/);
   const filtered = f.api.dmvChatSummarize_(session, { resultId: described.resultId, groupBy: ['campaign'], metrics: [{ field: 'spend', agg: 'max' }], filters: [{ field: 'clicks', op: 'gte', value: '100' }], orderBy: { field: 'spend__max', direction: 'asc' } });
   assert.deepEqual(plain(filtered.rows), [{ campaign: 'Brand', spend__max: 20 }]);
   assert.equal(filtered.inputRows, 2);

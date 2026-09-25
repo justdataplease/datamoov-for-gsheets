@@ -793,8 +793,42 @@ function dmvChatSummarize_(session, input) {
       );
     return { column: column, agg: agg };
   });
+  // A ratio divides two per-group sums (CPC = spend / clicks) after aggregation, which is the
+  // only correct way to get a rate for a group. Sums it needs but the caller did not ask for
+  // are computed hidden.
+  var ratios = (Array.isArray(input.ratios) ? input.ratios : []).map(function (ratio) {
+    if (
+      !ratio ||
+      typeof ratio !== 'object' ||
+      typeof ratio.key !== 'string' ||
+      !/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(ratio.key)
+    )
+      throw new Error('Each ratio needs a short key, a numerator column and a denominator column.');
+    var sides = ['numerator', 'denominator'].map(function (side) {
+      var column = dmvChatColumn_(result, ratio[side], 'ratio ' + side);
+      if (!dmvChatNumeric_(column) || !dmvChatAdditive_(column))
+        throw new Error(
+          'Ratio "' + ratio.key + '": ' + side + ' "' + column.key + '" must be a summable column.'
+        );
+      var index = metrics.findIndex(function (metric) {
+        return metric.column === column && metric.agg === 'sum';
+      });
+      if (index < 0) index = metrics.push({ column: column, agg: 'sum', hidden: true }) - 1;
+      return index;
+    });
+    var currency = [metrics[sides[0]], metrics[sides[1]]].filter(function (metric) {
+      return metric.column.type === 'currency';
+    }).length;
+    return {
+      key: ratio.key,
+      label: typeof ratio.label === 'string' && ratio.label ? ratio.label.slice(0, 80) : ratio.key,
+      numerator: sides[0],
+      denominator: sides[1],
+      type: currency === 1 ? 'currency' : ratio.percent === true ? 'percent' : 'number',
+    };
+  });
   if (!groupBy.length && !metrics.length)
-    throw new Error('Provide groupBy columns, metrics, or both.');
+    throw new Error('Provide groupBy columns, metrics, ratios, or both.');
   var filters = (Array.isArray(input.filters) ? input.filters : []).map(function (filter) {
     if (!filter || typeof filter !== 'object')
       throw new Error('Each filter needs field, op and value.');
@@ -893,6 +927,7 @@ function dmvChatSummarize_(session, input) {
     };
   });
   metrics.forEach(function (metric) {
+    if (metric.hidden) return;
     var label = metric.column.label || metric.column.key;
     columns.push({
       key: metric.column.key + '__' + metric.agg,
@@ -913,6 +948,21 @@ function dmvChatSummarize_(session, input) {
         ['avg', 'min', 'max', 'count_distinct'].indexOf(metric.agg) >= 0 ? false : undefined,
     });
   });
+  ratios.forEach(function (ratio) {
+    if (
+      columns.some(function (column) {
+        return column.key === ratio.key;
+      })
+    )
+      throw new Error('Ratio key "' + ratio.key + '" is already a column of this summary.');
+    columns.push({
+      key: ratio.key,
+      label: ratio.label,
+      type: ratio.type,
+      role: 'metric',
+      additive: false,
+    });
+  });
   var output = order.map(function (id) {
     var group = groups[id],
       row = {};
@@ -920,6 +970,7 @@ function dmvChatSummarize_(session, input) {
       row[column.key] = group.keys[index];
     });
     metrics.forEach(function (metric, index) {
+      if (metric.hidden) return;
       var slot = group.values[index],
         value;
       if (metric.agg === 'sum') value = slot.n ? Math.round(slot.sum * 10000) / 10000 : null;
@@ -930,6 +981,12 @@ function dmvChatSummarize_(session, input) {
       else if (metric.agg === 'count') value = slot.n;
       else value = slot.distinctCount;
       row[metric.column.key + '__' + metric.agg] = value;
+    });
+    ratios.forEach(function (ratio) {
+      var above = group.values[ratio.numerator],
+        below = group.values[ratio.denominator];
+      row[ratio.key] =
+        above.n && below.sum ? Math.round((above.sum / below.sum) * 10000) / 10000 : null;
     });
     return row;
   });
@@ -1080,8 +1137,24 @@ function dmvChatSummarize_(session, input) {
       ],
       [
         'Metrics',
-        metrics.map(function (metric) {
-          return metric.agg + ' ' + metric.column.key;
+        metrics
+          .filter(function (metric) {
+            return !metric.hidden;
+          })
+          .map(function (metric) {
+            return metric.agg + ' ' + metric.column.key;
+          }),
+      ],
+      [
+        'Ratios',
+        ratios.map(function (ratio) {
+          return (
+            ratio.key +
+            ' = ' +
+            metrics[ratio.numerator].column.key +
+            ' / ' +
+            metrics[ratio.denominator].column.key
+          );
         }),
       ],
       [

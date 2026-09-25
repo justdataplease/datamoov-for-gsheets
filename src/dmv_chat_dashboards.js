@@ -62,6 +62,8 @@ function dmvChatDashboardTools_(session, baseTools) {
       groupBy: summary.groupBy,
       dateBucket: summary.dateBucket,
       metrics: summary.metrics,
+      ratios: summary.ratios,
+      filters: summary.filters,
       orderBy: summary.orderBy,
       limit: {
         type: 'integer',
@@ -70,7 +72,7 @@ function dmvChatDashboardTools_(session, baseTools) {
       rankWithin: summary.rankWithin,
       limitPerGroup: summary.limitPerGroup,
     },
-    required: ['title', 'type', 'metrics'],
+    required: ['title', 'type'],
   };
   return [
     {
