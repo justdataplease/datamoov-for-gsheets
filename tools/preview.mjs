@@ -616,6 +616,12 @@ function installPreview(initial) {
         ),
       };
     },
+    dmvScheduleDashboard(id, schedule) {
+      const saved = (data.dashboards || []).find((item) => item.id === id);
+      if (!saved) throw new Error('Dashboard not found.');
+      saved.schedule = schedule;
+      return copy(saved);
+    },
     dmvDeleteDashboard(id) {
       const removed = (data.dashboards || []).find((item) => item.id === id);
       data.dashboards = (data.dashboards || []).filter((item) => item.id !== id);

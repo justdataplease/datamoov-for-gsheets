@@ -127,6 +127,12 @@ function dmvChatDashboardTools_(session, baseTools) {
             maxItems: DMV_DASHBOARD.maxDatasets,
           },
           tiles: { type: 'array', items: tile, minItems: 1, maxItems: DMV_DASHBOARD.maxTiles },
+          schedule: {
+            type: 'string',
+            enum: ['manual', 'hourly', 'daily', 'weekly'],
+            description:
+              'Automatic background refresh from the user account, without AI. Default manual; set it only when the user asks for one.',
+          },
           target: {
             type: 'object',
             properties: {
@@ -153,7 +159,7 @@ function dmvChatDashboardTools_(session, baseTools) {
 }
 
 function dmvChatSaveDashboard_(session, input) {
-  dmvChatSheetObject_(input, ['id', 'revision', 'name', 'datasets', 'tiles', 'target']);
+  dmvChatSheetObject_(input, ['id', 'revision', 'name', 'datasets', 'tiles', 'target', 'schedule']);
   dmvChatSheetDeadline_(session);
   var plan = Object.assign({}, input);
   if (input.id && !Number.isInteger(input.revision))

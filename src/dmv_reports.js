@@ -97,9 +97,7 @@ function dmvValidateReport_(input, spreadsheet) {
   var query = dmvValidateQuery_(input, spreadsheet);
   var sheetName = dmvSheetName_((input.target || {}).sheetName);
   var cell = dmvCell_((input.target || {}).startCell || 'A1');
-  var schedule = input.schedule || 'manual';
-  if (['manual', 'hourly', 'daily', 'weekly'].indexOf(schedule) < 0)
-    throw new Error('Choose a supported refresh schedule.');
+  var schedule = dmvSchedule_(input.schedule);
   return {
     id: input.id || dmvId_(),
     spreadsheetId: spreadsheet.getId(),

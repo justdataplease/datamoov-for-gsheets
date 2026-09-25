@@ -790,6 +790,34 @@ test('chart tiles can stack, draw a ratio on the right axis as a line, and take 
   assert.throws(() => f.save(), /"Spend share": stacked/);
 });
 
+test('a scheduled dashboard refreshes from the hourly trigger, one per tick, and advances its next run', () => {
+  const f = fixture();
+  const saved = f.save({ ...f.input, schedule: 'daily' });
+  assert.equal(saved.schedule, 'daily');
+  assert.equal(f.state.createdTriggers.length, 1, 'the hourly trigger exists for the dashboard alone');
+  f.api.dmvRefreshScheduled();
+  assert.equal(f.fetched.length, 2);
+  assert.equal(f.record(saved.id).status, 'success');
+  assert.equal(f.record(saved.id).nextRunAt, f.api.Date.now() + 86400000);
+  f.api.dmvRefreshScheduled();
+  assert.equal(f.fetched.length, 2, 'not due again until tomorrow');
+  f.advance(86400000);
+  f.api.dmvRefreshScheduled();
+  assert.equal(f.fetched.length, 4);
+  // A refresh that fails still waits a full period before the next attempt.
+  f.setRows('two', new Error('Provider down'));
+  f.advance(86400000);
+  f.api.dmvRefreshScheduled();
+  assert.equal(f.record(saved.id).status, 'error');
+  assert.equal(f.record(saved.id).nextRunAt, f.api.Date.now() + 86400000);
+  const manual = plain(f.api.dmvScheduleDashboard(saved.id, 'manual'));
+  assert.equal(manual.schedule, 'manual');
+  assert.equal(f.record(saved.id).nextRunAt, null);
+  assert.equal(f.record(saved.id).revision, saved.revision, 'a schedule change is not a plan change');
+  assert.equal(f.state.triggers.length, 0, 'the trigger goes when nothing is scheduled');
+  assert.throws(() => f.api.dmvScheduleDashboard(saved.id, 'often'), /supported refresh schedule/);
+});
+
 test('row limits do not make duplicate dataset queries distinct', () => {
   const f = fixture();
   f.input.datasets[1] = {

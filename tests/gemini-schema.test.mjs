@@ -149,9 +149,11 @@ test('the complete Gemini toolset uses JSON Schema and retains nested constraint
     'id',
     'name',
     'revision',
+    'schedule',
     'target',
     'tiles',
   ]);
+  assert.deepEqual(dashboard.properties.schedule.enum, ['manual', 'hourly', 'daily', 'weekly']);
   assert.deepEqual(dashboard.required, ['name', 'datasets', 'tiles', 'target']);
   assert.equal(dashboard.properties.revision.type, 'integer');
   const { datasets, tiles, target } = dashboard.properties;

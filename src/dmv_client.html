@@ -209,6 +209,12 @@
       );
       return node;
     }
+    const SCHEDULE_LABELS = {
+      manual: 'On demand',
+      hourly: 'Every hour',
+      daily: 'Daily',
+      weekly: 'Weekly',
+    };
     function detail(label, value) {
       const row = el('div', 'card-detail');
       row.append(el('span', '', label), el('strong', '', value));
@@ -275,14 +281,7 @@
             '↳',
             (report.target?.sheetName || '') + ' · ' + (report.target?.startCell || 'A1')
           ),
-          detail(
-            'Refresh',
-            { manual: 'On demand', hourly: 'Every hour', daily: 'Daily', weekly: 'Weekly' }[
-              report.schedule
-            ] ||
-              report.schedule ||
-              'On demand'
-          ),
+          detail('Refresh', SCHEDULE_LABELS[report.schedule] || report.schedule || 'On demand'),
           detail(
             'Updated',
             timeLabel(report.lastRun) +
@@ -520,7 +519,20 @@
             );
           content.append(row);
         }
-        content.append(detail('Updated', timeLabel(dashboard.lastRun)));
+        // The schedule is changed on the card itself; a dashboard has no edit form.
+        const schedule = el('select');
+        for (const [value, label] of Object.entries(SCHEDULE_LABELS)) {
+          const option = el('option', '', label);
+          option.value = value;
+          schedule.append(option);
+        }
+        schedule.value = dashboard.schedule || 'manual';
+        schedule.disabled = running || removing || dashboard.legacy === true;
+        schedule.setAttribute('aria-label', 'Refresh schedule for ' + dashboard.name);
+        schedule.addEventListener('change', () => scheduleDashboard(dashboard, schedule));
+        const scheduleRow = detail('Refresh', '');
+        scheduleRow.lastElementChild.replaceChildren(schedule);
+        content.append(scheduleRow, detail('Updated', timeLabel(dashboard.lastRun)));
         if (dashboard.statusMessage)
           content.append(el('p', 'card-progress', dashboard.statusMessage));
         if (dashboard.lastError) content.append(el('p', 'card-error', dashboard.lastError));
@@ -598,6 +610,25 @@
             /* Keep the confirmed result if the list cannot refresh. */
           });
         }
+      }
+    }
+    async function scheduleDashboard(dashboard, select) {
+      select.disabled = true;
+      try {
+        const saved = await api('dmvScheduleDashboard', dashboard.id, select.value);
+        const current = state.dashboards.find((item) => item.id === dashboard.id) || dashboard;
+        upsert(state.dashboards, { ...current, schedule: saved.schedule });
+        notice(
+          saved.schedule === 'manual'
+            ? 'This dashboard refreshes on demand.'
+            : 'This dashboard refreshes ' +
+                SCHEDULE_LABELS[saved.schedule].toLowerCase() +
+                ' in the background, without AI.'
+        );
+      } catch (error) {
+        notice(error.message || 'The schedule could not be saved.', 'error');
+      } finally {
+        renderDashboards();
       }
     }
     async function removeDashboard(dashboard) {

@@ -164,9 +164,11 @@ Limits and guarantees:
   Charts keep up to 12 series; by default 400 dates or 15 categories, tables 50 rows (1,000 at
   most). A shortened tile says so in its title, for example "top 15 of 129".
 - Datasets together hold at most 30,000 rows, and the whole refresh is one roughly 200-second run
-  written in one Sheets request; there is no continuation or schedule for dashboards yet. Keep
-  datasets lean: a custom query without `segments.date` returns totals for the period instead of
-  one row per day.
+  written in one Sheets request; there is no continuation for dashboards. Keep datasets lean: a
+  custom query without `segments.date` returns totals for the period instead of one row per day.
+- A dashboard can refresh itself every hour, daily or weekly: pick the schedule on its card under
+  **Reports > Dashboards**, or ask Chat for it when creating the dashboard. Scheduled refreshes
+  run in the background from your own account, one dashboard per hourly tick, and never call AI.
 - Each dataset uses the higher of its saved row limit and your current **Maximum rows per chat
   report**, so raising the setting also fixes dashboards saved earlier. A dataset that fails is
   named in the error, with the limit it used.

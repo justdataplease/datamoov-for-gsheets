@@ -54,7 +54,7 @@ function dmvDashboardIsChart_(tile) {
 }
 
 function dmvValidateDashboard_(input, spreadsheet) {
-  dmvDashboardObject_(input, ['id', 'revision', 'name', 'datasets', 'tiles', 'target']);
+  dmvDashboardObject_(input, ['id', 'revision', 'name', 'datasets', 'tiles', 'target', 'schedule']);
   if (
     !Array.isArray(input.datasets) ||
     !input.datasets.length ||
@@ -422,6 +422,7 @@ function dmvValidateDashboard_(input, spreadsheet) {
     datasets: datasets,
     tiles: tiles,
     target: target,
+    schedule: dmvSchedule_(input.schedule),
   };
 }
 
@@ -496,6 +497,8 @@ function dmvDashboardSummary_(dashboard, spreadsheet) {
         : dashboard.statusMessage || '',
     lastRun: dashboard.lastRun || null,
     lastRowCount: dashboard.lastRowCount === undefined ? null : dashboard.lastRowCount,
+    schedule: dashboard.schedule || 'manual',
+    nextRunAt: dashboard.nextRunAt || null,
     lastError: legacy ? DMV_DASHBOARD_LEGACY : dashboard.lastError || '',
     private: true,
   };
@@ -582,6 +585,8 @@ function dmvSaveDashboard(input) {
       statusMessage: 'Ready to refresh all datasets',
       lastError: '',
       runToken: null,
+      schedule: plan.schedule,
+      nextRunAt: plan.schedule === 'manual' ? null : Date.now(),
     };
     ['lastRun', 'lastRowCount'].forEach(function (key) {
       if (previous && previous[key] !== undefined) dashboard[key] = previous[key];
@@ -594,6 +599,8 @@ function dmvSaveDashboard(input) {
           lastError: 'x'.repeat(900),
           runToken: 'x'.repeat(80),
           startedAt: Date.now(),
+          schedule: 'weekly',
+          nextRunAt: Date.now(),
           lastRun: new Date().toISOString(),
           lastRowCount: DMV_LIMITS.maxRows,
           chartIds: plan.tiles.map(function () {
@@ -608,6 +615,15 @@ function dmvSaveDashboard(input) {
       throw new Error('This dashboard is too large to save. Use fewer datasets, fields or tiles.');
     }
     dmvSave_('dashboard', dashboard);
+    try {
+      dmvEnsureSchedule_();
+    } catch (error) {
+      if (previous) dmvSave_('dashboard', previous);
+      else dmvStore_().deleteProperty(dmvKey_('dashboard', id));
+      throw new Error(
+        'The refresh schedule could not be created. Check Google authorization and try again.'
+      );
+    }
     // A dataset dropped from the plan no longer owns its tab.
     ((previous && previous.outputs) || []).forEach(function (output) {
       if (
@@ -677,7 +693,22 @@ function dmvDeleteDashboard(id, keepTabs) {
     keys.forEach(function (key) {
       store.deleteProperty(key);
     });
+    dmvEnsureSchedule_();
     return { ok: true, deletedTabs: deleted };
+  });
+}
+
+// The schedule is refresh state beside the plan: changing it neither bumps the revision nor
+// touches a refresh in progress.
+function dmvScheduleDashboard(id, schedule) {
+  return dmvLocked_(function () {
+    var dashboard = dmvDashboardHere_(id);
+    if (dmvDashboardLegacy_(dashboard)) throw new Error(DMV_DASHBOARD_LEGACY);
+    dashboard.schedule = dmvSchedule_(schedule);
+    dashboard.nextRunAt = dashboard.schedule === 'manual' ? null : Date.now();
+    dmvSave_('dashboard', dashboard);
+    dmvEnsureSchedule_();
+    return dmvDashboardSummary_(dashboard, dmvSpreadsheet_());
   });
 }
 
@@ -1531,6 +1562,7 @@ function dmvRunDashboard(id, requestedDeadline) {
       });
       current.lastError = '';
       current.runToken = null;
+      current.nextRunAt = dmvNextRun_(current.schedule);
       dmvSave_('dashboard', current);
       return {
         ok: true,
@@ -1586,6 +1618,7 @@ function dmvRunDashboard(id, requestedDeadline) {
             : 'Refresh stopped';
           current.lastError = message;
           current.runToken = null;
+          current.nextRunAt = dmvNextRun_(current.schedule);
           dmvSave_('dashboard', current);
         }
       });

@@ -13,7 +13,7 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | src/dmv_reports.js | Bootstrap, report validation, discovery, preview, run and refresh-all |
 | src/dmv_continuation.js | Bounded per-user checkpoint storage, snapshot recovery and saved-report chunk execution |
 | src/dmv_writer.js | Output ownership receipts, overlap checks and one atomic Sheets batch for one or multiple report destinations |
-| src/dmv_schedule.js | Private schedule enrollment and hourly refresh of explicitly approved reports and pending continuations |
+| src/dmv_schedule.js | Private schedule enrollment and hourly refresh of explicitly approved reports, pending continuations and scheduled dashboards (one per tick) |
 | src/dmv_http.js | Bounded HTTPS requests, retries and Google access tokens |
 | src/dmv_sql.js | Shared conservative read-only SQL validation |
 | src/dmv_connector_helpers.js | Provider-neutral helpers: Google credential fields, field selection, discovery check, number/text coercion, page budget, UTC date window, chunk validation/merging and complete-fetch wrapper |

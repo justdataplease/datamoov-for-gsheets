@@ -37,6 +37,7 @@ async function controlDashboards(page, dashboards = [savedDashboard]) {
       runs: [],
       removals: [],
       chats: [],
+      schedules: [],
       holdLists: false,
     };
     const copy = (value) => JSON.parse(JSON.stringify(value));
@@ -58,6 +59,7 @@ async function controlDashboards(page, dashboards = [savedDashboard]) {
                 dmvRunDashboard: 'runs',
                 dmvDeleteDashboard: 'removals',
                 dmvChat: 'chats',
+                dmvScheduleDashboard: 'schedules',
               }[name];
               if (collection) {
                 probe[collection].push({ args, succeed: success, fail: failure });
@@ -110,6 +112,28 @@ test('dashboard cards explain private setup, safely show every tab, and start an
   await expect(page.locator('#panel-chat')).toBeVisible();
   await expect(page.locator('#chat-input')).toHaveValue(/Create a performance dashboard/);
   expect(await page.evaluate(() => window.dashboardProbe.chats.length)).toBe(0);
+});
+
+test('a dashboard card sets its own refresh schedule', async ({ page }) => {
+  await open(page);
+  await controlDashboards(page);
+  const select = () => card(page).getByRole('combobox', { name: /Refresh schedule for/ });
+  await expect(select()).toHaveValue('manual');
+  await select().selectOption('daily');
+  await expect(select()).toBeDisabled();
+  await page.waitForFunction(() => window.dashboardProbe.schedules.length === 1);
+  expect(await page.evaluate(() => window.dashboardProbe.schedules[0].args)).toEqual([
+    'dashboard-fixture',
+    'daily',
+  ]);
+  await page.evaluate(() => {
+    const probe = window.dashboardProbe;
+    probe.items[0] = { ...probe.items[0], schedule: 'daily' };
+    probe.schedules[0].succeed(probe.items[0]);
+  });
+  await expect(page.locator('#notice')).toContainText('refreshes daily in the background');
+  await expect(select()).toHaveValue('daily');
+  await expect(select()).toBeEnabled();
 });
 
 test('dashboard polling never overlaps and stale phases cannot replace completed counts', async ({
