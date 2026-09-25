@@ -128,12 +128,19 @@ test('a dashboard card sets its own refresh schedule', async ({ page }) => {
   ]);
   await page.evaluate(() => {
     const probe = window.dashboardProbe;
-    probe.items[0] = { ...probe.items[0], schedule: 'daily' };
+    probe.items[0] = { ...probe.items[0], schedule: 'daily', nextRunAt: Date.now() };
     probe.schedules[0].succeed(probe.items[0]);
   });
   await expect(page.locator('#notice')).toContainText('refreshes daily in the background');
   await expect(select()).toHaveValue('daily');
   await expect(select()).toBeEnabled();
+  await expect(card(page)).toContainText('due at the next hourly check');
+  await page.evaluate(() => {
+    const probe = window.dashboardProbe;
+    probe.items[0] = { ...probe.items[0], nextRunAt: Date.now() + 86400000 };
+    return window.dmvSidebar.refreshDashboards();
+  });
+  await expect(card(page)).toContainText('next after');
 });
 
 test('dashboard polling never overlaps and stale phases cannot replace completed counts', async ({

@@ -166,6 +166,7 @@ export function previewFixture(catalog, aiProviders = [], families = []) {
       target: { sheetName: ['Campaigns', 'Website', 'Deals'][index], startCell: 'A1' },
       maxRows: 1000,
       schedule: index === 2 ? 'manual' : 'daily',
+      nextRunAt: index === 2 ? null : Date.now() + 86400000,
       status: 'success',
       lastRun: '2026-09-18T08:30:00.000Z',
       lastRowCount: [248, 86, 32][index],

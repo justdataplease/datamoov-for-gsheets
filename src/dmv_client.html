@@ -220,6 +220,14 @@
       row.append(el('span', '', label), el('strong', '', value));
       return row;
     }
+    // The hourly trigger picks up whatever is due, so a scheduled item names the time after
+    // which its next refresh happens rather than an exact minute.
+    function nextRunLabel(item) {
+      if (!item.schedule || item.schedule === 'manual') return '';
+      const next = Number(item.nextRunAt);
+      if (!Number.isFinite(next) || next <= Date.now()) return ' · due at the next hourly check';
+      return ' · next after ' + timeLabel(new Date(next).toISOString());
+    }
     function timeLabel(value) {
       if (!value) return 'Not run yet';
       const date = new Date(value);
@@ -281,7 +289,11 @@
             '↳',
             (report.target?.sheetName || '') + ' · ' + (report.target?.startCell || 'A1')
           ),
-          detail('Refresh', SCHEDULE_LABELS[report.schedule] || report.schedule || 'On demand'),
+          detail(
+            'Refresh',
+            (SCHEDULE_LABELS[report.schedule] || report.schedule || 'On demand') +
+              nextRunLabel(report)
+          ),
           detail(
             'Updated',
             timeLabel(report.lastRun) +
@@ -531,7 +543,7 @@
         schedule.setAttribute('aria-label', 'Refresh schedule for ' + dashboard.name);
         schedule.addEventListener('change', () => scheduleDashboard(dashboard, schedule));
         const scheduleRow = detail('Refresh', '');
-        scheduleRow.lastElementChild.replaceChildren(schedule);
+        scheduleRow.lastElementChild.replaceChildren(schedule, nextRunLabel(dashboard));
         content.append(scheduleRow, detail('Updated', timeLabel(dashboard.lastRun)));
         if (dashboard.statusMessage)
           content.append(el('p', 'card-progress', dashboard.statusMessage));
@@ -617,7 +629,11 @@
       try {
         const saved = await api('dmvScheduleDashboard', dashboard.id, select.value);
         const current = state.dashboards.find((item) => item.id === dashboard.id) || dashboard;
-        upsert(state.dashboards, { ...current, schedule: saved.schedule });
+        upsert(state.dashboards, {
+          ...current,
+          schedule: saved.schedule,
+          nextRunAt: saved.nextRunAt ?? null,
+        });
         notice(
           saved.schedule === 'manual'
             ? 'This dashboard refreshes on demand.'
