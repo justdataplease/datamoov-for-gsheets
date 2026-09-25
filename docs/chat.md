@@ -159,7 +159,8 @@ Limits and guarantees:
 - 1 to 6 datasets and up to 12 tiles (scorecard groups, charts, tables), at least one chart.
   A tile can restrict its rows with filters (Brand campaigns only, one country) and show
   ratios such as CPC, CTR, CPA or ROAS, computed from the summed counts of each group rather
-  than by averaging a rate column.
+  than by averaging a rate column. A chart can stack its series, draw a rate on a right axis
+  (as a line on a column chart) and take a whole row.
   Charts keep up to 12 series; by default 400 dates or 15 categories, tables 50 rows (1,000 at
   most). A shortened tile says so in its title, for example "top 15 of 129".
 - Datasets together hold at most 30,000 rows, and the whole refresh is one roughly 200-second run

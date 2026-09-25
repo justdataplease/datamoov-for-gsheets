@@ -746,6 +746,50 @@ test('a compare scorecard shows the current dataset with its change against the 
   assert.throws(() => f.save(), /"Monthly spend": compare belongs on a kpi tile/);
 });
 
+test('chart tiles can stack, draw a ratio on the right axis as a line, and take the whole row', () => {
+  const f = fixture();
+  f.input.tiles = [
+    f.input.tiles[0],
+    {
+      title: 'Spend and CPC',
+      type: 'column',
+      groupBy: ['date'],
+      dateBucket: 'month',
+      metrics: [{ field: 'spend', agg: 'sum' }],
+      ratios: [{ key: 'cpc', numerator: 'spend', denominator: 'clicks' }],
+      secondaryAxis: ['cpc'],
+      width: 'full',
+    },
+    {
+      title: 'Clicks by source',
+      type: 'column',
+      groupBy: ['date', 'source'],
+      dateBucket: 'month',
+      metrics: [{ field: 'clicks', agg: 'sum' }],
+      stacked: true,
+    },
+    { title: 'Spend share', type: 'pie', groupBy: ['source'], metrics: [{ field: 'spend', agg: 'sum' }] },
+  ];
+  f.run(f.save().id);
+  const [combo, stacked] = f.state.charts;
+  assert.equal(combo.spec.basicChart.chartType, 'COMBO');
+  assert.deepEqual(combo.spec.basicChart.series.map((series) => [series.type, series.targetAxis]), [['COLUMN', 'LEFT_AXIS'], ['LINE', 'RIGHT_AXIS']]);
+  assert.equal(combo.position.overlayPosition.widthPixels, 1280);
+  assert.equal(stacked.spec.basicChart.stackedType, 'STACKED');
+  assert.equal(stacked.position.overlayPosition.widthPixels, 630);
+  // The full-width chart takes the first band row alone; the next two share the second.
+  assert.deepEqual(f.state.charts.map((chart) => [chart.position.overlayPosition.anchorCell.rowIndex, chart.position.overlayPosition.anchorCell.columnIndex]), [[6, 0], [23, 0], [23, 5]]);
+  const chartData = rowsOf(f, 'Dashboard report (chart data)'),
+    combined = find(chartData, 'Spend and CPC');
+  assert.deepEqual(chartData.slice(combined + 1, combined + 3), [['Date', 'Spend', 'Cpc'], ['2026-08', 10, 1.6667]]);
+  assert.equal(find(rowsOf(f, 'Dashboard report'), 'Data sources'), 6 + 2 * 17, 'two band rows are reserved');
+  f.input.tiles[1].secondaryAxis = ['spend', 'cpc'];
+  assert.throws(() => f.save(), /"Spend and CPC": secondaryAxis/);
+  f.input.tiles[1].secondaryAxis = ['cpc'];
+  f.input.tiles[3].stacked = true;
+  assert.throws(() => f.save(), /"Spend share": stacked/);
+});
+
 test('row limits do not make duplicate dataset queries distinct', () => {
   const f = fixture();
   f.input.datasets[1] = {

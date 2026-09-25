@@ -71,6 +71,21 @@ function dmvChatDashboardTools_(session, baseTools) {
       },
       rankWithin: summary.rankWithin,
       limitPerGroup: summary.limitPerGroup,
+      stacked: {
+        type: 'boolean',
+        description: 'column, bar or area: stack the series, for a share over time.',
+      },
+      secondaryAxis: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Metric fields or ratio keys drawn on the right axis of a line, area, scatter or column chart (on columns they become lines), for example ["cpc"] beside spend.',
+      },
+      width: {
+        type: 'string',
+        enum: ['full'],
+        description: 'A chart that takes the whole row, for a long trend.',
+      },
       compare: {
         type: 'object',
         properties: {

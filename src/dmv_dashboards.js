@@ -158,6 +158,9 @@ function dmvValidateDashboard_(input, spreadsheet) {
       'filters',
       'ratios',
       'compare',
+      'stacked',
+      'secondaryAxis',
+      'width',
     ]);
     var title = dmvText_(tile.title, 'Tile title', 120, true);
     var type = String(tile.type || '');
@@ -306,6 +309,47 @@ function dmvValidateDashboard_(input, spreadsheet) {
         );
       if ((groupBy.length === 2 || type === 'pie') && values !== 1)
         throw new Error('"' + title + '": a pie or split chart takes exactly one metric or ratio.');
+      if (tile.stacked !== undefined) {
+        if (tile.stacked !== true || ['column', 'bar', 'area'].indexOf(type) < 0)
+          throw new Error('"' + title + '": stacked applies to column, bar and area charts.');
+        validated.stacked = true;
+      }
+      // Values on the right axis are usually rates beside counts; on a column chart they are
+      // drawn as lines, which is what Sheets offers for two scales.
+      if (tile.secondaryAxis !== undefined) {
+        var keys = metrics
+          .map(function (metric) {
+            return metric.field;
+          })
+          .concat(
+            ratios.map(function (ratio) {
+              return ratio.key;
+            })
+          );
+        var right = dmvDashboardNames_(tile.secondaryAxis, 8, 'secondaryAxis columns');
+        if (
+          ['line', 'column', 'area', 'scatter'].indexOf(type) < 0 ||
+          groupBy.length > 1 ||
+          !right.length ||
+          right.length >= keys.length ||
+          right.some(function (key) {
+            return keys.indexOf(key) < 0;
+          })
+        )
+          throw new Error(
+            '"' +
+              title +
+              '": secondaryAxis names metric fields or ratio keys of a line, column, area or scatter chart without a split, and leaves at least one on the left axis.'
+          );
+        validated.secondaryAxis = right;
+      }
+      if (tile.width !== undefined) {
+        if (tile.width !== 'full')
+          throw new Error(
+            '"' + title + '": width can only be "full", for a chart that takes the whole row.'
+          );
+        validated.width = 'full';
+      }
       if (type === 'pie' && groupBy.length !== 1)
         throw new Error('"' + title + '": a pie chart takes one groupBy column.');
     }
@@ -828,7 +872,12 @@ function dmvDashboardChartTable_(session, resultId, tile) {
       var label = String(column.label || column.key);
       var name = !split ? label : values.length > 1 ? label + ' · ' + split : split;
       if (!seriesByName[name]) {
-        seriesByName[name] = { name: name, type: column.type, total: 0 };
+        seriesByName[name] = {
+          name: name,
+          type: column.type,
+          total: 0,
+          right: (tile.secondaryAxis || []).indexOf(column.key.split('__')[0]) >= 0,
+        };
         series.push(seriesByName[name]);
       }
       var number = Number(row[column.key]);
@@ -883,7 +932,16 @@ function dmvDashboardChartTable_(session, resultId, tile) {
     })
   );
   if (matrix.length < 2) throw new Error('"' + tile.title + '" has no rows to chart.');
-  return { columns: columns, matrix: matrix, note: note };
+  return {
+    columns: columns,
+    matrix: matrix,
+    note: note,
+    right: series.map(function (item) {
+      return item.right;
+    }),
+    stacked: !!tile.stacked,
+    full: tile.width === 'full',
+  };
 }
 
 function dmvDashboardTable_(session, resultId, tile) {
@@ -999,11 +1057,35 @@ function dmvDashboardPage_(dashboard, stamp, cards, blocks, sources) {
       });
     push([]);
   }
-  var chartTop = matrix.length;
-  var chartCount = blocks.filter(function (block) {
-    return block.chart;
-  }).length;
-  var bandRows = Math.ceil(chartCount / DMV_DASHBOARD.chartsPerRow) * DMV_DASHBOARD.chartBandRows;
+  // Charts sit two per band row; a full-width chart takes a band row of its own.
+  var chartTop = matrix.length,
+    slot = 0,
+    band = 0;
+  var places = blocks
+    .filter(function (block) {
+      return block.chart;
+    })
+    .map(function (block) {
+      var span = block.full ? DMV_DASHBOARD.chartsPerRow : 1;
+      if (slot + span > DMV_DASHBOARD.chartsPerRow) {
+        band++;
+        slot = 0;
+      }
+      var place = {
+        row: chartTop + band * DMV_DASHBOARD.chartBandRows,
+        column: slot * DMV_DASHBOARD.chartColumnSpan,
+        width:
+          DMV_DASHBOARD.chartWidth +
+          (span - 1) * DMV_DASHBOARD.chartColumnSpan * DMV_DASHBOARD.columnWidth,
+      };
+      slot += span;
+      if (slot >= DMV_DASHBOARD.chartsPerRow) {
+        band++;
+        slot = 0;
+      }
+      return place;
+    });
+  var bandRows = (band + (slot ? 1 : 0)) * DMV_DASHBOARD.chartBandRows;
   for (var i = 0; i < bandRows; i++) push([]);
   styles.push({ row: push(['Data sources']), style: 'section' });
   tables.push({
@@ -1031,16 +1113,18 @@ function dmvDashboardPage_(dashboard, stamp, cards, blocks, sources) {
       data.matrix.push(dmvDashboardPad_(row, data.width));
     });
     data.tables.push({ row: top, rows: block.matrix.length, columns: block.columns });
+    var place = places[charts.length];
     charts.push({
       type: block.type,
       title: block.title,
       row: top,
       rows: block.matrix.length,
       columns: block.columns.length,
-      anchorRow:
-        chartTop +
-        Math.floor(charts.length / DMV_DASHBOARD.chartsPerRow) * DMV_DASHBOARD.chartBandRows,
-      anchorColumn: (charts.length % DMV_DASHBOARD.chartsPerRow) * DMV_DASHBOARD.chartColumnSpan,
+      right: block.right,
+      stacked: block.stacked,
+      anchorRow: place.row,
+      anchorColumn: place.column,
+      width: place.width,
     });
   });
   return {
@@ -1079,15 +1163,21 @@ function dmvDashboardChartSpec_(chart, source) {
     var series = [];
     // Sheets draws a bar chart sideways and rejects bar series on any axis but the bottom one.
     var axis = chart.type === 'bar' ? 'BOTTOM_AXIS' : 'LEFT_AXIS';
-    for (var offset = 1; offset < chart.columns; offset++)
-      series.push({ series: column(offset, false), targetAxis: axis });
+    var combo = chart.type === 'column' && (chart.right || []).some(Boolean);
+    for (var offset = 1; offset < chart.columns; offset++) {
+      var right = !!(chart.right && chart.right[offset - 1]);
+      var item = { series: column(offset, false), targetAxis: right ? 'RIGHT_AXIS' : axis };
+      if (combo) item.type = right ? 'LINE' : 'COLUMN';
+      series.push(item);
+    }
     spec.basicChart = {
-      chartType: DMV_CHART_TYPES[chart.type],
+      chartType: combo ? 'COMBO' : DMV_CHART_TYPES[chart.type],
       legendPosition: series.length > 1 ? 'BOTTOM_LEGEND' : 'NO_LEGEND',
       headerCount: 1,
       domains: [{ domain: column(0, false) }],
       series: series,
     };
+    if (chart.stacked) spec.basicChart.stackedType = 'STACKED';
   }
   return spec;
 }
@@ -1172,7 +1262,7 @@ function dmvDashboardChartRequests_(spreadsheetId, charts, area, source, width, 
                 rowIndex: area.row - 1 + chart.anchorRow,
                 columnIndex: area.column - 1 + chart.anchorColumn,
               },
-              widthPixels: DMV_DASHBOARD.chartWidth,
+              widthPixels: chart.width,
               heightPixels: DMV_DASHBOARD.chartHeight,
             },
           },
