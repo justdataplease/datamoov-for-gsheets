@@ -32,6 +32,11 @@ test('sidebar navigation stays inside its viewport and captures the three primar
   await mkdir('data/screenshots', { recursive: true });
   const suffix = testInfo.project.name === 'sidebar-300' ? '-300' : '';
   await noOverflow(page);
+  // The scrollbar's room is reserved on every panel, so a panel that starts to scroll in Chrome
+  // does not reflow the header and headings (headless runs hide scrollbars, so pin the rule).
+  expect(
+    await page.evaluate(() => getComputedStyle(document.documentElement).scrollbarGutter)
+  ).toBe('stable');
   await page.screenshot({ path: 'data/screenshots/sidebar-home' + suffix + '.png', fullPage: true });
   await startReport(page);
   await noOverflow(page);
