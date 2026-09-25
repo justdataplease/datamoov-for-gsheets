@@ -71,6 +71,16 @@ function dmvChatDashboardTools_(session, baseTools) {
       },
       rankWithin: summary.rankWithin,
       limitPerGroup: summary.limitPerGroup,
+      compare: {
+        type: 'object',
+        properties: {
+          current: { type: 'string', description: 'Dataset id of the current period.' },
+          previous: { type: 'string', description: 'Dataset id of the previous period.' },
+        },
+        required: ['current', 'previous'],
+        description:
+          'kpi only, for a period comparison: each scorecard shows the current dataset value and its change against the previous dataset.',
+      },
     },
     required: ['title', 'type'],
   };

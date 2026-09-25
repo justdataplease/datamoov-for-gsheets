@@ -726,6 +726,26 @@ test('tiles filter their rows and compute ratios from summed counts', () => {
   assert.throws(() => f.save(), /"Second only": each filter needs field, op/);
 });
 
+test('a compare scorecard shows the current dataset with its change against the previous one', () => {
+  const f = fixture();
+  f.input.tiles[0].compare = { current: 'source1', previous: 'source0' };
+  const result = f.run(f.save().id);
+  assert.deepEqual(result.scorecards, [
+    { label: 'Spend (EUR)', value: 7, previous: 3, change: '+133.3% vs 3' },
+    { label: 'Clicks', value: 4, previous: 2, change: '+100% vs 2' },
+  ]);
+  assert.deepEqual(rowsOf(f, 'Dashboard report').slice(3, 6), [
+    ['Spend (EUR)', 'Clicks'],
+    [7, 4],
+    ['+133.3% vs 3', '+100% vs 2'],
+  ]);
+  f.input.tiles[0].compare = { current: 'source1', previous: 'missing' };
+  assert.throws(() => f.save(), /"Totals": compare belongs on a kpi tile/);
+  f.input.tiles[0].compare = undefined;
+  f.input.tiles[1].compare = { current: 'source1', previous: 'source0' };
+  assert.throws(() => f.save(), /"Monthly spend": compare belongs on a kpi tile/);
+});
+
 test('row limits do not make duplicate dataset queries distinct', () => {
   const f = fixture();
   f.input.datasets[1] = {

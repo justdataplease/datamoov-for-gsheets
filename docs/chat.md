@@ -149,7 +149,8 @@ A request such as **"Create a marketing performance week vs previous period"** f
 workflow, including after you answer a source-selection question. It saves two datasets per
 account, `lastWeek` and `previousWeek` (the last completed Monday-to-Sunday week and the one
 before, in the spreadsheet timezone), so three accounts use six datasets and both weeks advance
-on refresh. A trend request saves one dataset per account for the whole period (`last90` for the
+on refresh. Each account's scorecards compare its two datasets, so every card shows the current
+value and its change against the previous week. A trend request saves one dataset per account for the whole period (`last90` for the
 last 3 months) and the charts group it by week or month. A simple question about spend remains an
 analysis unless you ask for a dashboard.
 

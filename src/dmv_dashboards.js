@@ -157,6 +157,7 @@ function dmvValidateDashboard_(input, spreadsheet) {
       'limitPerGroup',
       'filters',
       'ratios',
+      'compare',
     ]);
     var title = dmvText_(tile.title, 'Tile title', 120, true);
     var type = String(tile.type || '');
@@ -307,6 +308,23 @@ function dmvValidateDashboard_(input, spreadsheet) {
         throw new Error('"' + title + '": a pie or split chart takes exactly one metric or ratio.');
       if (type === 'pie' && groupBy.length !== 1)
         throw new Error('"' + title + '": a pie chart takes one groupBy column.');
+    }
+    // A scorecard compares one dataset (the current period) with another (the previous one).
+    if (tile.compare !== undefined) {
+      dmvDashboardObject_(tile.compare, ['current', 'previous']);
+      if (
+        type !== 'kpi' ||
+        tile.compare.current === tile.compare.previous ||
+        ['current', 'previous'].some(function (side) {
+          return typeof tile.compare[side] !== 'string' || from.indexOf(tile.compare[side]) < 0;
+        })
+      )
+        throw new Error(
+          '"' +
+            title +
+            '": compare belongs on a kpi tile and names two different dataset ids of that tile as current and previous.'
+        );
+      validated.compare = { current: tile.compare.current, previous: tile.compare.previous };
     }
     if (tile.orderBy !== undefined) {
       dmvDashboardObject_(tile.orderBy, ['field', 'direction']);
@@ -698,9 +716,19 @@ function dmvDashboardLabel_(value) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-// One scorecard per metric or ratio, split by currency when the money is mixed.
-function dmvDashboardCards_(session, resultId, tile) {
+// One scorecard per metric or ratio, split by currency when the money is mixed. A compare tile
+// groups by source: the current dataset's rows become the cards, the previous dataset's rows
+// with the same currency supply the change.
+function dmvDashboardCards_(session, resultId, tile, datasets) {
   var cards = [];
+  var compare = null;
+  if (tile.compare)
+    compare = ['current', 'previous'].reduce(function (labels, side) {
+      labels[side] = datasets.filter(function (dataset) {
+        return dataset.id === tile.compare[side];
+      })[0].label;
+      return labels;
+    }, {});
   tile.metrics
     .map(function (metric) {
       return { metrics: [metric] };
@@ -714,26 +742,50 @@ function dmvDashboardCards_(session, resultId, tile) {
       var summary = dmvDashboardSummarize_(
         session,
         resultId,
-        Object.assign({ filters: tile.filters, limit: 50 }, spec)
+        Object.assign(
+          { filters: tile.filters, limit: 50, groupBy: compare ? ['source'] : [] },
+          spec
+        )
       );
       var value = summary.columns[summary.columns.length - 1];
+      var splits = summary.columns.slice(compare ? 1 : 0, -1);
+      var splitOf = function (row) {
+        return splits
+          .map(function (column) {
+            return row[column.key];
+          })
+          .join(' · ');
+      };
       // Money always names its currency, so neither a reader nor the chat has to guess it.
       var single = value.type === 'currency' ? (summary.metadata || {}).currency : '';
+      var previous = Object.create(null);
       summary.rows.forEach(function (row) {
-        var split =
-          summary.columns.length > 1
-            ? ' (' + row[summary.columns[0].key] + ')'
-            : single
-              ? ' (' + single + ')'
-              : '';
-        cards.push({
+        if (compare && row.source === compare.previous) previous[splitOf(row)] = row[value.key];
+      });
+      summary.rows.forEach(function (row) {
+        if (compare && row.source !== compare.current) return;
+        var split = splits.length ? ' (' + splitOf(row) + ')' : single ? ' (' + single + ')' : '';
+        var card = {
           label: dmvDashboardLabel_(value.label) + split,
           value: row[value.key] === null || row[value.key] === undefined ? '' : row[value.key],
           type: value.type,
-        });
+        };
+        if (compare)
+          card.previous = previous[splitOf(row)] === undefined ? null : previous[splitOf(row)];
+        cards.push(card);
       });
     });
   return cards;
+}
+
+function dmvDashboardChange_(card) {
+  var current = Number(card.value),
+    previous = Number(card.previous);
+  if (card.previous === null || card.value === '' || !isFinite(current) || !isFinite(previous))
+    return 'no previous value';
+  if (!previous) return 'previous 0';
+  var percent = Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10;
+  return (percent > 0 ? '+' : '') + percent + '% vs ' + previous.toLocaleString();
 }
 
 // A chart reads a wide table: the axis column, then one column per series.
@@ -931,6 +983,20 @@ function dmvDashboardPage_(dashboard, stamp, cards, blocks, sources) {
     cards.forEach(function (card, index) {
       styles.push({ row: valueRow, column: index, style: 'kpiValue', type: card.type });
     });
+    if (
+      cards.some(function (card) {
+        return card.previous !== undefined;
+      })
+    )
+      styles.push({
+        row: push(
+          cards.map(function (card) {
+            return card.previous === undefined ? '' : dmvDashboardChange_(card);
+          })
+        ),
+        columns: cards.length,
+        style: 'muted',
+      });
     push([]);
   }
   var chartTop = matrix.length;
@@ -1295,7 +1361,7 @@ function dmvRunDashboard(id, requestedDeadline) {
     plan.tiles.forEach(function (tile) {
       var input = dmvDashboardInput_(session, plan.datasets, tile, fetched, memo);
       if (tile.type === 'kpi') {
-        cards = cards.concat(dmvDashboardCards_(session, input, tile));
+        cards = cards.concat(dmvDashboardCards_(session, input, tile, plan.datasets));
         return;
       }
       var chart = dmvDashboardIsChart_(tile);
@@ -1395,7 +1461,12 @@ function dmvRunDashboard(id, requestedDeadline) {
         rowCount: fetchedRows,
         chartCount: page.charts.length,
         scorecards: cards.slice(0, DMV_DASHBOARD.maxKpis).map(function (card) {
-          return { label: card.label, value: card.value };
+          var item = { label: card.label, value: card.value };
+          if (card.previous !== undefined) {
+            item.previous = card.previous;
+            item.change = dmvDashboardChange_(card);
+          }
+          return item;
         }),
         tiles: blocks.map(function (block) {
           return {
