@@ -203,6 +203,46 @@ function dmvChatDescribe_(session, result, id) {
   return description;
 }
 
+// Each completed action carries a few short facts for the expandable step in the sidebar. They
+// come from validated inputs and result metadata, never credentials, and stay out of the
+// transcript and the model's context.
+function dmvChatDetails_(pairs) {
+  return pairs
+    .filter(function (pair) {
+      var value = pair[1];
+      return (
+        value !== undefined &&
+        value !== null &&
+        value !== '' &&
+        !(Array.isArray(value) && !value.length)
+      );
+    })
+    .slice(0, 12)
+    .map(function (pair) {
+      var value = Array.isArray(pair[1]) ? pair[1].join(', ') : pair[1];
+      return { label: String(pair[0]).slice(0, 40), value: String(value).slice(0, 200) };
+    });
+}
+
+function dmvChatReportDetails_(connection, definition, query, dates, rows) {
+  return dmvChatDetails_(
+    [
+      ['Connection', connection.label],
+      ['Report', definition.label],
+      ['Fields', query.fields],
+    ]
+      .concat(
+        Object.keys(query.config || {}).map(function (key) {
+          return [key, query.config[key]];
+        })
+      )
+      .concat([
+        ['Dates', dates.startDate ? dates.startDate + ' to ' + dates.endDate : ''],
+        ['Rows', rows.toLocaleString()],
+      ])
+  );
+}
+
 function dmvChatColumn_(result, name, label) {
   var wanted = String(name || '').toLowerCase();
   var column = result.columns.filter(function (item) {
@@ -277,6 +317,7 @@ function dmvChatRunReport_(session, input) {
           ' rows' +
           (dates.startDate ? ' - ' + dates.startDate + ' to ' + dates.endDate : ''),
         ref: reusedId,
+        details: dmvChatReportDetails_(connection, definition, query, dates, reused.rows.length),
       });
       var description = dmvChatDescribe_(session, reused, reusedId);
       description.reused = true;
@@ -327,6 +368,7 @@ function dmvChatRunReport_(session, input) {
     kind: 'report',
     text: 'Ran ' + stored.source + ' · ' + result.rows.length.toLocaleString() + ' rows',
     ref: id,
+    details: dmvChatReportDetails_(connection, definition, query, dates, result.rows.length),
   });
   return dmvChatDescribe_(session, stored, id);
 }
@@ -655,6 +697,15 @@ function dmvChatCombine_(session, input, minimum) {
     kind: 'summary',
     text: 'Combined ' + sources.length + ' results into ' + rows.length.toLocaleString() + ' rows',
     ref: id,
+    details: dmvChatDetails_([
+      ['Sources', Object.keys(labels)],
+      [
+        'Columns',
+        stored.columns.map(function (column) {
+          return column.key;
+        }),
+      ],
+    ]),
   });
   return dmvChatDescribe_(session, stored, id);
 }
@@ -1020,6 +1071,28 @@ function dmvChatSummarize_(session, input) {
     text:
       'Summarized ' + rows.length.toLocaleString() + ' rows into ' + output.length.toLocaleString(),
     ref: id,
+    details: dmvChatDetails_([
+      [
+        'Group by',
+        groupBy.map(function (column) {
+          return column.key + (column.type === 'date' ? ' (' + bucket + ')' : '');
+        }),
+      ],
+      [
+        'Metrics',
+        metrics.map(function (metric) {
+          return metric.agg + ' ' + metric.column.key;
+        }),
+      ],
+      [
+        'Filters',
+        filters.map(function (filter) {
+          return filter.column.key + ' ' + filter.op + ' ' + filter.value;
+        }),
+      ],
+      ['Order', orderBy ? sortColumn.key + ' ' + (direction === 1 ? 'asc' : 'desc') : ''],
+      ['Groups', totalGroups.toLocaleString() + (truncated ? ', kept ' + limit : '')],
+    ]),
   });
   var description = dmvChatDescribe_(session, stored, id);
   description.inputRows = rows.length;
@@ -1093,6 +1166,16 @@ function dmvChatWriteSheet_(session, input) {
     links: [{ label: sheetName, url: url }],
     text: 'Wrote ' + result.rows.length.toLocaleString() + ' rows to ' + range,
     ref: input.resultId + ' at ' + range,
+    details: dmvChatDetails_([
+      ['Source', result.source],
+      ['Range', range],
+      [
+        'Columns',
+        result.columns.map(function (column) {
+          return column.label || column.key;
+        }),
+      ],
+    ]),
   });
   if (session.sheetNames.indexOf(sheetName) < 0) session.sheetNames.push(sheetName);
   return {
@@ -1235,6 +1318,15 @@ function dmvChatReadSheet_(session, input) {
     kind: 'read',
     text: 'Read ' + data.length.toLocaleString() + ' rows from ' + sheetName,
     ref: id,
+    details: dmvChatDetails_([
+      ['Range', input.range],
+      [
+        'Columns',
+        stored.columns.map(function (column) {
+          return column.label;
+        }),
+      ],
+    ]),
   });
   return dmvChatDescribe_(session, stored, id);
 }
@@ -1434,6 +1526,16 @@ function dmvChatCreateChart_(session, input) {
       title +
       '" on ' +
       area.sheetName,
+    details: dmvChatDetails_([
+      ['X axis', x.label],
+      [
+        'Series',
+        series.map(function (column) {
+          return column.label;
+        }),
+      ],
+      ['Anchor', dmvChatA1_(anchor.row, anchor.column)],
+    ]),
   });
   return {
     ok: true,

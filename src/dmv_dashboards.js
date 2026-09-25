@@ -352,10 +352,9 @@ function dmvDashboardLinks_(spreadsheet, dashboard) {
     });
 }
 
-function dmvDashboardSummary_(dashboard) {
+function dmvDashboardSummary_(dashboard, spreadsheet) {
   var legacy = dmvDashboardLegacy_(dashboard);
   var expired = dashboard.status === 'running' && Date.now() - dashboard.startedAt >= 300000;
-  var spreadsheet = dmvSpreadsheet_();
   return {
     id: dashboard.id,
     revision: dashboard.revision,
@@ -396,12 +395,14 @@ function dmvDashboardHere_(id) {
 }
 
 function dmvListDashboards() {
-  var id = dmvSpreadsheet_().getId();
+  var spreadsheet = dmvSpreadsheet_();
   return dmvList_('dashboard')
     .filter(function (dashboard) {
-      return dashboard.spreadsheetId === id;
+      return dashboard.spreadsheetId === spreadsheet.getId();
     })
-    .map(dmvDashboardSummary_);
+    .map(function (dashboard) {
+      return dmvDashboardSummary_(dashboard, spreadsheet);
+    });
 }
 
 function dmvSaveDashboard(input) {
@@ -504,7 +505,7 @@ function dmvSaveDashboard(input) {
           dmvOutputKey_(dashboard.spreadsheetId, dmvDashboardOutputId_(dashboard, output))
         );
     });
-    return dmvDashboardSummary_(dashboard);
+    return dmvDashboardSummary_(dashboard, spreadsheet);
   });
 }
 
@@ -518,6 +519,7 @@ function dmvDeleteDashboard(id, keepTabs) {
     if (dashboard.runToken && Date.now() - dashboard.startedAt < 300000)
       throw new Error('Wait for this dashboard refresh to finish.');
     var store = dmvStore_();
+    // -data is the combined tab of dashboards saved before datasets existed.
     var keys = ['-report', '-charts', '-data']
       .concat(
         (dashboard.outputs || []).map(function (output) {
@@ -1093,7 +1095,7 @@ function dmvRunDashboard(id, requestedDeadline) {
       );
       var query = dmvValidateQuery_(dataset, spreadsheet);
       // Reports fail instead of truncating, so a limit raised in Settings after this plan
-      // was saved must apply here; the combined 20,000-row ceiling still holds.
+      // was saved must apply here; the combined DMV_LIMITS.maxRows ceiling still holds.
       query.maxRows = Math.max(dataset.maxRows, rowCap);
       var definition = dmvDefinition_(dmvConnector_(query.connectorId), query.reportType);
       // One refresh has one date anchor, even if sequential fetches cross midnight.

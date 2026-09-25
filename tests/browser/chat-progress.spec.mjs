@@ -340,13 +340,60 @@ test('a failed step the model retried successfully is reported as recovered', as
       transcriptAppend: [],
     })
   );
-  const summary = page.locator('.chat-actions summary');
+  const summary = page.locator('.chat-actions > summary');
   await expect(summary).toHaveText('Actions · Recovered from 1 failed step');
   await expect(summary).toHaveClass(/recovered/);
   await expect(summary).toHaveCSS('color', 'rgb(35, 119, 83)');
   await expect(page.locator('.chat-events li.error')).toHaveCount(0);
   await expect(page.locator('.chat-events li').nth(1)).toHaveText(
     'create_chart: bad id (retried successfully)'
+  );
+});
+
+test('each completed step with facts is one collapsed line that opens on click', async ({ page }) => {
+  await configuredChat(page);
+  await controlledChat(page);
+  await send(page, 'Spend by campaign');
+  await page.evaluate(() =>
+    window.chatProbe.chats[0].succeed({
+      text: 'Done.',
+      events: [
+        {
+          kind: 'report',
+          text: 'Ran Google Ads · 120 rows',
+          details: [
+            { label: 'Fields', value: 'date, campaign, spend' },
+            { label: 'Dates', value: '2026-09-01 to 2026-09-24' },
+            { label: 'Ignored', value: 12 },
+          ],
+        },
+        { kind: 'summary', text: 'Summarized 120 rows into 8' },
+        {
+          kind: 'write',
+          text: 'Wrote 8 rows to Spend!A1:C9',
+          links: [{ label: 'Spend', url: 'https://docs.google.com/spreadsheets/d/x/edit#gid=1' }],
+        },
+      ],
+      transcriptAppend: [],
+    })
+  );
+  const rows = page.locator('.chat-events li');
+  await expect(rows).toHaveCount(3);
+  const first = rows.nth(0).locator('.chat-step');
+  await expect(first).not.toHaveAttribute('open', '');
+  await expect(first.locator('summary')).toHaveText('Ran Google Ads · 120 rows');
+  await expect(first.locator('.chat-step-facts')).toBeHidden();
+  await first.locator('summary').click();
+  await expect(first.locator('.chat-step-facts dt')).toHaveText(['Fields', 'Dates']);
+  await expect(first.locator('.chat-step-facts dd')).toHaveText([
+    'date, campaign, spend',
+    '2026-09-01 to 2026-09-24',
+  ]);
+  await expect(rows.nth(1).locator('.chat-step')).toHaveCount(0);
+  await expect(rows.nth(1)).toHaveText('Summarized 120 rows into 8');
+  await expect(rows.nth(2).locator('.chat-step-facts a')).toHaveAttribute(
+    'href',
+    'https://docs.google.com/spreadsheets/d/x/edit#gid=1'
   );
 });
 

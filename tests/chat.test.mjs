@@ -117,6 +117,14 @@ test('a full Anthropic turn runs a report, summarizes, writes the table, charts 
   assert.match(reply.events[2].text, /Wrote 2 rows to Spend by campaign!A1:C3/);
   assert.equal(reply.options, null);
   assert.equal(reply.transcriptAppend[1].actions.length, 4);
+  // Every step carries short facts for the sidebar; they stay out of the replayed transcript.
+  const facts = plain(reply.events).map((event) => Object.fromEntries(event.details.map((fact) => [fact.label, fact.value])));
+  assert.deepEqual(facts[0], { Connection: 'Orchard main', Report: 'Daily campaigns', Fields: 'date, campaign, spend, clicks', Dates: '2026-09-11 to 2026-09-17', Rows: '3' });
+  assert.deepEqual(facts[1], { 'Group by': 'campaign', Metrics: 'sum spend, sum clicks', Groups: '2' });
+  assert.deepEqual(facts[2], { Source: 'Summary of Orchard Ads (Orchard main) · Daily campaigns', Range: 'Spend by campaign!A1:C3', Columns: 'Campaign, Spend, Clicks' });
+  assert.deepEqual(facts[3], { 'X axis': 'Campaign', Series: 'Spend', Anchor: 'E1' });
+  assert.ok(reply.transcriptAppend[1].actions.every((action) => !/Connection:|Orchard main,/.test(action)));
+  assert.ok(!JSON.stringify(reply.events).includes(PROVIDER_TOKEN));
   assert.deepEqual(plain(f.fetched[0]), { fields: ['date', 'campaign', 'spend', 'clicks'], config: {}, startDate: '2026-09-11', endDate: '2026-09-17', maxRows: 10000, deadline: f.api.Date.now() + 200000 });
 
   const calls = f.state.http;

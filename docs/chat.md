@@ -63,8 +63,10 @@ source fetches; multi-account and period comparisons can require several fetches
 While a turn runs, live activity shows the actual actions: fetching reports, reading a sheet,
 combining results, summarizing data, writing a table or creating a chart. When the answer arrives,
 **Actions** stays open below it when **Show completed actions (debug)** is enabled in Settings
-(the default). Turn it off to hide successful histories. Failures and completed sheet updates
-remain visible, with details available. The **+** button starts a new chat.
+(the default). Each action is one line; click it to see what the step used (connection, fields,
+dates, grouping, range) and the tab it wrote. Turn the setting off to hide successful histories.
+Failures and completed sheet updates remain visible, with details available. The **+** button
+starts a new chat.
 Answers render bold and italic text, lists, headings, tables, links and code; raw HTML and images
 are not executed or loaded.
 

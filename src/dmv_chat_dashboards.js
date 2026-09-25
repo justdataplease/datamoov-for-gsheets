@@ -157,6 +157,21 @@ function dmvChatSaveDashboard_(session, input) {
       saved.chartCount +
       (saved.chartCount === 1 ? ' chart.' : ' charts.') +
       ' Refresh it from Reports > Dashboards.',
+    details: dmvChatDetails_([
+      ['Dashboard tab', saved.target.sheetName],
+      [
+        'Datasets',
+        saved.datasets.map(function (dataset) {
+          return dataset.label + ' → ' + dataset.sheetName;
+        }),
+      ],
+      [
+        'Tiles',
+        plan.tiles.map(function (tile) {
+          return tile && tile.title;
+        }),
+      ],
+    ]),
   });
   return saved;
 }
@@ -205,6 +220,20 @@ function dmvChatRunDashboard_(session, input) {
       (result.chartCount === 1 ? ' chart, ' : ' charts, ') +
       result.scorecards.length +
       (result.scorecards.length === 1 ? ' scorecard.' : ' scorecards.'),
+    details: dmvChatDetails_(
+      result.scorecards
+        .map(function (card) {
+          return [card.label, card.value];
+        })
+        .concat(
+          result.tiles.map(function (tile) {
+            return [
+              tile.title,
+              tile.type + ' · ' + tile.rows + ' rows' + (tile.note ? ' · ' + tile.note : ''),
+            ];
+          })
+        )
+    ),
   });
   dmvChatSeeNewTabs_(session);
   return result;

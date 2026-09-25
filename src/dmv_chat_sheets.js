@@ -678,6 +678,10 @@ function dmvChatEditSheet_(session, input) {
         input.action === 'create_sheet'
           ? 'Created tab ' + input.newName
           : 'Updated ' + input.sheetName + '!' + area.a1,
+      details: dmvChatDetails_([
+        ['Action', input.action],
+        ['Range', area ? area.a1 : ''],
+      ]),
     });
     dmvChatSeeNewTabs_(session);
     return {

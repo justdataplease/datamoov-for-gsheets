@@ -325,6 +325,35 @@
       }
       return body;
     }
+    // One completed action is one line; a step with facts or links behind it expands on click.
+    function eventRow(event) {
+      const item = el('li', event.kind === 'error' && !event.recovered ? 'error' : '');
+      const text = event.text + (event.recovered ? ' (retried successfully)' : '');
+      const facts = Array.isArray(event.details)
+        ? event.details.filter(
+            (fact) => typeof fact?.label === 'string' && typeof fact?.value === 'string'
+          )
+        : [];
+      const links = (Array.isArray(event.links) ? event.links : [])
+        .map((link) => sheetLink(String(link?.label || 'Open sheet'), link?.url))
+        .filter(Boolean);
+      if (!facts.length && !links.length) {
+        item.textContent = text;
+        return item;
+      }
+      const step = el('details', 'chat-step');
+      step.append(el('summary', '', text));
+      const body = el('dl', 'chat-step-facts');
+      for (const fact of facts) body.append(el('dt', '', fact.label), el('dd', '', fact.value));
+      for (const link of links) {
+        const cell = el('dd');
+        cell.append(link);
+        body.append(el('dt', '', 'Open'), cell);
+      }
+      step.append(body);
+      item.append(step);
+      return item;
+    }
     function scrollToMessage(node) {
       node.scrollIntoView({
         behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
@@ -403,9 +432,6 @@
         const errors = extra.events.filter((event) => event.kind === 'error');
         const failed = extra.error || errors.some((event) => !event.recovered);
         const recovered = failed ? 0 : errors.length;
-        const written = extra.events.some(
-          (event) => event.kind === 'write' || event.kind === 'chart'
-        );
         if (debug || failed) {
           const actions = el('details', 'chat-actions');
           actions.open = debug;
@@ -423,14 +449,7 @@
           );
           actions.append(summary);
           const list = el('ul', 'chat-events');
-          for (const event of extra.events) {
-            const item = el(
-              'li',
-              event.kind === 'error' && !event.recovered ? 'error' : '',
-              event.text + (event.recovered ? ' (retried successfully)' : '')
-            );
-            list.append(item);
-          }
+          for (const event of extra.events) list.append(eventRow(event));
           actions.append(list);
           node.append(actions);
         }
@@ -552,7 +571,6 @@
           events: reply.events,
           options: reply.options,
           error: Boolean(reply.failed),
-          dashboard: reply.events?.some((event) => event.kind === 'dashboard'),
         });
       } catch (error) {
         if (generation !== chat.generation || (turn && !currentTurn(turn))) return;
