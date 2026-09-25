@@ -215,6 +215,16 @@
       daily: 'Daily',
       weekly: 'Weekly',
     };
+    const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const hourLabel = (hour) => String(hour).padStart(2, '0') + ':00';
+    // "Daily at 06:00", "Weekly on Monday at 06:00", "Every hour", "On demand".
+    function scheduleText(item) {
+      const label = SCHEDULE_LABELS[item.schedule] || item.schedule || 'On demand';
+      const at = item.at;
+      if (!['daily', 'weekly'].includes(item.schedule) || !Number.isInteger(at?.hour)) return label;
+      const day = item.schedule === 'weekly' ? WEEKDAYS[at.weekday - 1] : '';
+      return label + (day ? ' on ' + day : '') + ' at ' + hourLabel(at.hour);
+    }
     function detail(label, value) {
       const row = el('div', 'card-detail');
       row.append(el('span', '', label), el('strong', '', value));
@@ -289,11 +299,7 @@
             '↳',
             (report.target?.sheetName || '') + ' · ' + (report.target?.startCell || 'A1')
           ),
-          detail(
-            'Refresh',
-            (SCHEDULE_LABELS[report.schedule] || report.schedule || 'On demand') +
-              nextRunLabel(report)
-          ),
+          detail('Refresh', scheduleText(report) + nextRunLabel(report)),
           detail(
             'Updated',
             timeLabel(report.lastRun) +
@@ -532,18 +538,12 @@
           content.append(row);
         }
         // The schedule is changed on the card itself; a dashboard has no edit form.
-        const schedule = el('select');
-        for (const [value, label] of Object.entries(SCHEDULE_LABELS)) {
-          const option = el('option', '', label);
-          option.value = value;
-          schedule.append(option);
-        }
-        schedule.value = dashboard.schedule || 'manual';
-        schedule.disabled = running || removing || dashboard.legacy === true;
-        schedule.setAttribute('aria-label', 'Refresh schedule for ' + dashboard.name);
-        schedule.addEventListener('change', () => scheduleDashboard(dashboard, schedule));
         const scheduleRow = detail('Refresh', '');
-        scheduleRow.lastElementChild.replaceChildren(schedule, nextRunLabel(dashboard));
+        scheduleRow.lastElementChild.className = 'card-schedule';
+        scheduleRow.lastElementChild.replaceChildren(
+          ...scheduleControls(dashboard, running || removing || dashboard.legacy === true),
+          nextRunLabel(dashboard)
+        );
         content.append(scheduleRow, detail('Updated', timeLabel(dashboard.lastRun)));
         if (dashboard.statusMessage)
           content.append(el('p', 'card-progress', dashboard.statusMessage));
@@ -624,21 +624,55 @@
         }
       }
     }
-    async function scheduleDashboard(dashboard, select) {
-      select.disabled = true;
+    // Schedule, weekday and hour selects for a dashboard card; a change to any saves all three.
+    function scheduleControls(dashboard, disabled) {
+      const schedule = el('select'),
+        day = el('select'),
+        hour = el('select');
+      for (const [value, label] of Object.entries(SCHEDULE_LABELS))
+        schedule.append(option(value, label));
+      WEEKDAYS.forEach((name, index) => day.append(option(String(index + 1), name)));
+      for (let value = 0; value < 24; value++) hour.append(option(String(value), hourLabel(value)));
+      schedule.value = dashboard.schedule || 'manual';
+      day.value = String(dashboard.at?.weekday ?? 1);
+      hour.value = String(dashboard.at?.hour ?? 6);
+      schedule.setAttribute('aria-label', 'Refresh schedule for ' + dashboard.name);
+      day.setAttribute('aria-label', 'Refresh weekday for ' + dashboard.name);
+      hour.setAttribute('aria-label', 'Refresh hour for ' + dashboard.name);
+      const show = () => {
+        day.hidden = schedule.value !== 'weekly';
+        hour.hidden = !['daily', 'weekly'].includes(schedule.value);
+      };
+      show();
+      for (const node of [schedule, day, hour]) {
+        node.disabled = disabled;
+        node.addEventListener('change', () => {
+          show();
+          scheduleDashboard(dashboard, [schedule, day, hour]);
+        });
+      }
+      return [schedule, day, hour];
+    }
+    async function scheduleDashboard(dashboard, selects) {
+      const [schedule, day, hour] = selects;
+      for (const node of selects) node.disabled = true;
       try {
-        const saved = await api('dmvScheduleDashboard', dashboard.id, select.value);
+        const saved = await api('dmvScheduleDashboard', dashboard.id, schedule.value, {
+          hour: Number(hour.value),
+          weekday: Number(day.value),
+        });
         const current = state.dashboards.find((item) => item.id === dashboard.id) || dashboard;
         upsert(state.dashboards, {
           ...current,
           schedule: saved.schedule,
+          at: saved.at ?? null,
           nextRunAt: saved.nextRunAt ?? null,
         });
         notice(
           saved.schedule === 'manual'
             ? 'This dashboard refreshes on demand.'
             : 'This dashboard refreshes ' +
-                SCHEDULE_LABELS[saved.schedule].toLowerCase() +
+                scheduleText(saved).replace(/^./, (first) => first.toLowerCase()) +
                 ' in the background, without AI.'
         );
       } catch (error) {
@@ -1441,6 +1475,8 @@
       changeProvider();
       updateDates();
       updateSchedule();
+      updateStepSummaries();
+      openSteps(true, true, true);
     }
     function changeProvider(selectedType) {
       paintSourceBadge($('report-provider'));
@@ -1556,6 +1592,7 @@
     }
     function updateColumnCount() {
       $('selected-count').textContent = '(' + selectedColumnKeys().length + ')';
+      updateStepSummaries();
     }
     function updateDates() {
       const custom = !$('date-section').hidden && $('date-preset').value === 'custom';
@@ -1564,7 +1601,46 @@
       $('end-date').required = custom;
     }
     function updateSchedule() {
-      $('schedule-note').hidden = $('report-schedule').value === 'manual';
+      const schedule = $('report-schedule').value;
+      $('schedule-note').hidden = schedule === 'manual';
+      $('schedule-at').hidden = !['daily', 'weekly'].includes(schedule);
+      $('schedule-day-field').hidden = schedule !== 'weekly';
+    }
+    function formSchedule() {
+      return {
+        schedule: $('report-schedule').value,
+        at: { hour: Number($('refresh-hour').value), weekday: Number($('refresh-day').value) },
+      };
+    }
+    // A folded step shows what it holds, so a saved report reads as a summary until opened.
+    function updateStepSummaries() {
+      const chosen = (id) => $(id).selectedOptions[0]?.textContent.trim() || '';
+      const columns = selectedColumnKeys().length;
+      // A connection is named after its source, so it stands in for the source when chosen.
+      $('step-data-summary').textContent = [
+        chosen('report-connection') || chosen('report-provider'),
+        chosen('report-type'),
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      $('step-shape-summary').textContent = [
+        $('date-section').hidden ? '' : chosen('date-preset'),
+        columns ? columns + (columns === 1 ? ' column' : ' columns') : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      $('step-send-summary').textContent = [
+        $('report-name').value.trim(),
+        $('target-sheet').value.trim(),
+        scheduleText(formSchedule()),
+      ]
+        .filter(Boolean)
+        .join(' · ');
+    }
+    function openSteps(data, shape, send) {
+      $('step-data').open = data;
+      $('step-shape').open = shape;
+      $('step-send').open = send;
     }
     function collectReport(validate = true) {
       if (validate && !$('report-form').reportValidity()) return null;
@@ -1591,7 +1667,7 @@
           startCell: $('target-cell').value.trim().toUpperCase(),
         },
         maxRows: Number($('row-limit').value),
-        schedule: $('report-schedule').value,
+        ...formSchedule(),
       };
     }
     function editReport(report) {
@@ -1606,6 +1682,8 @@
       $('target-cell').value = report.target?.startCell || 'A1';
       $('row-limit').value = report.maxRows || state.limits.defaultRows;
       $('report-schedule').value = report.schedule || 'manual';
+      $('refresh-hour').value = String(report.at?.hour ?? 6);
+      $('refresh-day').value = String(report.at?.weekday ?? 1);
       $('date-preset').value = report.dateRange?.preset || 'last30';
       $('start-date').value = report.dateRange?.startDate || '';
       $('end-date').value = report.dateRange?.endDate || '';
@@ -1613,6 +1691,9 @@
       $('save-report').textContent = 'Save changes';
       updateDates();
       updateSchedule();
+      updateStepSummaries();
+      // A saved report is already configured: fold its data and shape, keep the destination open.
+      openSteps(false, false, true);
       tab('compose');
     }
     function renderPreview(result) {
@@ -1781,6 +1862,22 @@
     });
     $('date-preset').addEventListener('change', updateDates);
     $('report-schedule').addEventListener('change', updateSchedule);
+    for (let hour = 0; hour < 24; hour++) {
+      const node = option(String(hour), hourLabel(hour));
+      node.defaultSelected = hour === 6;
+      $('refresh-hour').append(node);
+    }
+    $('report-form').addEventListener('input', updateStepSummaries);
+    $('report-form').addEventListener('change', updateStepSummaries);
+    // A control inside a folded step cannot take focus, so validation unfolds its step first.
+    $('report-form').addEventListener(
+      'invalid',
+      (event) => {
+        const step = event.target.closest('.form-step');
+        if (step) step.open = true;
+      },
+      true
+    );
     $('column-list').addEventListener('change', () => {
       state.columnsChosen = true;
       updateColumnCount();

@@ -111,6 +111,7 @@ function dmvValidateReport_(input, spreadsheet) {
     target: { sheetName: sheetName, startCell: cell.a1 },
     maxRows: query.maxRows,
     schedule: schedule,
+    at: dmvScheduleAt_(schedule, input.at),
   };
 }
 
@@ -141,7 +142,11 @@ function dmvSaveReport(input) {
       if (previous && previous[key] !== undefined) report[key] = previous[key];
     });
     report.lastError = '';
-    report.nextRunAt = report.schedule === 'manual' ? null : Date.now();
+    report.nextRunAt = dmvFirstRun_(
+      report.schedule,
+      report.at,
+      spreadsheet.getSpreadsheetTimeZone()
+    );
     dmvSave_('report', report);
     try {
       dmvEnsureSchedule_();
@@ -283,7 +288,11 @@ function dmvExecuteReport_(requested) {
       delete current.continuation;
       delete current.continuationRequested;
       delete current.fetchedRowCount;
-      current.nextRunAt = dmvNextRun_(current.schedule);
+      current.nextRunAt = dmvNextRun_(
+        current.schedule,
+        current.at,
+        spreadsheet.getSpreadsheetTimeZone()
+      );
       dmvSave_('report', current);
       dmvFinishContinuation_(current.id);
       return {
@@ -305,7 +314,11 @@ function dmvExecuteReport_(requested) {
         delete current.continuation;
         delete current.continuationRequested;
         delete current.fetchedRowCount;
-        current.nextRunAt = dmvNextRun_(current.schedule);
+        current.nextRunAt = dmvNextRun_(
+          current.schedule,
+          current.at,
+          spreadsheet.getSpreadsheetTimeZone()
+        );
         dmvSave_('report', current);
         dmvFinishContinuation_(current.id);
       }

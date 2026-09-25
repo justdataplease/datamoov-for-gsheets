@@ -10,7 +10,7 @@ Created with ♥ by [justdataplease.com](https://justdataplease.com).
 
 **Short description:** Privacy-first Google Sheets™ connectors and AI reporting. Free for personal and commercial use.
 
-DataMoov puts privacy first: no DataMoov server collects or stores data from your connected accounts. Reports live in your spreadsheet, while credentials and temporary results stay in your own Google storage. Build reports in the sidebar, preview your data, choose an output tab and refresh on demand or on an hourly, daily or weekly schedule.
+DataMoov puts privacy first: no DataMoov server collects or stores data from your connected accounts. Reports live in your spreadsheet, while credentials and temporary results stay in your own Google storage. Build reports in the sidebar, preview your data, choose an output tab and refresh on demand, every hour, or daily or weekly at the hour you choose.
 
 - **Connect your sources:** Google Ads™ (including YouTube™ campaigns), Facebook Ads, LinkedIn Ads, Microsoft Ads, Google Analytics™ 4, Google Search Console™, HubSpot, Zendesk, PostgreSQL, BigQuery™, Snowflake and GitHub.
 - **Choose the report you need:** Select accounts, dates and columns, discover supported custom fields, or use read-only SQL for PostgreSQL, BigQuery™ and Snowflake.

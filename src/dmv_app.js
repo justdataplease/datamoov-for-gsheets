@@ -20,8 +20,8 @@ function showWindow() {
   var html = HtmlService.createTemplateFromFile('dmv_sidebar')
     .evaluate()
     .setTitle('DataMoov by JustDataPlease')
-    .setWidth(520)
-    .setHeight(760);
+    .setWidth(620)
+    .setHeight(800);
   SpreadsheetApp.getUi().showModelessDialog(html, 'DataMoov by JustDataPlease');
 }
 

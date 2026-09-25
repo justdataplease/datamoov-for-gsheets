@@ -7,9 +7,40 @@ function dmvSchedule_(value) {
   return schedule;
 }
 
-function dmvNextRun_(schedule) {
+// A daily or weekly schedule names the hour of the spreadsheet's day it runs in, a weekly one
+// also its weekday (1 Monday to 7 Sunday). The hourly trigger then runs it within that hour.
+function dmvScheduleAt_(schedule, value) {
+  if (schedule !== 'daily' && schedule !== 'weekly') return null;
+  var at = value && typeof value === 'object' ? value : {};
+  var result = { hour: dmvInteger_(at.hour === undefined ? 6 : at.hour, 0, 23, 'Refresh hour') };
+  if (schedule === 'weekly')
+    result.weekday = dmvInteger_(
+      at.weekday === undefined ? 1 : at.weekday,
+      1,
+      7,
+      'Refresh weekday'
+    );
+  return result;
+}
+
+function dmvNextRun_(schedule, at, timezone) {
   var hours = { hourly: 1, daily: 24, weekly: 168 }[schedule];
-  return hours ? Date.now() + hours * 3600000 : null;
+  if (!hours) return null;
+  if (!at || !timezone) return Date.now() + hours * 3600000;
+  // The first top of an hour after now whose local hour (and weekday) match.
+  var time = (Math.floor(Date.now() / 3600000) + 1) * 3600000;
+  for (var i = 0; i < 168; i++, time += 3600000) {
+    var local = Utilities.formatDate(new Date(time), timezone, 'yyyy-MM-dd H').split(' ');
+    var weekday = ((new Date(local[0] + 'T00:00:00Z').getUTCDay() + 6) % 7) + 1;
+    if (Number(local[1]) === at.hour && (at.weekday === undefined || weekday === at.weekday))
+      return time;
+  }
+  return Date.now() + hours * 3600000;
+}
+
+// When a schedule is saved: hourly starts at the next tick, daily and weekly at their hour.
+function dmvFirstRun_(schedule, at, timezone) {
+  return schedule === 'hourly' ? Date.now() : dmvNextRun_(schedule, at, timezone);
 }
 
 // In a Marketplace add-on, triggers and the active spreadsheet belong to the document where the

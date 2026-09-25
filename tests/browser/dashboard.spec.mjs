@@ -119,21 +119,27 @@ test('a dashboard card sets its own refresh schedule', async ({ page }) => {
   await controlDashboards(page);
   const select = () => card(page).getByRole('combobox', { name: /Refresh schedule for/ });
   await expect(select()).toHaveValue('manual');
+  const hour = () => card(page).getByRole('combobox', { name: /Refresh hour for/ });
+  await expect(hour()).toBeHidden();
   await select().selectOption('daily');
   await expect(select()).toBeDisabled();
+  await expect(hour()).toBeVisible();
   await page.waitForFunction(() => window.dashboardProbe.schedules.length === 1);
   expect(await page.evaluate(() => window.dashboardProbe.schedules[0].args)).toEqual([
     'dashboard-fixture',
     'daily',
+    { hour: 6, weekday: 1 },
   ]);
   await page.evaluate(() => {
     const probe = window.dashboardProbe;
-    probe.items[0] = { ...probe.items[0], schedule: 'daily', nextRunAt: Date.now() };
+    probe.items[0] = { ...probe.items[0], schedule: 'daily', at: { hour: 6 }, nextRunAt: Date.now() };
     probe.schedules[0].succeed(probe.items[0]);
   });
-  await expect(page.locator('#notice')).toContainText('refreshes daily in the background');
+  await expect(page.locator('#notice')).toContainText('refreshes daily at 06:00 in the background');
   await expect(select()).toHaveValue('daily');
   await expect(select()).toBeEnabled();
+  await expect(hour()).toHaveValue('6');
+  await expect(card(page).getByRole('combobox', { name: /Refresh weekday for/ })).toBeHidden();
   await expect(card(page)).toContainText('due at the next hourly check');
   await page.evaluate(() => {
     const probe = window.dashboardProbe;

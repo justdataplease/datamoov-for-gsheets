@@ -133,6 +133,24 @@ function dmvChatDashboardTools_(session, baseTools) {
             description:
               'Automatic background refresh from the user account, without AI. Default manual; set it only when the user asks for one.',
           },
+          at: {
+            type: 'object',
+            properties: {
+              hour: {
+                type: 'integer',
+                minimum: 0,
+                maximum: 23,
+                description: 'Hour of the spreadsheet day a daily or weekly refresh runs in.',
+              },
+              weekday: {
+                type: 'integer',
+                minimum: 1,
+                maximum: 7,
+                description: 'Weekly only: 1 Monday to 7 Sunday.',
+              },
+            },
+            description: 'When a daily or weekly schedule runs; default 6:00, Monday.',
+          },
           target: {
             type: 'object',
             properties: {
@@ -159,7 +177,16 @@ function dmvChatDashboardTools_(session, baseTools) {
 }
 
 function dmvChatSaveDashboard_(session, input) {
-  dmvChatSheetObject_(input, ['id', 'revision', 'name', 'datasets', 'tiles', 'target', 'schedule']);
+  dmvChatSheetObject_(input, [
+    'id',
+    'revision',
+    'name',
+    'datasets',
+    'tiles',
+    'target',
+    'schedule',
+    'at',
+  ]);
   dmvChatSheetDeadline_(session);
   var plan = Object.assign({}, input);
   if (input.id && !Number.isInteger(input.revision))

@@ -95,8 +95,10 @@ test('progress is request scoped, never overlaps, and old updates cannot reach a
     })
   );
   await expect(page.locator('#chat-working')).toBeHidden();
-  await expect(page.locator('.chat-actions')).toHaveAttribute('open', '');
+  // The answer leads; the Actions line starts collapsed and opens on click.
+  await expect(page.locator('.chat-actions')).not.toHaveAttribute('open', '');
   await expect(page.locator('.chat-actions summary')).toHaveText('Actions');
+  await expect(page.locator('.chat-actions .chat-events')).toBeHidden();
   await expect(page.locator('.chat-message.assistant .chat-text strong')).toHaveText(
     'Report ready.'
   );
@@ -106,6 +108,7 @@ test('progress is request scoped, never overlaps, and old updates cannot reach a
   expect(
     await page.locator('.chat-message.assistant').evaluate((node) => node.lastElementChild.tagName)
   ).toBe('DETAILS');
+  await page.locator('.chat-actions summary').click();
   await expect(page.locator('.chat-actions .chat-events')).toBeVisible();
   const plus = await page.locator('#new-report svg path').getAttribute('d');
   await expect(page.locator('#chat-new svg path')).toHaveAttribute('d', plus);
@@ -136,7 +139,7 @@ test('progress is request scoped, never overlaps, and old updates cannot reach a
   );
   await expect(page.locator('.chat-actions summary')).toContainText('Some actions failed');
   await expect(page.locator('.chat-actions summary')).toContainText('Sheet updated');
-  await expect(page.locator('.chat-actions')).toHaveAttribute('open', '');
+  await expect(page.locator('.chat-actions')).not.toHaveAttribute('open', '');
   await expect(page.locator('#chat-working-steps li')).toHaveCount(0);
 });
 
@@ -260,7 +263,7 @@ test('clarification options keep transcript replay and final actions stay visibl
       transcriptAppend: [],
     })
   );
-  await expect(page.locator('.chat-actions')).toHaveAttribute('open', '');
+  await expect(page.locator('.chat-actions')).toHaveCount(1);
 });
 
 test('row limits and general instructions retain legacy source rules within the combined limit', async ({
@@ -379,6 +382,7 @@ test('each completed step with facts is one collapsed line that opens on click',
   );
   const rows = page.locator('.chat-events li');
   await expect(rows).toHaveCount(3);
+  await page.locator('.chat-actions > summary').click();
   const first = rows.nth(0).locator('.chat-step');
   await expect(first).not.toHaveAttribute('open', '');
   await expect(first.locator('summary')).toHaveText('Ran Google Ads · 120 rows');

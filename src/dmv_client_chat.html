@@ -433,8 +433,8 @@
         const failed = extra.error || errors.some((event) => !event.recovered);
         const recovered = failed ? 0 : errors.length;
         if (debug || failed) {
+          // Collapsed by default: the answer leads, the summary line says how the steps went.
           const actions = el('details', 'chat-actions');
-          actions.open = debug;
           const summary = el(
             'summary',
             failed ? 'error' : recovered ? 'recovered' : '',

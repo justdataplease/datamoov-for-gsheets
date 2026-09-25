@@ -145,6 +145,7 @@ test('the complete Gemini toolset uses JSON Schema and retains nested constraint
   // their bounds, enums, patterns and required lists must reach Gemini untouched.
   const dashboard = schemas.save_dashboard;
   assert.deepEqual(Object.keys(dashboard.properties).sort(), [
+    'at',
     'datasets',
     'id',
     'name',
@@ -153,6 +154,7 @@ test('the complete Gemini toolset uses JSON Schema and retains nested constraint
     'target',
     'tiles',
   ]);
+  assert.equal(dashboard.properties.at.properties.weekday.maximum, 7);
   assert.deepEqual(dashboard.properties.schedule.enum, ['manual', 'hourly', 'daily', 'weekly']);
   assert.deepEqual(dashboard.required, ['name', 'datasets', 'tiles', 'target']);
   assert.equal(dashboard.properties.revision.type, 'integer');

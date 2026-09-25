@@ -54,7 +54,11 @@ test('create, preview, save, edit and run a reusable report', async ({ page }) =
   await page.locator('#target-sheet').fill('QA Campaigns');
   await page.locator('#target-cell').fill('B3');
   await page.locator('#date-preset').selectOption('last7');
+  await expect(page.locator('#schedule-at')).toBeHidden();
   await page.locator('#report-schedule').selectOption('daily');
+  await expect(page.locator('#schedule-at')).toBeVisible();
+  await expect(page.locator('#schedule-day-field')).toBeHidden();
+  await page.locator('#refresh-hour').selectOption('8');
   await page.locator('#preview-report').click();
   await expect(page.locator('#data-preview')).toBeVisible();
   await expect(page.locator('#preview-table tbody tr')).toHaveCount(8);
@@ -66,21 +70,50 @@ test('create, preview, save, edit and run a reusable report', async ({ page }) =
   await expect(page.locator('#report-count')).toHaveText('4');
   const card = page.locator('.report-card').filter({ hasText: 'QA daily spend' });
   await expect(card).toContainText('QA Campaigns');
+  await expect(card).toContainText('Daily at 08:00');
   await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  // A saved report opens folded: the data and shape steps summarize themselves until clicked.
+  await expect(page.locator('#step-data')).not.toHaveAttribute('open', '');
+  await expect(page.locator('#step-shape')).not.toHaveAttribute('open', '');
+  await expect(page.locator('#step-send')).toHaveAttribute('open', '');
+  await expect(page.locator('#step-data-summary')).not.toBeEmpty();
+  await expect(page.locator('#step-shape-summary')).toContainText('Last 7 days');
+  await expect(page.locator('#report-provider')).toBeHidden();
+  await page.locator('#step-data > summary').click();
+  await expect(page.locator('#report-provider')).toBeVisible();
   await expect(page.locator('#date-preset')).toHaveValue('last7');
   await expect(page.locator('#target-cell')).toHaveValue('B3');
+  await expect(page.locator('#refresh-hour')).toHaveValue('8');
   await page.locator('#report-name').fill('QA weekly spend');
   await page.locator('#report-schedule').selectOption('weekly');
+  await expect(page.locator('#schedule-day-field')).toBeVisible();
+  await page.locator('#refresh-day').selectOption('3');
   await page.locator('#save-report').click();
   await expect(page.locator('#report-count')).toHaveText('4');
   const edited = page.locator('.report-card').filter({ hasText: 'QA weekly spend' });
-  await expect(edited).toContainText('Weekly');
+  await expect(edited).toContainText('Weekly on Wednesday at 08:00');
   await edited.getByRole('button', { name: /Run/ }).click();
   await expect(page.locator('#notice')).toContainText('8 rows updated');
   await expect(edited).toContainText('8 rows');
   const saved = (await rpc(page, 'dmvBootstrap')).reports.find(report => report.name === 'QA weekly spend');
   expect(saved.target).toEqual({ sheetName: 'QA Campaigns', startCell: 'B3' });
   expect(saved.schedule).toBe('weekly');
+  expect(saved.at).toEqual({ hour: 8, weekday: 3 });
+});
+
+test('saving a report whose folded step holds an invalid field unfolds that step', async ({
+  page,
+}) => {
+  await page.locator('.report-card').first().getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.locator('#step-data')).not.toHaveAttribute('open', '');
+  // A report type that no longer exists leaves the required select empty.
+  await page.evaluate(() => {
+    document.getElementById('report-type').selectedIndex = -1;
+  });
+  await page.locator('#save-report').click();
+  await expect(page.locator('#step-data')).toHaveAttribute('open', '');
+  await expect(page.locator('#report-type')).toBeFocused();
+  await expect(page.locator('#report-count')).toHaveText('3');
 });
 
 test('failed report save retains the draft and retry creates one report', async ({ page }) => {

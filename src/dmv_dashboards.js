@@ -54,7 +54,16 @@ function dmvDashboardIsChart_(tile) {
 }
 
 function dmvValidateDashboard_(input, spreadsheet) {
-  dmvDashboardObject_(input, ['id', 'revision', 'name', 'datasets', 'tiles', 'target', 'schedule']);
+  dmvDashboardObject_(input, [
+    'id',
+    'revision',
+    'name',
+    'datasets',
+    'tiles',
+    'target',
+    'schedule',
+    'at',
+  ]);
   if (
     !Array.isArray(input.datasets) ||
     !input.datasets.length ||
@@ -417,12 +426,14 @@ function dmvValidateDashboard_(input, spreadsheet) {
         '). Numbers alone are a report.'
     );
   if (kpis > DMV_DASHBOARD.maxKpis) throw new Error('Choose at most eight kpi metrics.');
+  var schedule = dmvSchedule_(input.schedule);
   return {
     name: dmvText_(input.name, 'Dashboard name', 80, true),
     datasets: datasets,
     tiles: tiles,
     target: target,
-    schedule: dmvSchedule_(input.schedule),
+    schedule: schedule,
+    at: dmvScheduleAt_(schedule, input.at),
   };
 }
 
@@ -498,6 +509,7 @@ function dmvDashboardSummary_(dashboard, spreadsheet) {
     lastRun: dashboard.lastRun || null,
     lastRowCount: dashboard.lastRowCount === undefined ? null : dashboard.lastRowCount,
     schedule: dashboard.schedule || 'manual',
+    at: dashboard.at || null,
     nextRunAt: dashboard.nextRunAt || null,
     lastError: legacy ? DMV_DASHBOARD_LEGACY : dashboard.lastError || '',
     private: true,
@@ -586,7 +598,8 @@ function dmvSaveDashboard(input) {
       lastError: '',
       runToken: null,
       schedule: plan.schedule,
-      nextRunAt: plan.schedule === 'manual' ? null : Date.now(),
+      at: plan.at,
+      nextRunAt: dmvFirstRun_(plan.schedule, plan.at, spreadsheet.getSpreadsheetTimeZone()),
     };
     ['lastRun', 'lastRowCount'].forEach(function (key) {
       if (previous && previous[key] !== undefined) dashboard[key] = previous[key];
@@ -600,6 +613,7 @@ function dmvSaveDashboard(input) {
           runToken: 'x'.repeat(80),
           startedAt: Date.now(),
           schedule: 'weekly',
+          at: { hour: 23, weekday: 7 },
           nextRunAt: Date.now(),
           lastRun: new Date().toISOString(),
           lastRowCount: DMV_LIMITS.maxRows,
@@ -700,15 +714,21 @@ function dmvDeleteDashboard(id, keepTabs) {
 
 // The schedule is refresh state beside the plan: changing it neither bumps the revision nor
 // touches a refresh in progress.
-function dmvScheduleDashboard(id, schedule) {
+function dmvScheduleDashboard(id, schedule, at) {
   return dmvLocked_(function () {
     var dashboard = dmvDashboardHere_(id);
     if (dmvDashboardLegacy_(dashboard)) throw new Error(DMV_DASHBOARD_LEGACY);
     dashboard.schedule = dmvSchedule_(schedule);
-    dashboard.nextRunAt = dashboard.schedule === 'manual' ? null : Date.now();
+    dashboard.at = dmvScheduleAt_(dashboard.schedule, at);
+    var spreadsheet = dmvSpreadsheet_();
+    dashboard.nextRunAt = dmvFirstRun_(
+      dashboard.schedule,
+      dashboard.at,
+      spreadsheet.getSpreadsheetTimeZone()
+    );
     dmvSave_('dashboard', dashboard);
     dmvEnsureSchedule_();
-    return dmvDashboardSummary_(dashboard, dmvSpreadsheet_());
+    return dmvDashboardSummary_(dashboard, spreadsheet);
   });
 }
 
@@ -907,7 +927,11 @@ function dmvDashboardChartTable_(session, resultId, tile) {
           name: name,
           type: column.type,
           total: 0,
-          right: (tile.secondaryAxis || []).indexOf(column.key.split('__')[0]) >= 0,
+          // A metric column is "<field>__<agg>"; a ratio column is its own key.
+          right:
+            (tile.secondaryAxis || []).indexOf(
+              column.key.replace(/__(sum|avg|min|max|count|count_distinct)$/, '')
+            ) >= 0,
         };
         series.push(seriesByName[name]);
       }
@@ -1562,7 +1586,7 @@ function dmvRunDashboard(id, requestedDeadline) {
       });
       current.lastError = '';
       current.runToken = null;
-      current.nextRunAt = dmvNextRun_(current.schedule);
+      current.nextRunAt = dmvNextRun_(current.schedule, current.at, timezone);
       dmvSave_('dashboard', current);
       return {
         ok: true,
@@ -1618,7 +1642,7 @@ function dmvRunDashboard(id, requestedDeadline) {
             : 'Refresh stopped';
           current.lastError = message;
           current.runToken = null;
-          current.nextRunAt = dmvNextRun_(current.schedule);
+          current.nextRunAt = dmvNextRun_(current.schedule, current.at, timezone);
           dmvSave_('dashboard', current);
         }
       });

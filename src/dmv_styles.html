@@ -550,7 +550,14 @@
   select {
     padding-right: 5px;
   }
+  .card-schedule {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px 5px;
+  }
   .card-detail select {
+    width: auto;
     min-height: 0;
     padding: 1px 4px;
     font-size: 11px;
@@ -568,16 +575,60 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+  .step-heading h2 {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .form-step > summary h2 {
+    margin-right: auto;
+  }
+  /* Each configuration step folds like an accordion; a folded step names what it holds. */
+  .form-step > summary {
+    cursor: pointer;
+    list-style: none;
+    margin-bottom: 12px;
+  }
+  .form-step + .form-step > summary {
     border-top: 1px solid var(--line);
     padding-top: 19px;
     margin-top: 22px;
   }
-  .step-heading:first-child {
-    border-top: 0;
-    padding-top: 0;
-    margin-top: 0;
+  .form-step > summary::-webkit-details-marker {
+    display: none;
   }
-  .step-heading > span {
+  .form-step > summary::after {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-right: 2px solid var(--muted);
+    border-bottom: 2px solid var(--muted);
+    transform: rotate(-45deg);
+    margin-left: 4px;
+    flex: 0 0 auto;
+  }
+  .form-step[open] > summary::after {
+    transform: rotate(45deg);
+  }
+  .form-step > summary:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 3px;
+    border-radius: var(--radius);
+  }
+  .step-summary {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .form-step[open] > summary .step-summary,
+  .step-summary:empty {
+    display: none;
+  }
+  .step-heading > span:first-child {
     border-radius: var(--radius);
     background: #f0eefc;
     color: var(--primary);

@@ -211,6 +211,35 @@ test('preview uses the same complete-result validation and never writes sheets',
   assert.equal(f.api.dmvBootstrap().reports.length, 0);
 });
 
+test('daily and weekly reports run within the chosen hour of the spreadsheet day', () => {
+  const f = fixture();
+  const local = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Athens', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+  // The clock reads Friday 2026-09-18 15:00 in Athens. A daily report defaults to 06:00.
+  const daily = f.save({ schedule: 'daily' });
+  assert.deepEqual(plain(daily.at), { hour: 6 });
+  assert.equal(local(daily.nextRunAt), 'Sat 06:00', 'saving waits for the chosen hour');
+  f.api.dmvRunReport(daily.id);
+  const dailyNext = f.readReport(daily.id).nextRunAt;
+  assert.equal(local(dailyNext), 'Sat 06:00');
+  f.setActive(null);
+  f.api.dmvRefreshScheduled();
+  assert.equal(f.fetched.length, 1, 'not due before its hour');
+  f.advance(dailyNext + 600000 - f.api.Date.now());
+  f.api.dmvRefreshScheduled();
+  assert.equal(f.fetched.length, 2, 'the tick after 06:00 runs it');
+  assert.equal(local(f.readReport(daily.id).nextRunAt), 'Sun 06:00');
+  f.setActive(f.book);
+  const weekly = f.save({ name: 'Weekly harvest', target: { sheetName: 'Weekly', startCell: 'A1' }, schedule: 'weekly', at: { hour: 8, weekday: 3 } });
+  assert.deepEqual(plain(weekly.at), { hour: 8, weekday: 3 });
+  f.api.dmvRunReport(weekly.id);
+  assert.equal(local(f.readReport(weekly.id).nextRunAt), 'Wed 08:00');
+  const hourly = f.save({ schedule: 'hourly', at: { hour: 8 } });
+  assert.equal(hourly.at, null, 'only daily and weekly schedules take a time');
+  assert.equal(hourly.nextRunAt, f.api.Date.now(), 'an hourly schedule starts at the next tick');
+  assert.throws(() => f.save({ schedule: 'daily', at: { hour: 24 } }), /Refresh hour must be between 0 and 23/);
+  assert.throws(() => f.save({ schedule: 'weekly', at: { weekday: 0 } }), /Refresh weekday must be between 1 and 7/);
+});
+
 test('scheduled execution only refreshes reports saved in the spreadsheet that owns the trigger', () => {
   const f = fixture(), report = f.save({ schedule: 'hourly' });
   const other = f.addSpreadsheet('spreadsheet-two');

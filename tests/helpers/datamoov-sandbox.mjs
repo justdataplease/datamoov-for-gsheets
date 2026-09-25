@@ -349,7 +349,11 @@ export function createDatamoovSandbox() {
         return { getDataAsString: () => gunzipSync(Buffer.from(blob.getBytes())).toString('utf8') };
       },
       base64Decode: (value) => [...Buffer.from(value, 'base64')],
-      formatDate: (date, timezone) => new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date),
+      // The Java pattern tokens the app uses: yyyy, MM, dd, HH, H and mm, in the given timezone.
+      formatDate(date, timezone, pattern = 'yyyy-MM-dd') {
+        const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(date).map((part) => [part.type, part.value]));
+        return pattern.replace(/yyyy|MM|dd|HH|H|mm/g, (token) => ({ yyyy: parts.year, MM: parts.month, dd: parts.day, HH: parts.hour, H: String(Number(parts.hour)), mm: parts.minute })[token]);
+      },
       parseCsv: (text) => parseCsv(text),
       unzip: (blob) => unzip(Buffer.from(blob.getBytes())),
       base64Encode: (value) => Buffer.from(value).toString('base64'),

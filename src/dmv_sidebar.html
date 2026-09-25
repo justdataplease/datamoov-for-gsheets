@@ -164,145 +164,175 @@
           </div>
           <form id="report-form">
             <fieldset id="report-fields" disabled>
-              <div class="step-heading">
-                <span>1</span>
-                <h2>Choose your data</h2>
-              </div>
-              <label for="report-provider">Data source</label>
-              <div class="select-with-badge">
-                <span class="field-badge" id="report-provider-badge" aria-hidden="true"></span
-                ><select id="report-provider" required></select>
-              </div>
-              <label for="report-connection">Your connection</label
-              ><select id="report-connection" required></select>
-              <div id="connection-empty" class="inline-note" hidden>
-                Add a connection to access this source.
-                <button type="button" id="connect-source" class="text-button">
-                  Connect account &rarr;
-                </button>
-              </div>
-              <label for="report-type">Report</label
-              ><select id="report-type" required></select>
-              <p id="report-description" class="field-help"></p>
-              <div id="report-config"></div>
-              <div class="step-heading">
-                <span>2</span>
-                <h2>Shape your report</h2>
-              </div>
-              <div id="date-section">
-                <label for="date-preset">Date range</label
-                ><select id="date-preset">
-                  <option value="yesterday">Yesterday</option>
-                  <option value="last7">Last 7 days</option>
-                  <option value="last14">Last 14 days</option>
-                  <option value="last30" selected>Last 30 days</option>
-                  <option value="last90">Last 90 days</option>
-                  <option value="lastWeek">Last week (Mon–Sun)</option>
-                  <option value="previousWeek">Week before last (Mon-Sun)</option>
-                  <option value="thisMonth">This month</option>
-                  <option value="lastMonth">Last month</option>
-                  <option value="thisYear">This year</option>
-                  <option value="lastYear">Last year</option>
-                  <option value="custom">Custom dates</option>
-                </select>
-                <div id="custom-dates" class="two-columns" hidden>
-                  <div>
-                    <label for="start-date">Start date</label><input type="date" id="start-date" />
-                  </div>
-                  <div>
-                    <label for="end-date">End date</label><input type="date" id="end-date" />
-                  </div>
+              <details class="form-step" id="step-data" open>
+                <summary class="step-heading">
+                  <span>1</span>
+                  <h2>Choose your data</h2>
+                  <span class="step-summary" id="step-data-summary"></span>
+                </summary>
+                <label for="report-provider">Data source</label>
+                <div class="select-with-badge">
+                  <span class="field-badge" id="report-provider-badge" aria-hidden="true"></span
+                  ><select id="report-provider" required></select>
                 </div>
-                <p id="date-help" class="field-help">
-                  Recent day ranges end yesterday. Provider reporting timezones are shown in the
-                  preview.
-                </p>
-              </div>
-              <div class="field-heading">
-                <label>Columns <span id="selected-count" class="muted"></span></label
-                ><button type="button" id="discover-fields" class="text-button" hidden>
-                  Load columns
-                </button>
-              </div>
-              <input
-                id="column-search"
-                type="search"
-                class="column-search"
-                placeholder="Search columns"
-                aria-label="Search columns"
-                autocomplete="off"
-                hidden
-              />
-              <div id="column-list" class="column-list"></div>
-              <p id="column-help" class="field-help" hidden>
-                Load available columns for this account or query, including supported custom fields.
-              </p>
-              <div class="step-heading">
-                <span>3</span>
-                <h2>Send to Sheets</h2>
-              </div>
-              <label for="report-name">Report name</label
-              ><input
-                id="report-name"
-                type="text"
-                required
-                maxlength="120"
-                placeholder="e.g. Weekly campaign performance"
-              />
-              <div class="target-grid">
-                <div>
-                  <label for="target-sheet">Output tab</label
-                  ><input
-                    id="target-sheet"
-                    type="text"
-                    required
-                    maxlength="100"
-                    list="sheet-options"
-                    placeholder="DataMoov report"
-                  /><datalist id="sheet-options"></datalist>
+                <label for="report-connection">Your connection</label
+                ><select id="report-connection" required></select>
+                <div id="connection-empty" class="inline-note" hidden>
+                  Add a connection to access this source.
+                  <button type="button" id="connect-source" class="text-button">
+                    Connect account &rarr;
+                  </button>
                 </div>
-                <div>
-                  <label for="target-cell">Start cell</label
-                  ><input
-                    id="target-cell"
-                    type="text"
-                    required
-                    pattern="[A-Za-z]+[1-9][0-9]*"
-                    value="A1"
-                    placeholder="A1"
-                  />
-                </div>
-              </div>
-              <div class="two-columns">
-                <div>
-                  <label for="row-limit">Maximum rows</label
-                  ><input
-                    id="row-limit"
-                    type="number"
-                    min="1"
-                    max="30000"
-                    step="1"
-                    value="10000"
-                    required
-                  />
-                </div>
-                <div>
-                  <label for="report-schedule">Refresh</label
-                  ><select id="report-schedule">
-                    <option value="manual">On demand</option>
-                    <option value="hourly">Every hour</option>
-                    <option value="daily">Daily</option>
-                    <option value="weekly">Weekly</option>
+                <label for="report-type">Report</label
+                ><select id="report-type" required></select>
+                <p id="report-description" class="field-help"></p>
+                <div id="report-config"></div>
+              </details>
+              <details class="form-step" id="step-shape" open>
+                <summary class="step-heading">
+                  <span>2</span>
+                  <h2>Shape your report</h2>
+                  <span class="step-summary" id="step-shape-summary"></span>
+                </summary>
+                <div id="date-section">
+                  <label for="date-preset">Date range</label
+                  ><select id="date-preset">
+                    <option value="yesterday">Yesterday</option>
+                    <option value="last7">Last 7 days</option>
+                    <option value="last14">Last 14 days</option>
+                    <option value="last30" selected>Last 30 days</option>
+                    <option value="last90">Last 90 days</option>
+                    <option value="lastWeek">Last week (Mon–Sun)</option>
+                    <option value="previousWeek">Week before last (Mon-Sun)</option>
+                    <option value="thisMonth">This month</option>
+                    <option value="lastMonth">Last month</option>
+                    <option value="thisYear">This year</option>
+                    <option value="lastYear">Last year</option>
+                    <option value="custom">Custom dates</option>
                   </select>
+                  <div id="custom-dates" class="two-columns" hidden>
+                    <div>
+                      <label for="start-date">Start date</label
+                      ><input type="date" id="start-date" />
+                    </div>
+                    <div>
+                      <label for="end-date">End date</label><input type="date" id="end-date" />
+                    </div>
+                  </div>
+                  <p id="date-help" class="field-help">
+                    Recent day ranges end yesterday. Provider reporting timezones are shown in the
+                    preview.
+                  </p>
                 </div>
-              </div>
-              <p class="field-help">
-                Report settings stay private to your account. Each run replaces this report's output
-                range.
-              </p>
-              <p id="schedule-note" class="inline-note" hidden>
-                Scheduled refreshes run with your account and connections.
-              </p>
+                <div class="field-heading">
+                  <label>Columns <span id="selected-count" class="muted"></span></label
+                  ><button type="button" id="discover-fields" class="text-button" hidden>
+                    Load columns
+                  </button>
+                </div>
+                <input
+                  id="column-search"
+                  type="search"
+                  class="column-search"
+                  placeholder="Search columns"
+                  aria-label="Search columns"
+                  autocomplete="off"
+                  hidden
+                />
+                <div id="column-list" class="column-list"></div>
+                <p id="column-help" class="field-help" hidden>
+                  Load available columns for this account or query, including supported custom
+                  fields.
+                </p>
+              </details>
+              <details class="form-step" id="step-send" open>
+                <summary class="step-heading">
+                  <span>3</span>
+                  <h2>Send to Sheets</h2>
+                  <span class="step-summary" id="step-send-summary"></span>
+                </summary>
+                <label for="report-name">Report name</label
+                ><input
+                  id="report-name"
+                  type="text"
+                  required
+                  maxlength="120"
+                  placeholder="e.g. Weekly campaign performance"
+                />
+                <div class="target-grid">
+                  <div>
+                    <label for="target-sheet">Output tab</label
+                    ><input
+                      id="target-sheet"
+                      type="text"
+                      required
+                      maxlength="100"
+                      list="sheet-options"
+                      placeholder="DataMoov report"
+                    /><datalist id="sheet-options"></datalist>
+                  </div>
+                  <div>
+                    <label for="target-cell">Start cell</label
+                    ><input
+                      id="target-cell"
+                      type="text"
+                      required
+                      pattern="[A-Za-z]+[1-9][0-9]*"
+                      value="A1"
+                      placeholder="A1"
+                    />
+                  </div>
+                </div>
+                <div class="two-columns">
+                  <div>
+                    <label for="row-limit">Maximum rows</label
+                    ><input
+                      id="row-limit"
+                      type="number"
+                      min="1"
+                      max="30000"
+                      step="1"
+                      value="10000"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label for="report-schedule">Refresh</label
+                    ><select id="report-schedule">
+                      <option value="manual">On demand</option>
+                      <option value="hourly">Every hour</option>
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                    </select>
+                  </div>
+                </div>
+                <div id="schedule-at" class="two-columns" hidden>
+                  <div id="schedule-day-field" hidden>
+                    <label for="refresh-day">On</label
+                    ><select id="refresh-day">
+                      <option value="1">Monday</option>
+                      <option value="2">Tuesday</option>
+                      <option value="3">Wednesday</option>
+                      <option value="4">Thursday</option>
+                      <option value="5">Friday</option>
+                      <option value="6">Saturday</option>
+                      <option value="7">Sunday</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="refresh-hour">At</label
+                    ><select id="refresh-hour"></select>
+                  </div>
+                </div>
+                <p class="field-help">
+                  Report settings stay private to your account. Each run replaces this report's
+                  output range.
+                </p>
+                <p id="schedule-note" class="inline-note" hidden>
+                  Scheduled refreshes run with your account and connections; a daily or weekly one
+                  within the hour after the chosen time, in the spreadsheet's timezone.
+                </p>
+              </details>
               <div class="action-row">
                 <button type="button" id="preview-report" class="button secondary">
                   Preview data</button

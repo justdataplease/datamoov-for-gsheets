@@ -792,26 +792,37 @@ test('chart tiles can stack, draw a ratio on the right axis as a line, and take 
 
 test('a scheduled dashboard refreshes from the hourly trigger, one per tick, and advances its next run', () => {
   const f = fixture();
-  const saved = f.save({ ...f.input, schedule: 'daily' });
+  const local = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Athens', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+  // The clock reads Friday 2026-09-18 15:00 in Athens.
+  const saved = f.save({ ...f.input, schedule: 'daily', at: { hour: 8 } });
   assert.equal(saved.schedule, 'daily');
+  assert.deepEqual(saved.at, { hour: 8 });
   assert.equal(f.state.createdTriggers.length, 1, 'the hourly trigger exists for the dashboard alone');
+  assert.equal(local(saved.nextRunAt), 'Sat 08:00', 'saving waits for the chosen hour');
   f.api.dmvRefreshScheduled();
-  assert.equal(f.fetched.length, 2);
+  assert.equal(f.fetched.length, 0);
+  f.advance(saved.nextRunAt + 600000 - f.api.Date.now());
+  f.api.dmvRefreshScheduled();
+  assert.equal(f.fetched.length, 2, 'the tick after 08:00 refreshes it');
   assert.equal(f.record(saved.id).status, 'success');
-  assert.equal(f.record(saved.id).nextRunAt, f.api.Date.now() + 86400000);
+  assert.equal(local(f.record(saved.id).nextRunAt), 'Sun 08:00');
   f.api.dmvRefreshScheduled();
-  assert.equal(f.fetched.length, 2, 'not due again until tomorrow');
+  assert.equal(f.fetched.length, 2, 'not due again until tomorrow morning');
   f.advance(86400000);
   f.api.dmvRefreshScheduled();
   assert.equal(f.fetched.length, 4);
-  // A refresh that fails still waits a full period before the next attempt.
+  // A refresh that fails still waits for the next chosen hour before the next attempt.
   f.setRows('two', new Error('Provider down'));
   f.advance(86400000);
   f.api.dmvRefreshScheduled();
   assert.equal(f.record(saved.id).status, 'error');
-  assert.equal(f.record(saved.id).nextRunAt, f.api.Date.now() + 86400000);
+  assert.equal(local(f.record(saved.id).nextRunAt), 'Tue 08:00');
+  const weekly = plain(f.api.dmvScheduleDashboard(saved.id, 'weekly', { hour: 7, weekday: 3 }));
+  assert.deepEqual(weekly.at, { hour: 7, weekday: 3 });
+  assert.equal(local(weekly.nextRunAt), 'Wed 07:00');
   const manual = plain(f.api.dmvScheduleDashboard(saved.id, 'manual'));
   assert.equal(manual.schedule, 'manual');
+  assert.equal(manual.at, null);
   assert.equal(f.record(saved.id).nextRunAt, null);
   assert.equal(f.record(saved.id).revision, saved.revision, 'a schedule change is not a plan change');
   assert.equal(f.state.triggers.length, 0, 'the trigger goes when nothing is scheduled');

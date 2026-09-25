@@ -166,6 +166,7 @@ export function previewFixture(catalog, aiProviders = [], families = []) {
       target: { sheetName: ['Campaigns', 'Website', 'Deals'][index], startCell: 'A1' },
       maxRows: 1000,
       schedule: index === 2 ? 'manual' : 'daily',
+      at: index === 2 ? null : { hour: 8 },
       nextRunAt: index === 2 ? null : Date.now() + 86400000,
       status: 'success',
       lastRun: '2026-09-18T08:30:00.000Z',
@@ -617,10 +618,14 @@ function installPreview(initial) {
         ),
       };
     },
-    dmvScheduleDashboard(id, schedule) {
+    dmvScheduleDashboard(id, schedule, at) {
       const saved = (data.dashboards || []).find((item) => item.id === id);
       if (!saved) throw new Error('Dashboard not found.');
       saved.schedule = schedule;
+      saved.at = ['daily', 'weekly'].includes(schedule)
+        ? { hour: at?.hour ?? 6, ...(schedule === 'weekly' ? { weekday: at?.weekday ?? 1 } : {}) }
+        : null;
+      saved.nextRunAt = schedule === 'manual' ? null : Date.now() + 3600000;
       return copy(saved);
     },
     dmvDeleteDashboard(id) {

@@ -62,8 +62,8 @@ source fetches; multi-account and period comparisons can require several fetches
 
 While a turn runs, live activity shows the actual actions: fetching reports, reading a sheet,
 combining results, summarizing data, writing a table or creating a chart. When the answer arrives,
-**Actions** stays open below it when **Show completed actions (debug)** is enabled in Settings
-(the default). Each action is one line; click it to see what the step used (connection, fields,
+a collapsed **Actions** line appears below it when **Show completed actions (debug)** is enabled
+in Settings (the default); click it to list the steps. Each action is one line; click it to see what the step used (connection, fields,
 dates, grouping, range) and the tab it wrote. Turn the setting off to hide successful histories.
 Failures and completed sheet updates remain visible, with details available. The **+** button
 starts a new chat.
@@ -166,9 +166,11 @@ Limits and guarantees:
 - Datasets together hold at most 30,000 rows, and the whole refresh is one roughly 200-second run
   written in one Sheets request; there is no continuation for dashboards. Keep datasets lean: a
   custom query without `segments.date` returns totals for the period instead of one row per day.
-- A dashboard can refresh itself every hour, daily or weekly: pick the schedule on its card under
-  **Reports > Dashboards**, or ask Chat for it when creating the dashboard. Scheduled refreshes
-  run in the background from your own account, one dashboard per hourly tick, and never call AI.
+- A dashboard can refresh itself every hour, daily or weekly at a chosen hour (and weekday) of
+  the spreadsheet's day: pick them on its card under **Reports > Dashboards**, or ask Chat for it
+  when creating the dashboard ("refresh it daily at 8"). Scheduled refreshes run in the background
+  from your own account within the hour after the chosen time, one dashboard per hourly tick, and
+  never call AI.
 - Each dataset uses the higher of its saved row limit and your current **Maximum rows per chat
   report**, so raising the setting also fixes dashboards saved earlier. A dataset that fails is
   named in the error, with the limit it used.
