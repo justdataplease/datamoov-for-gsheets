@@ -194,9 +194,19 @@ test('private dashboard saves two dataset queries and refreshes every data tab, 
     { label: 'Spend (EUR)', value: 10 },
     { label: 'Clicks', value: 6 },
   ]);
+  // Each tile carries a short preview so the chat can state findings, not only what was built.
   assert.deepEqual(result.tiles, [
-    { title: 'Monthly spend', type: 'column', rows: 1 },
-    { title: 'Campaigns', type: 'table', rows: 2 },
+    { title: 'Monthly spend', type: 'column', rows: 1, preview: [['Date', 'Spend'], ['2026-08', 10]] },
+    {
+      title: 'Campaigns',
+      type: 'table',
+      rows: 2,
+      preview: [
+        ['Source', 'Campaign', 'Spend', 'Clicks'],
+        ['Source 2', 'Second', 7, 4],
+        ['Source 1', '=literal', 3, 2],
+      ],
+    },
   ]);
   assert.deepEqual(result.links.map((link) => link.label), [
     'Dashboard: Dashboard report',
@@ -678,8 +688,36 @@ test('money stays split by currency on scorecards, charts and tables, and a limi
     ['Source', 'Campaign', 'Currency', 'Spend', 'Clicks'],
     ['Source 2', 'Second', 'EUR', 7, 4],
   ]);
-  assert.deepEqual(result.tiles[1], { title: 'Campaigns', type: 'table', rows: 1, note: 'top 1 of 2' });
+  assert.deepEqual(result.tiles[1], {
+    title: 'Campaigns',
+    type: 'table',
+    rows: 1,
+    note: 'top 1 of 2',
+    preview: [['Source', 'Campaign', 'Currency', 'Spend', 'Clicks'], ['Source 2', 'Second', 'EUR', 7, 4]],
+  });
   assert.equal(f.state.batches.length, 1);
+});
+
+test('a tile preview keeps whole headers and the first rows, or the latest points of a trend, within a size budget', () => {
+  const f = fixture();
+  const header = ['Month', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+  const rows = Array.from({ length: 8 }, (_, i) => ['2026-0' + (i + 1), 1, 2, 3, 4, 5, 6, 7, 8]);
+  const trend = plain(f.api.dmvDashboardPreview_({ matrix: [header, ...rows], dated: true }));
+  assert.deepEqual(trend.map((row) => row[0]), ['Month', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08']);
+  assert.ok(trend.every((row) => row.length === 8), 'at most eight columns');
+  // Headers name the series (a dataset label and its currency), so they are never cut.
+  const label = 'Google Ads account with a long descriptive name · EUR';
+  const long = 'x'.repeat(60);
+  const ranked = plain(f.api.dmvDashboardPreview_({ matrix: [['Name', label], [long, 9], ...rows], dated: false }));
+  assert.equal(ranked.length, 6, 'header plus five rows');
+  assert.equal(ranked[0][1], label);
+  assert.equal(ranked[1][0], 'x'.repeat(40) + '…');
+  // Wide text rows are dropped until the tile fits its budget; a trend drops its oldest rows.
+  const wide = Array.from({ length: 5 }, (_, i) => [String(i), ...Array(7).fill('y'.repeat(40))]);
+  const tight = plain(f.api.dmvDashboardPreview_({ matrix: [header.slice(0, 8), ...wide], dated: true }));
+  assert.ok(JSON.stringify(tight).length <= 1200);
+  assert.ok(tight.length >= 2 && tight.length < 6);
+  assert.equal(tight.at(-1)[0], '4', 'the latest point is kept');
 });
 
 test('tiles filter their rows and compute ratios from summed counts', () => {

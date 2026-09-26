@@ -169,7 +169,7 @@ function dmvChatDashboardTools_(session, baseTools) {
     {
       name: 'run_dashboard',
       description:
-        'Fetch every dataset of a saved dashboard and rebuild its data tabs, scorecards, charts and tables in one atomic write; earlier output stays unchanged if anything fails. Returns scorecard values, tile row counts and tab links. It is all a dashboard request needs: do not also call run_report, write_to_sheet or create_chart for the same data.',
+        'Fetch every dataset of a saved dashboard and rebuild its data tabs, scorecards, charts and tables in one atomic write; earlier output stays unchanged if anything fails. Returns scorecard values, the first rows of each chart and table (the latest points of a trend) and tab links. It is all a dashboard request needs: do not also call run_report, write_to_sheet or create_chart for the same data.',
       input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       run: dmvChatRunDashboard_,
     },

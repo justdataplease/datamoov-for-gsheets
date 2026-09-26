@@ -63,6 +63,12 @@ test('AI settings keep the key private, retain it on blank edits and validate pr
   assert.throws(() => f.api.dmvSaveAiSettings({ provider: 'mystery', apiKey: 'x' }), /supported AI provider/);
   assert.throws(() => f.api.dmvSaveAiSettings({ provider: 'gemini', apiKey: 'key', model: 'bad model!' }), /model name/);
   assert.throws(() => f.api.dmvSaveAiSettings({ provider: 'gemini', apiKey: 'has space' }), /unsupported characters/);
+  // The request time limit defaults to 600 seconds and is kept when an edit leaves it out.
+  assert.equal(summary.timeLimit, 600);
+  assert.equal(f.api.dmvSaveAiSettings({ provider: 'anthropic', apiKey: '', timeLimit: 1200 }).timeLimit, 1200);
+  assert.equal(f.api.dmvSaveAiSettings({ provider: 'anthropic', apiKey: '' }).timeLimit, 1200);
+  for (const timeLimit of [59, 1801, 90.5, '600'])
+    assert.throws(() => f.api.dmvSaveAiSettings({ provider: 'anthropic', apiKey: '', timeLimit }), /between 60 and 1,800/);
   assert.equal(f.api.dmvDeleteAiSettings().configured, false);
   assert.throws(() => f.api.dmvChat({ text: 'hi' }), /Add an AI provider/);
 });

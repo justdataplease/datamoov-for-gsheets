@@ -31,6 +31,10 @@ var DMV_AI = {
   instructionPartBytes: 7500,
   maxInstructionEncodedBytes: 400000,
   maxPrivateBytes: 450000,
+  // Seconds one chat request may take; longer than one execution, it continues in the next.
+  defaultTimeLimit: 600,
+  minTimeLimit: 60,
+  maxTimeLimit: 1800,
 };
 
 function dmvAiCatalog_() {
@@ -275,6 +279,15 @@ function dmvAiMaxRows_(settings) {
     : DMV_LIMITS.chatDefaultRows;
 }
 
+function dmvAiTimeLimit_(settings) {
+  return settings &&
+    Number.isInteger(settings.timeLimit) &&
+    settings.timeLimit >= DMV_AI.minTimeLimit &&
+    settings.timeLimit <= DMV_AI.maxTimeLimit
+    ? settings.timeLimit
+    : DMV_AI.defaultTimeLimit;
+}
+
 // The saved row cap alone, without loading instructions. Dashboard refresh uses it so a
 // limit raised in Settings also applies to plans saved earlier.
 function dmvAiRowCap_() {
@@ -293,6 +306,7 @@ function dmvAiSummary_(settings) {
       instructionCharacters: 0,
       maxInstructionCharacters: DMV_AI.maxInstructionsLength,
       maxRows: DMV_LIMITS.chatDefaultRows,
+      timeLimit: DMV_AI.defaultTimeLimit,
       providers: dmvAiCatalog_(),
     };
   return {
@@ -306,6 +320,7 @@ function dmvAiSummary_(settings) {
     instructionCharacters: dmvAiInstructionCharacters_(settings),
     maxInstructionCharacters: DMV_AI.maxInstructionsLength,
     maxRows: dmvAiMaxRows_(settings),
+    timeLimit: dmvAiTimeLimit_(settings),
     debug: settings.debug !== false,
     providers: dmvAiCatalog_(),
   };
@@ -350,6 +365,19 @@ function dmvSaveAiSettings(input) {
           DMV_LIMITS.maxRows.toLocaleString() +
           '.'
       );
+    var timeLimit = input.timeLimit === undefined ? dmvAiTimeLimit_(previous) : input.timeLimit;
+    if (
+      !Number.isInteger(timeLimit) ||
+      timeLimit < DMV_AI.minTimeLimit ||
+      timeLimit > DMV_AI.maxTimeLimit
+    )
+      throw new Error(
+        'The chat time limit must be a whole number of seconds between ' +
+          DMV_AI.minTimeLimit +
+          ' and ' +
+          DMV_AI.maxTimeLimit.toLocaleString() +
+          '.'
+      );
     var debug = input.debug === undefined ? !previous || previous.debug !== false : input.debug;
     if (typeof debug !== 'boolean') throw new Error('Show actions must be true or false.');
     var settings = {
@@ -362,6 +390,7 @@ function dmvSaveAiSettings(input) {
       sourceInstructions: instructionInput.sourceInstructions,
       connectionInstructions: instructionInput.connectionInstructions,
       maxRows: maxRows,
+      timeLimit: timeLimit,
       revision: previous ? (previous.revision || 0) + 1 : 1,
     };
     dmvAiWriteSettings_(settings);

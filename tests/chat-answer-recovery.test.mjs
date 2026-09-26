@@ -107,7 +107,9 @@ test('a truncated answer gets one tool-free recovery without replaying a real fe
 
 test('the round-budget final answer uses the same single bounded recovery', () => {
   const f = fixture();
+  // One round per 200 seconds of the time limit, at a 200-second limit: one round in all.
   f.api.DMV_CHAT.maxRounds = 1;
+  f.api.DMV_AI.defaultTimeLimit = 200;
   f.replies.push(
     reply('', [f.runReport()]),
     reply('Final spend 12', [], 'length'),

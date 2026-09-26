@@ -584,6 +584,22 @@
                   Applies to each report fetched in chat. Up to 30,000 rows; reports are never
                   silently truncated.
                 </p>
+                <label for="ai-time-limit">Time limit per chat request (seconds)</label>
+                <input
+                  id="ai-time-limit"
+                  type="number"
+                  min="60"
+                  max="1800"
+                  step="1"
+                  value="600"
+                  required
+                  aria-describedby="ai-time-limit-help"
+                />
+                <p id="ai-time-limit-help" class="field-help">
+                  How long one question may work before it answers from what it has, up to 30
+                  minutes. Longer requests continue in new Apps Script runs; keep the sidebar open
+                  until the answer arrives.
+                </p>
                 <label for="ai-debug">
                   <input id="ai-debug" type="checkbox" checked aria-describedby="ai-debug-help" />
                   Show actions after each answer

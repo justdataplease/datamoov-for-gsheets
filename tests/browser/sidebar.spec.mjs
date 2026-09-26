@@ -586,6 +586,9 @@ test('an inline OAuth credential requires a grant, survives a failed connection 
   await expect(page.locator('#credential-inline')).toBeHidden();
   await page.locator('#connection-label').fill('Renamed own OAuth');
   await page.locator('#save-connection').click();
+  // The notice still reads "Connection saved" from the first save, so wait for this save's own
+  // result: its card is rendered in the same step that returns to the Connections tab.
+  await expect(page.locator('#connections-list')).toContainText('Renamed own OAuth');
   await expect(page.locator('#notice')).toContainText('Connection saved');
   // The credential itself is edited under Settings; secrets stay blank there too.
   await page.locator('#tab-settings').click();

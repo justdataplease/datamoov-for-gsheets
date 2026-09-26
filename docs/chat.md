@@ -17,6 +17,8 @@ network destination is the AI provider you configure.
    **Maximum rows per chat report** sets the default and ceiling for each fetched report,
    from 1 to 30,000 rows (initially 10,000). The model can request fewer rows; it cannot exceed
    your setting. Increase it if a complete report reaches the limit.
+   **Time limit per chat request** sets how long one question may work before it answers
+   from what it has: 60 to 1,800 seconds (initially 600).
    **Instructions for the assistant** supplies general standing context.
 3. Add at least one connection in **Connections**. To set account-specific rules, fill
    **Chat instructions** in the connection form; the form's one **Save** button saves them.
@@ -203,6 +205,9 @@ before datasets and tiles existed are listed with a note to remove and recreate 
   Summaries follow the same sampling rule. The requested summary limit controls the complete
   aggregate stored privately and available for writing; it does not send large tables to the model.
 - Data you read with **read_sheet** is sampled the same way.
+- After a dashboard refresh: the scorecard values and a preview of each chart and table (its
+  first five rows, or the latest five points of a trend, eight columns at most, within a fixed
+  size per tile), so the answer can state findings from what the dashboard shows.
 
 Provider credentials and AI keys are not included in model messages. Large results are
 sampled; results of 20 rows or fewer may be sent whole. Your prompts, conversation context,
@@ -218,10 +223,18 @@ Values that come back from providers are framed as data, not instructions.
   the same anchor and that were not edited since, are ever replaced. Formulas and manual edits
   stop a rewrite.
 - Charts are native Sheets charts over the written table; delete them like any chart.
-- A turn is bounded: at most 8 tool rounds and roughly 200 seconds, and every tool in the
-  turn shares that one deadline (a report started late in the turn stops at the deadline
-  instead of getting its own). When the budget runs out the model answers from what it has
-  and says what is missing.
+- A turn is bounded by **Time limit per chat request** (initially 600 seconds) and by 8 tool
+  rounds per 200 seconds of that limit. Apps Script stops any single execution at 6 minutes,
+  so each execution works for about 200 seconds, and every tool in it shares that deadline (a
+  report started late stops at the deadline instead of getting its own). When an execution
+  runs low and time remains, the conversation is saved compressed in your private cache for
+  15 minutes, and the sidebar continues it at once in a new execution; the saved state is
+  removed as it is picked up, so no step runs twice, and it never holds the AI key. Keep the
+  sidebar open until the answer arrives. The request keeps the provider, model and limit it
+  started with, and Settings cannot be saved until it answers. A request holding a result too
+  large for the cache (about 900,000 characters), or whose state cannot be saved, finishes
+  within its current execution instead. When the limit runs out the model answers from what
+  it has and says what is missing.
 - If the AI provider fails after a tool already wrote to the sheet, the answer says so and
   lists the completed steps; nothing that happened is hidden.
 - Within one turn, repeated `run_report` requests reuse a complete result only when the validated
@@ -256,7 +269,7 @@ Values that come back from providers are framed as data, not instructions.
 | `create_pivot` | Create a native pivot on a new tab from a validated source range |
 | `list_dashboards` | List private saved dashboards for this spreadsheet |
 | `save_dashboard` | Save a plan: datasets (a query, a tab and optional shared column names each) and tiles (kpi, chart or table over one or more datasets) plus the dashboard tab |
-| `run_dashboard` | Fetch every dataset and atomically rebuild all tabs, scorecards, charts and tables; return scorecard values, tile row counts and tab links |
+| `run_dashboard` | Fetch every dataset and atomically rebuild all tabs, scorecards, charts and tables; return scorecard values, a short preview of each tile and tab links |
 
 Providers are adapted in `src/dmv_ai.js`: Anthropic Messages API, OpenAI Chat Completions
 and Gemini `generateContent`, each with its own tool-call format, normalized to one shape for

@@ -353,6 +353,40 @@ test('a failed step the model retried successfully is reported as recovered', as
   );
 });
 
+test('a request that continues in another execution keeps working until its answer arrives', async ({
+  page,
+}) => {
+  await configuredChat(page);
+  await controlledChat(page);
+  await send(page, 'A long dashboard');
+  // The request keeps the provider, model and time limit it started with.
+  await expect(page.locator('#ai-save')).toBeDisabled();
+  await page.evaluate(() => window.chatProbe.chats[0].succeed({ pending: true }));
+  await page.waitForFunction(() => window.chatProbe.chats.length === 2);
+  const [first, second] = await page.evaluate(() =>
+    window.chatProbe.chats.map((item) => item.input)
+  );
+  expect(second).toEqual({ requestId: first.requestId, resume: true });
+  await expect(page.locator('#chat-working')).toBeVisible();
+  await expect(page.locator('.chat-message.assistant')).toHaveCount(0);
+  await page.evaluate(() =>
+    window.chatProbe.chats[1].succeed({ text: 'Dashboard ready.', events: [], transcriptAppend: [] })
+  );
+  await expect(page.locator('.chat-message.assistant')).toContainText('Dashboard ready.');
+  await expect(page.locator('#chat-working')).toBeHidden();
+  await expect(page.locator('#ai-save')).toBeEnabled();
+  // New chat during a continuation stops it: a late pending reply does not continue.
+  await send(page, 'Another long one');
+  await page.evaluate(() => window.chatProbe.chats[2].succeed({ pending: true }));
+  await page.waitForFunction(() => window.chatProbe.chats.length === 4);
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('pagehide'));
+    window.chatProbe.chats[3].succeed({ pending: true });
+  });
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => window.chatProbe.chats.length)).toBe(4);
+});
+
 test('each completed step with facts is one collapsed line that opens on click', async ({ page }) => {
   await configuredChat(page);
   await controlledChat(page);
@@ -399,6 +433,24 @@ test('each completed step with facts is one collapsed line that opens on click',
     'href',
     'https://docs.google.com/spreadsheets/d/x/edit#gid=1'
   );
+});
+
+test('the chat time limit is saved from Settings and bounded to 60 to 1,800 seconds', async ({
+  page,
+}) => {
+  await configuredChat(page);
+  await page.locator('#chat-settings-toggle').click();
+  await expect(page.locator('#ai-time-limit')).toHaveValue('600');
+  await page.locator('#ai-time-limit').fill('30');
+  await page.locator('#ai-save').click();
+  expect(
+    await page.locator('#ai-time-limit').evaluate((node) => node.validity.rangeUnderflow)
+  ).toBe(true);
+  await page.locator('#ai-time-limit').fill('900');
+  await page.locator('#ai-save').click();
+  await expect(page.locator('#ai-settings')).not.toHaveAttribute('open', '');
+  await page.locator('#ai-settings summary').click();
+  await expect(page.locator('#ai-time-limit')).toHaveValue('900');
 });
 
 test('unsaved AI settings survive bootstrap refresh and reopening Settings', async ({ page }) => {

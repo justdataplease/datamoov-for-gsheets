@@ -104,6 +104,27 @@ test('equivalent validated queries reuse a complete result for field-order and d
   assert.deepEqual(plain(f.session.events.map((event) => event.kind)), ['report', 'report']);
 });
 
+test('a request continued in another execution reuses its complete results from the private cache', () => {
+  const f = fixture();
+  const first = f.run();
+  // The next execution starts with nothing in memory, only the saved reuse map.
+  const next = () => {
+    const session = f.api.dmvChatSession_(f.book);
+    session.maxRows = 10;
+    session.reportResults = JSON.parse(JSON.stringify(f.session.reportResults));
+    return session;
+  };
+  const repeated = f.run({}, next());
+  assert.equal(f.fetched.length, 1);
+  assert.equal(repeated.resultId, first.resultId);
+  assert.equal(repeated.reused, true);
+  // An expired cache entry is fetched again instead of failing the call.
+  f.state.cache.data.clear();
+  const again = f.run({}, next());
+  assert.equal(f.fetched.length, 2);
+  assert.equal(again.reused, undefined);
+});
+
 test('reuse still enforces the current configured cap and a smaller requested row limit', () => {
   const f = fixture();
   const first = f.run();

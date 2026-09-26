@@ -256,7 +256,7 @@ function dmvSnowflakeQuery_(ctx, discoverOnly) {
     throw new Error('Snowflake did not return a complete single-statement result.');
   if (metadata.numRows > (discoverOnly ? 0 : maximum))
     throw new Error(
-      'The SQL result exceeds the row limit. Add filters, aggregation, or a deliberate LIMIT.'
+      'The SQL result exceeds the row limit. Aggregate the query (GROUP BY) or filter it; a LIMIT would keep only part of the rows.'
     );
   var available = dmvSnowflakeFields_(metadata.rowType);
   var columns = discoverOnly ? available : dmvSelectFields_(ctx.fields, available);

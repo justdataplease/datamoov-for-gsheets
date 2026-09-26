@@ -21,6 +21,41 @@ function dmvChatResultId_() {
   return 'r' + dmvOutputDigest_(Utilities.getUuid() + ':' + Date.now()).slice(0, 8);
 }
 
+// Text longer than one cache value is split into <key>:<n> chunks, with their count at <key>.
+function dmvChatCachePut_(key, text, ttlSeconds) {
+  var values = {},
+    parts = Math.ceil(text.length / DMV_CHAT_RESULTS.chunkChars);
+  for (var i = 0; i < parts; i++)
+    values[key + ':' + i] = text.slice(
+      i * DMV_CHAT_RESULTS.chunkChars,
+      (i + 1) * DMV_CHAT_RESULTS.chunkChars
+    );
+  values[key] = String(parts);
+  CacheService.getUserCache().putAll(values, ttlSeconds);
+}
+
+// The whole text, or null when it or any chunk has expired; remove also deletes it.
+function dmvChatCacheGet_(key, remove) {
+  var cache = CacheService.getUserCache();
+  var parts = Number(cache.get(key) || 0),
+    keys = [];
+  for (var i = 0; i < parts; i++) keys.push(key + ':' + i);
+  var chunks = parts ? cache.getAll(keys) : {};
+  if (remove) cache.removeAll([key].concat(keys));
+  if (
+    !parts ||
+    keys.some(function (item) {
+      return typeof chunks[item] !== 'string' || !chunks[item];
+    })
+  )
+    return null;
+  return keys
+    .map(function (item) {
+      return chunks[item];
+    })
+    .join('');
+}
+
 // Results stay in memory for the turn and are spilled to the user's private cache so the next
 // turn can summarize, write or chart them. Nothing is written to Drive or any server.
 function dmvChatStoreResult_(session, result) {
@@ -34,21 +69,17 @@ function dmvChatStoreResult_(session, result) {
     source: result.source,
     metadata: result.metadata,
   });
+  var cached = false;
   if (text.length <= DMV_CHAT_RESULTS.maxChars) {
     try {
-      var values = {},
-        parts = Math.ceil(text.length / DMV_CHAT_RESULTS.chunkChars);
-      for (var i = 0; i < parts; i++)
-        values['dmv:chat:' + id + ':' + i] = text.slice(
-          i * DMV_CHAT_RESULTS.chunkChars,
-          (i + 1) * DMV_CHAT_RESULTS.chunkChars
-        );
-      values['dmv:chat:' + id] = String(parts);
-      CacheService.getUserCache().putAll(values, DMV_CHAT_RESULTS.ttlSeconds);
+      dmvChatCachePut_('dmv:chat:' + id, text, DMV_CHAT_RESULTS.ttlSeconds);
+      cached = true;
     } catch (ignored) {
       /* The cache is optional; the result still works for this turn. */
     }
   }
+  // A result the cache cannot hold lives only in this execution, which the turn then keeps.
+  if (!cached) session.uncached = true;
   return id;
 }
 
@@ -59,23 +90,8 @@ function dmvChatResult_(session, id) {
       'Unknown resultId. Use a resultId returned by run_report, combine_results, summarize or read_sheet.'
     );
   if (session.results[id]) return session.results[id];
-  var cache = CacheService.getUserCache();
-  var parts = Number(cache.get('dmv:chat:' + id) || 0);
-  if (!parts) throw new Error('Result ' + id + ' has expired. Run the report again.');
-  var keys = [];
-  for (var i = 0; i < parts; i++) keys.push('dmv:chat:' + id + ':' + i);
-  var chunks = cache.getAll(keys);
-  if (
-    keys.some(function (key) {
-      return typeof chunks[key] !== 'string' || !chunks[key];
-    })
-  )
-    throw new Error('Result ' + id + ' has expired. Run the report again.');
-  var text = keys
-    .map(function (key) {
-      return chunks[key] || '';
-    })
-    .join('');
+  var text = dmvChatCacheGet_('dmv:chat:' + id);
+  if (text === null) throw new Error('Result ' + id + ' has expired. Run the report again.');
   var parsed;
   try {
     parsed = JSON.parse(text);
@@ -301,7 +317,14 @@ function dmvChatRunReport_(session, input) {
   delete identity.maxRows;
   var key = dmvOutputDigest_(JSON.stringify(dmvCanonical_(identity))),
     reusedId = session.reportResults && session.reportResults[key],
-    reused = reusedId && session.results[reusedId];
+    reused = null;
+  // A request continued in another execution finds the result in the private cache.
+  if (reusedId)
+    try {
+      reused = dmvChatResult_(session, reusedId);
+    } catch (ignored) {
+      /* Expired or never cached: fetch it again. */
+    }
   var result;
   try {
     if (reused) {

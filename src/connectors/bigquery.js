@@ -272,7 +272,7 @@ function dmvBigQueryFetch_(ctx) {
       total = Number(response.totalRows);
       if (!Number.isSafeInteger(total) || total < 0 || total > maximum)
         throw new Error(
-          'BigQuery result exceeds the row limit. Add a LIMIT or aggregate the query.'
+          'BigQuery result exceeds the row limit. Aggregate the query (GROUP BY) or filter it; a LIMIT would keep only part of the rows.'
         );
     }
     if (
@@ -295,10 +295,14 @@ function dmvBigQueryFetch_(ctx) {
       rows.push(row);
     });
     if (rows.length > maximum)
-      throw new Error('BigQuery result exceeds the row limit. Add a LIMIT or aggregate the query.');
+      throw new Error(
+        'BigQuery result exceeds the row limit. Aggregate the query (GROUP BY) or filter it; a LIMIT would keep only part of the rows.'
+      );
     if (!response.pageToken) break;
     if (rows.length >= maximum)
-      throw new Error('BigQuery result exceeds the row limit. Add a LIMIT or aggregate the query.');
+      throw new Error(
+        'BigQuery result exceeds the row limit. Aggregate the query (GROUP BY) or filter it; a LIMIT would keep only part of the rows.'
+      );
     if (seen[response.pageToken]) throw new Error('BigQuery returned a repeated result page.');
     seen[response.pageToken] = true;
     response = dmvBigQueryRequest_(ctx, resultUrl(response.pageToken));
@@ -397,7 +401,7 @@ dmvRegisterConnector_({
           label: 'Read-only SQL',
           type: 'textarea',
           required: true,
-          help: 'Select just the columns you need and add a LIMIT.',
+          help: 'Select just the columns you need; aggregate or filter large tables in the query.',
         },
         {
           key: 'maximumBytesBilled',

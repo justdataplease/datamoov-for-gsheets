@@ -179,7 +179,7 @@ function dmvPostgresQuery_(ctx, discoverOnly) {
       ctx.checkDeadline();
       if (rows.length >= ctx.maxRows)
         throw new Error(
-          'The SQL result exceeds the row limit. Add filters, aggregation, or a deliberate LIMIT.'
+          'The SQL result exceeds the row limit. Aggregate the query (GROUP BY) or filter it; a LIMIT would keep only part of the rows.'
         );
       var row = {};
       columns.forEach(function (column) {

@@ -742,10 +742,14 @@ function installPreview(initial) {
         );
       const debug = input.debug === undefined ? data.ai.debug !== false : input.debug;
       if (typeof debug !== 'boolean') throw new Error('Show actions must be true or false.');
+      const timeLimit = input.timeLimit === undefined ? data.ai.timeLimit || 600 : input.timeLimit;
+      if (!Number.isInteger(timeLimit) || timeLimit < 60 || timeLimit > 1800)
+        throw new Error('The chat time limit must be a whole number of seconds between 60 and 1,800.');
       data.ai = {
         ...data.ai,
         debug,
         maxRows,
+        timeLimit,
         sourceInstructions: copy(sourceInstructions),
         instructionRevision: (data.ai.instructionRevision || 0) + 1,
         configured: true,

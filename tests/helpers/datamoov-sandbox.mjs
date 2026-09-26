@@ -67,6 +67,7 @@ export function createDatamoovSandbox() {
     putAll(values) { for (const [key, value] of Object.entries(values)) cacheData.set(key, String(value)); },
     getAll(keys) { return Object.fromEntries(keys.filter((key) => cacheData.has(key)).map((key) => [key, cacheData.get(key)])); },
     remove(key) { cacheData.delete(key); },
+    removeAll(keys) { for (const key of keys) cacheData.delete(key); },
   };
   const state = {
     user, script, document, cache, books: new Map(), opened: [], batches: [], legacyWrites: [], clears: [],

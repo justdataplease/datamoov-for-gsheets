@@ -109,11 +109,20 @@ test('the real chat request carries artifact intent, reusable periods and bounde
     /Do not call run_report, combine_results, summarize, write_to_sheet or create_chart for it: run_dashboard fetches every dataset once/
   );
   // An honest finish: what exists, where, how to refresh it, and no claim after a failure.
-  assert.match(request.system, /- Dashboard tiles: start with one kpi tile/);
+  assert.match(request.system, /- Dashboard tiles: design for decisions/);
+  assert.match(request.system, /Then one action table: the items or segments that need attention/);
+  assert.match(request.system, /never averages of per-row rates/);
+  // Findings first, read from what run_dashboard returned, then what exists and how to refresh it.
   assert.match(
     request.system,
-    /After run_dashboard succeeds, answer with: what was created, the scorecard values it returned, which tab holds what, and that Reports > Dashboards > Refresh dashboard rebuilds all of it without AI/
+    /After run_dashboard succeeds, lead with 3 to 5 findings read from its scorecards and tile previews, each with its number and the action it suggests; state no finding the returned values do not show\. The first and last week or month of a trend can be partial, so do not read a rise or drop into them\. Then say what was created, which tab holds what, and that Reports > Dashboards > Refresh dashboard rebuilds all of it without AI/
   );
+  // Tile filters act on rows, so the prompt never asks for a condition on totals through them.
+  assert.match(request.system, /Tile filters select dataset rows before aggregation/);
+  assert.match(request.system, /at most 8 scorecard values across all kpi tiles/);
+  // SQL datasets cover the whole population: aggregate, never LIMIT to fit the cap.
+  assert.match(request.system, /never add a LIMIT to fit the row cap/);
+  assert.match(request.system, /Never cap a dataset with LIMIT; aggregate instead/);
   assert.match(request.system, /The tab links are shown to the user automatically/);
   assert.match(
     request.system,

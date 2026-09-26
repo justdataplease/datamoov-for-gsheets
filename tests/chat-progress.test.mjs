@@ -209,8 +209,186 @@ test('actions skipped for a question are never marked as successful executions',
   assert.equal(progress.steps.at(-1).state, 'error');
 });
 
+test('a request longer than one execution continues in the next, runs every step once and cannot be replayed', () => {
+  const f = fixture();
+  const KEY = 'continuation-ai-key-0001';
+  f.api.dmvAiRead_ = () => ({ provider: 'test', apiKey: KEY, maxRows: 1234 });
+  const sent = [];
+  f.api.dmvAiComplete_ = (settings, request) => {
+    sent.push(request.messages.length);
+    if (sent.length === 1) return reply('', [call('run_report')]);
+    if (sent.length === 2) return reply('', [call('write_to_sheet')]);
+    return reply('All done');
+  };
+  let runs = 0,
+    writes = 0;
+  f.api.dmvChatTools_ = () => [
+    {
+      name: 'run_report',
+      run(session) {
+        runs++;
+        f.advance(90000); // leaves less than resumeBelowMs of this execution's budget
+        session.events.push({ kind: 'report', text: 'Ran the report' });
+        return { resultId: 'r00000001' };
+      },
+    },
+    {
+      name: 'write_to_sheet',
+      run(session) {
+        writes++;
+        session.events.push({ kind: 'write', text: 'Wrote the table' });
+        return { ok: true };
+      },
+    },
+  ];
+  assert.deepEqual(plain(chat(f)), { pending: true });
+  assert.equal(f.progress().status, 'running', 'progress stays live between executions');
+  const saved = [...f.state.cache.data].filter(([key]) => key.startsWith('dmv:chat-turn:'));
+  assert.ok(saved.length >= 2, 'the conversation is saved in the private cache');
+  assert.ok(!saved.some(([, value]) => value.includes(KEY)), 'the AI key is never saved');
+
+  const done = plain(f.api.dmvChat({ requestId: REQUEST, resume: true }));
+  assert.equal(done.text, 'All done');
+  assert.equal(runs, 1);
+  assert.equal(writes, 1);
+  assert.deepEqual(done.events.map((event) => event.text), ['Ran the report', 'Wrote the table']);
+  assert.equal(done.transcriptAppend[0].text, SECRET, 'the original question closes the turn');
+  // The continuation sent the whole conversation: question, tool call and its result.
+  assert.deepEqual(sent, [1, 3, 5]);
+  const progress = f.progress();
+  assert.equal(progress.status, 'complete');
+  assert.deepEqual(
+    progress.steps.map((step) => step.text),
+    [
+      'Preparing your request',
+      'Working on your request',
+      'Fetching report data',
+      'Continuing your request',
+      'Reviewing results',
+      'Writing to Sheets',
+      'Reviewing results',
+    ]
+  );
+  assert.equal([...f.state.cache.data.keys()].filter((key) => key.startsWith('dmv:chat-turn:')).length, 0);
+  assert.throws(() => f.api.dmvChat({ requestId: REQUEST, resume: true }), /can no longer continue/);
+  assert.throws(() => f.api.dmvChat({ resume: true }), /valid chat request ID/);
+});
+
+test('the time limit spans executions, and a request without an id keeps one execution', () => {
+  // A model that keeps asking for 90-second reports until the limit forces a final answer.
+  function busy(f) {
+    const finals = [];
+    f.api.dmvAiComplete_ = (settings, request) => {
+      if (request.tools.length) return reply('', [call('run_report')]);
+      finals.push(f.api.Date.now());
+      return reply('Final from what we have');
+    };
+    f.api.dmvChatTools_ = () => [{ name: 'run_report', run() { f.advance(90000); return {}; } }];
+    return finals;
+  }
+  const f = fixture();
+  f.api.DMV_AI.defaultTimeLimit = 300;
+  const finals = busy(f),
+    started = f.api.Date.now();
+  let result = plain(chat(f)),
+    executions = 1;
+  while (result.pending) {
+    result = plain(f.api.dmvChat({ requestId: REQUEST, resume: true }));
+    executions++;
+  }
+  assert.equal(result.text, 'Final from what we have');
+  // Two executions hand over after one 90-second round each; from 180 s the remaining limit
+  // fits one execution, which runs its rounds to the limit instead of handing over again.
+  assert.equal(executions, 3);
+  assert.deepEqual(finals, [started + 360000], 'the final answer comes once, after the limit');
+
+  const single = fixture();
+  const singleFinals = busy(single),
+    singleStarted = single.api.Date.now();
+  const alone = plain(single.api.dmvChat({ text: 'no request id' }));
+  assert.equal(alone.text, 'Final from what we have');
+  // Three rounds within the one execution's 200 seconds, then the final answer.
+  assert.deepEqual(singleFinals, [singleStarted + 270000]);
+});
+
+test('a request holding an uncached result, or whose state cannot be saved, keeps its execution', () => {
+  function looping(f, tool) {
+    const finals = [];
+    let runs = 0;
+    f.api.dmvAiComplete_ = (settings, request) => {
+      if (request.tools.length) return reply('', [call('run_report')]);
+      finals.push(f.api.Date.now());
+      return reply('Answered in this execution');
+    };
+    f.api.dmvChatTools_ = () => [
+      {
+        name: 'run_report',
+        run(session) {
+          runs++;
+          tool(session);
+          f.advance(90000);
+          return {};
+        },
+      },
+    ];
+    return { finals, runs: () => runs };
+  }
+  // A result too large for the cache cannot travel: rounds go on until the tool time is spent.
+  const big = fixture();
+  const bigRun = looping(big, (session) => {
+    session.uncached = true;
+  });
+  assert.deepEqual(plain(chat(big)), { pending: true });
+  assert.equal(bigRun.runs(), 3, 'three rounds in the first execution, not one');
+  // A state that cannot be saved finishes within this execution instead of ending at once.
+  const unsaved = fixture();
+  unsaved.state.cache.putAll = () => {
+    throw new Error('Cache unavailable');
+  };
+  const started = unsaved.api.Date.now();
+  const unsavedRun = looping(unsaved, () => {});
+  const answer = plain(chat(unsaved));
+  assert.equal(answer.text, 'Answered in this execution');
+  assert.equal(unsavedRun.runs(), 3);
+  assert.deepEqual(unsavedRun.finals, [started + 270000]);
+});
+
+test('a continued request keeps its limit, replays another model from neutral content and retries timed-out calls', () => {
+  const f = fixture();
+  let settings = { provider: 'test', apiKey: 'k', model: 'model-a', maxRows: 1234 };
+  f.api.dmvAiRead_ = () => settings;
+  const requests = [];
+  f.api.dmvAiComplete_ = (used, request) => {
+    requests.push(JSON.parse(JSON.stringify(request)));
+    return requests.length === 1
+      ? { text: '', toolCalls: [call('run_report')], stop: 'tool_use', raw: [{ provider: 'a' }] }
+      : reply('Done');
+  };
+  f.api.dmvChatTools_ = () => [
+    {
+      name: 'run_report',
+      run() {
+        f.advance(195000);
+        throw new Error('The refresh reached its time limit. Use a smaller report.');
+      },
+    },
+  ];
+  assert.deepEqual(plain(chat(f)), { pending: true });
+  // Mid-request, Settings change: another model and a limit already exceeded.
+  settings = { ...settings, model: 'model-b', timeLimit: 60 };
+  const done = plain(f.api.dmvChat({ requestId: REQUEST, resume: true }));
+  assert.equal(done.text, 'Done');
+  const resumed = requests[1];
+  assert.ok(resumed.tools.length, 'the saved 600-second limit still allows tools');
+  assert.ok(resumed.messages.every((message) => !message.raw), 'model-a replies replay without raw');
+  const toolResult = resumed.messages.at(-1).content[0];
+  assert.match(toolResult.content, /Call it again unchanged; the request continues/);
+});
+
 test('deadline skips and the final-answer fallback have accurate progress', () => {
   const f = fixture();
+  // A request limited to one execution's budget ends when that budget does.
+  f.api.DMV_AI.defaultTimeLimit = 200;
   let aiCalls = 0,
     writes = 0;
   f.api.dmvAiComplete_ = () => {

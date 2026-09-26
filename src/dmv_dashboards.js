@@ -17,6 +17,10 @@ var DMV_DASHBOARD = {
   maxTableRows: 1000,
   datePoints: 400,
   categoryPoints: 15,
+  previewRows: 5,
+  previewColumns: 8,
+  previewChars: 40,
+  previewTileChars: 1200,
 };
 
 function dmvDashboardObject_(value, keys) {
@@ -996,7 +1000,32 @@ function dmvDashboardChartTable_(session, resultId, tile) {
     }),
     stacked: !!tile.stacked,
     full: tile.width === 'full',
+    dated: dated,
   };
+}
+
+// What the chat reads of a tile to state findings: its whole header and first rows (the
+// latest points of a trend), within a size that lets every tile of a dashboard fit one tool
+// result. Rows beyond the budget are dropped, least relevant first.
+function dmvDashboardPreview_(block) {
+  var width = DMV_DASHBOARD.previewColumns;
+  var cell = function (value) {
+    return typeof value === 'string' && value.length > DMV_DASHBOARD.previewChars
+      ? value.slice(0, DMV_DASHBOARD.previewChars) + '…'
+      : value;
+  };
+  var rows = block.matrix.slice(1);
+  rows = block.dated
+    ? rows.slice(-DMV_DASHBOARD.previewRows)
+    : rows.slice(0, DMV_DASHBOARD.previewRows);
+  var preview = [block.matrix[0].slice(0, width)].concat(
+    rows.map(function (row) {
+      return row.slice(0, width).map(cell);
+    })
+  );
+  while (preview.length > 2 && JSON.stringify(preview).length > DMV_DASHBOARD.previewTileChars)
+    preview.splice(block.dated ? 1 : preview.length - 1, 1);
+  return preview;
 }
 
 function dmvDashboardTable_(session, resultId, tile) {
@@ -1620,6 +1649,9 @@ function dmvRunDashboard(id, requestedDeadline) {
             type: block.type,
             rows: block.matrix.length - 1,
             note: block.note || undefined,
+            preview: dmvDashboardPreview_(block),
+            hiddenColumns:
+              Math.max(0, block.matrix[0].length - DMV_DASHBOARD.previewColumns) || undefined,
           };
         }),
         links: dmvDashboardLinks_(spreadsheet, current),
