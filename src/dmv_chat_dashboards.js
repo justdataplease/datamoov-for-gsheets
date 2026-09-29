@@ -113,7 +113,7 @@ function dmvChatDashboardTools_(session, baseTools) {
     {
       name: 'save_dashboard',
       description:
-        'Save a refreshable dashboard: 1 to 6 datasets (each a report query written to its own tab) and up to 12 tiles laid out on the dashboard tab (target): kpi scorecards on top, then native charts, then the tables behind them. At least one tile must be a chart. The runtime fetches, aggregates, writes and charts; it appears under Reports > Dashboards, where Refresh dashboard rebuilds every tab and chart without AI. Saving does not fetch; call run_dashboard next. Updates need id and revision from list_dashboards. Plans stay private to this account.',
+        'Save a refreshable dashboard: 1 to 6 datasets (each a report query written to its own tab) and up to 12 tiles laid out on the dashboard tab (target): kpi scorecards on top, then native charts, then the tables behind them. At least one tile must be a chart. The runtime fetches, aggregates, writes and charts; it appears under Reports > Dashboards as a draft (or saved outright with a schedule the user asked for), where Refresh dashboard rebuilds every tab and chart without AI. Saving does not fetch; call run_dashboard next. Updates need id and revision from list_dashboards. Plans stay private to this account.',
       input_schema: {
         type: 'object',
         properties: {
@@ -204,19 +204,23 @@ function dmvChatSaveDashboard_(session, input) {
       );
     return item;
   });
+  // Chat saves drafts; only a schedule the user asked for saves outright.
+  plan.origin = 'chat';
+  plan.draft = !input.schedule || input.schedule === 'manual';
   var saved = dmvSaveDashboard(plan);
   session.events.push({
     kind: 'dashboard',
     action: 'saved',
+    record: { id: saved.id, draft: saved.draft === true },
     text:
-      'Saved dashboard "' +
+      (saved.draft ? 'Saved dashboard draft "' : 'Saved dashboard "') +
       saved.name +
       '" with ' +
       saved.datasets.length +
       (saved.datasets.length === 1 ? ' dataset and ' : ' datasets and ') +
       saved.chartCount +
       (saved.chartCount === 1 ? ' chart.' : ' charts.') +
-      ' Refresh it from Reports > Dashboards.',
+      (saved.draft ? ' Listed under Reports > Drafts.' : ' Refresh it from Reports > Dashboards.'),
     details: dmvChatDetails_([
       ['Dashboard tab', saved.target.sheetName],
       [
@@ -269,6 +273,7 @@ function dmvChatRunDashboard_(session, input) {
   session.events.push({
     kind: 'dashboard',
     action: 'refreshed',
+    record: { id: input.id, draft: dmvRead_('dashboard', input.id).draft === true },
     links: result.links,
     text:
       'Built "' +

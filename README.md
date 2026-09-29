@@ -66,11 +66,13 @@ Chat can also edit existing cells when asked: enter common scalar formulas, form
 
 ### Reports and dashboards: how they fit together
 
-**Reports** are single-source tables you build by hand in the sidebar: source, account, report, fields, dates, destination, schedule. **Dashboards** come from Chat: several datasets, each in its own tab, plus one Dashboard tab with scorecards and charts. Both use the same connections, validation and protected writer. A dashboard carries its own queries, so you do not create reports first.
+**Reports** are single-source tables: source, account, report, fields, dates, destination, schedule. Build one by hand with the **+** button, or ask Chat ("create a report of daily GA4 sessions in its own tab"). **Dashboards** come from Chat: several datasets, each in its own tab, plus one Dashboard tab with scorecards and charts. Both use the same connections, validation and protected writer. A dashboard carries its own queries, so you do not create reports first.
+
+Everything Chat saves lands under **Drafts** in the Reports tab, next to **Saved**; both groups fold with one click and are open by default. A draft can be run, edited and removed, but not scheduled: press **Save** on its card to keep it and unlock hourly, daily or weekly refreshes. Asking Chat for a schedule ("every morning at 8") saves the item outright. Under each answer that saved something, Chat says where the card is and offers to open it. Ask **"What can you do?"** and Chat explains the add-on using your own connections, with links into the sidebar.
 
 1. Ask Chat: **"Create a performance dashboard for Google Ads and Facebook Ads for the last 3 months, every week."**
 2. Chat saves the plan and runs it: every dataset is fetched once and written to its own tab, headed by its source, connection, report, date range and refresh time. The Dashboard tab gets scorecards, native Sheets charts and a Data sources table; the numbers behind the charts sit on a hidden chart data tab. The answer links to every tab.
-3. Open **Reports > Dashboards** to see the datasets, their tabs and rows, the last refresh and any error. **Refresh dashboard** fetches fresh data and rebuilds every tab and chart without AI. Charts are updated in place, so one you moved stays put, and their ranges follow the data when a refresh returns more rows.
+3. Open **Reports > Dashboards > Drafts** to see the datasets, their tabs and rows, the last refresh and any error, and press **Save** to keep it. **Refresh dashboard** fetches fresh data and rebuilds every tab and chart without AI. Charts are updated in place, so one you moved stays put, and their ranges follow the data when a refresh returns more rows.
 
 Datasets can be different subjects of one account: with the Google Ads **Custom query (GAQL)** report a dashboard can combine campaigns, ad groups, keywords, search terms and negative keywords. A request such as **"Create a marketing performance week vs previous period"** saves two datasets per account (last completed week and the week before); refreshing advances both. A question such as "How much did we spend?" returns an analysis without creating a dashboard.
 

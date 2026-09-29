@@ -56,6 +56,8 @@ var DMV_CHAT_PROGRESS_LABELS = {
   save_dashboard: 'Saving the dashboard plan',
   run_dashboard: 'Refreshing dashboard sources',
   list_dashboards: 'Checking saved dashboards',
+  list_reports: 'Checking saved reports',
+  save_report: 'Saving and running the report',
   ask_user: 'Preparing a question for you',
   action: 'Running a requested action',
   skipped_question: 'Action skipped while waiting for your answer',
@@ -357,6 +359,9 @@ function dmvChatSystemPrompt_(session) {
     '- DASHBOARDS. A request to create or build a dashboard or a performance report or overview ("create a marketing performance week vs previous period", "performance dashboard for Google Ads and Facebook") asks for a saved spreadsheet artifact; keep that intent after a source-selection reply such as "Use all ad platforms", and never finish such a request with chat numbers alone. A question such as "how much did we spend" is analysis. Build a dashboard with exactly these calls: list_dashboards (reuse or update a matching one), save_dashboard, run_dashboard. Do not call run_report, combine_results, summarize, write_to_sheet or create_chart for it: run_dashboard fetches every dataset once, writes each to its own tab, and builds the scorecards, charts and tables on the dashboard tab. Discover fields only when a needed column is not in the catalog.',
     '- Dashboard datasets: one query per requested account or subject, each with its own id, label and tab named "<label> Data"; the dashboard tab is "<subject> Dashboard". Keep datasets lean: only the fields the tiles use, a date field only for trends, campaign fields only for campaign tiles. Cover a trend with ONE query per account over the whole period (last 3 months is {preset: "last90"}) and let tiles bucket it with dateBucket week or month; never split a trend into several date ranges. Only an explicit week-versus-previous-week request uses two datasets per account, with dateRange presets lastWeek and previousWeek and labels naming account and period; give each account a kpi tile over its two datasets with compare: {current, previous} so every scorecard shows the change. Different subjects of one account (campaigns, ad groups, keywords, search terms) are separate datasets. When tiles read several datasets together, give each of those datasets a mapping to the same keys (date, campaign_name, spend, clicks, impressions, conversions, currency) and use those keys plus source in the tiles; a tile over one unmapped dataset uses that dataset\'s own column keys. For SQL sources, put the analysis in the query: aggregate to the grain the tiles need (for example per category and cluster, with COUNT(*) AS items and SUMs), and add the columns decisions depend on, such as the gap to a benchmark (shop price minus market average), 0/1 flags (priced above market) and buckets, so tiles can filter, rank and take ratios of them. Keep one row per item only for a tile that lists individual items, and only when the rows fit the cap. Never cap a dataset with LIMIT; aggregate instead.',
     '- Dashboard tiles: design for decisions. Every tile answers one question someone acts on, against a comparison: a benchmark, the previous period, a target or the other segments. Start with one kpi tile of headline totals and rates, at most 8 scorecard values across all kpi tiles (marketing: spend, conversions, CPC, CTR, ROAS; pricing: items, share priced above market, price index against market as a ratio of summed prices). Then 2 to 6 charts that answer the request (line or column over date with dateBucket for trends, split by source to compare platforms or periods; bar to rank segments; pie for share). Then one action table: the items or segments that need attention, ordered by impact (for example the highest-demand SKUs priced furthest above market, or the campaigns with the highest cost per conversion), with the columns needed to act and a limit of 10 to 25 rows. Tile filters select dataset rows before aggregation, so a condition on totals needs a dataset that already has one row per item. Rates and indices are ratios of summed counts or amounts, never averages of per-row rates; an average price across unrelated products is not a KPI. A tile restricted to part of a dataset (Brand campaigns, one country) uses filters; spend beside CPC puts cpc on secondaryAxis; a share over time is a stacked column; a long trend may take width full. Give every tile a plain title. Money in several currencies is split by currency automatically. When the user asks for automatic refreshes (every hour, daily, weekly), set schedule on save_dashboard, with at: {hour, weekday} when a time of day is named. After run_dashboard succeeds, lead with 3 to 5 findings read from its scorecards and tile previews, each with its number and the action it suggests; state no finding the returned values do not show. The first and last week or month of a trend can be partial, so do not read a rise or drop into them. Then say what was created, which tab holds what, and that Reports > Dashboards > Refresh dashboard rebuilds all of it without AI. The tab links are shown to the user automatically. If saving or running failed, say which step failed and do not claim the dashboard exists; fix the plan and retry when the error says how.',
+    '- SAVED REPORTS. A request to create, build, keep or schedule a report from one source ("create a report of daily GA4 sessions", "keep a Google Ads campaign table updated every morning", "import last month\'s deals as a report") asks for a saved report: call list_reports (reuse or update a matching one), then save_report with the name, query, tab and, only when asked, the schedule; it saves and runs the report in one call. Do not also call run_report or write_to_sheet for it. A plain request for data in a tab ("put daily sessions in a tab") is a one-off write with run_report and write_to_sheet, and a question is an answer; neither creates a saved report. Several sources with scorecards and charts are a dashboard.',
+    '- DRAFTS. Reports and dashboards you save land under Reports > Drafts unless the user asked for a schedule; a draft can be refreshed by hand but not scheduled until the user saves it. Never set a schedule the user did not ask for. The sidebar adds the draft location and its Save and Remove steps under your answer, so state only that it was saved as a draft (or saved with its schedule) and what it holds.',
+    "- GUIDANCE. When the user asks what you or DataMoov can do, or how to do something in the sidebar, answer from the CAPABILITIES section and the catalog only, in two to four sentences with the next click, naming the user's actual connections; suggest one or two example requests. Never describe a feature that is not listed there. To point to a place in the sidebar, write a link whose address is sidebar:<place> with place one of reports, drafts, dashboards, chat, connections or settings, for example [Reports > Drafts](sidebar:drafts).",
     '- When the user requests a pivot table, use create_pivot to create a native pivot in a new tab. Keep currencies separate when aggregating money from mixed currencies; use supported date grouping for monthly, weekly or other date summaries.',
     '- Both creating reports and editing existing sheets are supported. Only edit existing cells, formulas, formatting, sorting, filters, freeze panes or tab names when the user specifically requests that change. Use list_sheets and inspect_sheet before edit_sheet; pass its exact fresh editToken, sheetName and range, and reinspect after each edit. Report fetches still use run_report and write_to_sheet. Formula support is limited to common scalar built-ins and same-tab references, not every Sheets function. Sheet edits are bounded to 1000 cells, 200 rows and 30 columns; never sort independent subranges and claim a whole-sheet sort. Explain the limit and ask for a narrower range when necessary.',
     '- Earlier turns list their results as [Actions taken: … [rXXXXXXXX]]. Reuse such a resultId with summarize, write_to_sheet or create_chart instead of running the same report again; if it has expired the tool says so.',
@@ -400,6 +405,7 @@ function dmvChatSystemPrompt_(session) {
         : []
     )
     .concat(dmvChatSourceInstructions_(session))
+    .concat(['CAPABILITIES', dmvChatCapabilities_(session), ''])
     .concat([
       'CATALOG',
       dmvChatCatalogText_(session),
@@ -414,6 +420,32 @@ function dmvChatSystemPrompt_(session) {
         '.',
     ])
     .join('\n');
+}
+
+// What the add-on can and cannot do, in one place, so "what can you do?" and "how do I…?" are
+// answered from the product rather than guessed. Keep it in step with README.md and docs/chat.md.
+function dmvChatCapabilities_(session) {
+  var connections = (session.connections || []).map(function (connection) {
+    var connector = session.catalog[connection.connectorId];
+    return connection.label + (connector ? ' (' + connector.label + ')' : '');
+  });
+  var rows = (session.maxRows || DMV_LIMITS.chatDefaultRows).toLocaleString();
+  return [
+    "DataMoov is a Google Sheets sidebar with four tabs: Reports, Chat, Connections and Settings. It has no servers: credentials, connections, reports, dashboards and the AI key stay in the user's Google account, and the only hosts contacted are the configured data providers and the AI provider.",
+    'Connections (sidebar:connections): the user adds a credential (service account, OAuth client or token, brought by the user; every source has a guide saying where it comes from) and a connection per account or property. Connections now: ' +
+      (connections.length
+        ? connections.join('; ')
+        : 'none yet, so the first step is adding one under Connections') +
+      '.',
+    "Reports (sidebar:reports): a report is one source, one report type, chosen fields and dates written to one tab, refreshed on demand with Run, or hourly, daily or weekly at a chosen hour from the user's account without AI. The + button builds one by hand; chat saves one with save_report. Edit opens it in the form.",
+    'Dashboards (sidebar:dashboards): built in chat only. 1 to 6 datasets, each on its own tab, plus a Dashboard tab with scorecards, native charts and tables, rebuilt by Refresh dashboard without AI, with the same schedules as reports. Remove deletes the dashboard and the tabs it created.',
+    'Drafts (sidebar:drafts): everything chat saves lands under Drafts in the Reports tab, for reports and dashboards alike, unless the user asked for a schedule. A draft can be run or refreshed by hand, edited, saved with its Save button (which unlocks schedules) or removed. Building with the + form saves outright.',
+    'Chat (sidebar:chat) can: answer questions with numbers from any connection; rank and compare campaigns, periods or accounts, currencies kept apart; write tables to a tab; add native charts; read existing tabs; save reports and dashboards; edit cells, formulas, formatting, sorting, filters, freeze panes and tab names in bounded ranges; create native pivot tables; and ask when a request is ambiguous. Each fetched report holds at most ' +
+      rows +
+      ' rows (Settings > AI provider changes it) and a request is bounded by the time limit in Settings.',
+    'Settings (sidebar:settings): AI provider, API key and model (Anthropic, OpenAI or Gemini), maximum rows per chat report, time limit per request, standing instructions and the completed-actions debug view. Per-connection chat instructions live in the connection form.',
+    'Not possible: sending data anywhere except the configured providers; scheduling a draft; deleting tabs from chat; currency conversion; summing rates, averages or user counts; editing report output by hand without stopping its next refresh; connecting a source that is not in the catalog.',
+  ].join('\n');
 }
 
 function dmvChatConfigSchema_(session) {
@@ -762,7 +794,8 @@ function dmvChatTools_(session) {
   return tools.concat(
     dmvChatSheetTools_(),
     dmvChatPivotTools_(),
-    dmvChatDashboardTools_(session, tools)
+    dmvChatDashboardTools_(session, tools),
+    dmvChatReportTools_(session, tools)
   );
 }
 

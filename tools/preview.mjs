@@ -502,6 +502,19 @@ function installPreview(initial) {
       data.reports = data.reports.filter((item) => item.id !== id);
       return { ok: true };
     },
+    dmvListReports: () => copy(data.reports),
+    dmvKeepReport(id) {
+      const report = data.reports.find((item) => item.id === id);
+      if (!report) throw new Error('Report not found.');
+      report.draft = false;
+      return copy(report);
+    },
+    dmvKeepDashboard(id) {
+      const dashboard = (data.dashboards || []).find((item) => item.id === id);
+      if (!dashboard) throw new Error('Dashboard not found.');
+      dashboard.draft = false;
+      return copy(dashboard);
+    },
     dmvDiscoverFields(input) {
       if (Array.isArray(window.DATAMOOV_PREVIEW_DISCOVERY_FIELDS))
         return copy(window.DATAMOOV_PREVIEW_DISCOVERY_FIELDS);
@@ -561,6 +574,9 @@ function installPreview(initial) {
         status: 'ready',
         statusMessage: 'Ready to refresh all datasets',
         revision: (previous?.revision || 0) + 1,
+        // Chat saves drafts; a kept dashboard stays kept.
+        draft: input.draft === true && !(previous && !previous.draft),
+        origin: previous?.origin || input.origin || 'chat',
       };
       if (previous) Object.assign(previous, saved);
       else data.dashboards.push(saved);
@@ -815,8 +831,60 @@ function installPreview(initial) {
       };
       await progressStep('Working on your request');
       if (window.DATAMOOV_PREVIEW_CHAT_REPLY) return finish(window.DATAMOOV_PREVIEW_CHAT_REPLY);
+      // "Create a report …" saves a draft report and runs it once, like save_report does.
+      if (/\breport\b/i.test(text) && /create|build|save|keep/i.test(text) && !/dashboard/i.test(text)) {
+        await progressStep('Saving and running the report');
+        const scheduled = /every (hour|day|week|morning)|hourly|(refresh|update)[^.]*(daily|weekly)|(daily|weekly) at/i.test(text);
+        const saved = handlers.dmvSaveReport({
+          ...data.reports[0],
+          id: undefined,
+          name: 'Campaign performance (chat)',
+          target: { sheetName: 'Campaign performance', startCell: 'A1' },
+          schedule: scheduled ? 'daily' : 'manual',
+          at: scheduled ? { hour: 8 } : null,
+          draft: !scheduled,
+          origin: 'chat',
+        });
+        handlers.dmvRunReport(saved.id);
+        const events = [
+          {
+            kind: 'saved_report',
+            action: 'refreshed',
+            record: { id: saved.id, draft: saved.draft === true },
+            text:
+              (saved.draft ? 'Saved report draft "' : 'Saved report "') +
+              saved.name +
+              '" and wrote 8 rows to Campaign performance.',
+            links: [
+              {
+                label: 'Campaign performance (preview)',
+                url: 'https://docs.google.com/spreadsheets/d/datamoov-preview-only/edit#gid=905&range=A1',
+              },
+            ],
+          },
+        ];
+        const answer =
+          (saved.draft
+            ? '**Report saved as a draft.** '
+            : '**Report saved with a daily refresh at 08:00.** ') +
+          'Google Ads daily campaign performance for the last 30 days is in the **Campaign performance** tab (8 rows). (Sample preview data.)';
+        return finish({
+          text: answer,
+          events,
+          transcriptAppend: [
+            { role: 'user', text },
+            { role: 'assistant', text: answer, actions: events.map((event) => event.text) },
+          ],
+        });
+      }
       if (/dashboard/i.test(text)) {
-        const saved = handlers.dmvSaveDashboard({ name: 'Performance dashboard' });
+        const scheduled = /every (hour|day|week|morning)|hourly|(refresh|update)[^.]*(daily|weekly)|(daily|weekly) at/i.test(text);
+        const saved = handlers.dmvSaveDashboard({
+          name: 'Performance dashboard',
+          draft: !scheduled,
+          origin: 'chat',
+        });
+        if (scheduled) handlers.dmvScheduleDashboard(saved.id, 'daily', { hour: 8 });
         await progressStep('Refreshing dashboard sources');
         const result = await handlers.dmvRunDashboard(saved.id);
         const answer =
@@ -833,7 +901,10 @@ function installPreview(initial) {
           {
             kind: 'dashboard',
             action: 'saved',
-            text: 'Saved dashboard "Performance dashboard" with 2 datasets and 3 charts.',
+            record: { id: saved.id, draft: saved.draft === true },
+            text:
+              (saved.draft ? 'Saved dashboard draft' : 'Saved dashboard') +
+              ' "Performance dashboard" with 2 datasets and 3 charts.',
           },
         ]
           .concat(
@@ -852,6 +923,7 @@ function installPreview(initial) {
             {
               kind: 'dashboard',
               action: 'refreshed',
+              record: { id: saved.id, draft: saved.draft === true },
               text:
                 'Built "Performance dashboard" on ' +
                 result.target.sheetName +

@@ -123,6 +123,30 @@ function dmvListReports_(spreadsheet) {
   });
 }
 
+function dmvListReports() {
+  return dmvListReports_(dmvSpreadsheet_());
+}
+
+// Chat saves reports and dashboards as drafts: listed under Drafts, refreshable by hand, never
+// scheduled. Saving from the form, Save on the card, or a schedule asked for in chat keeps
+// them; once kept, a later chat edit never demotes them. Origin says where a record came from.
+function dmvDraftState_(record, input, previous) {
+  record.draft = input.draft === true && !(previous && !previous.draft);
+  if (record.draft && record.schedule !== 'manual')
+    throw new Error('Save this draft before scheduling refreshes.');
+  record.origin =
+    previous && previous.origin ? previous.origin : input.origin === 'chat' ? 'chat' : 'sidebar';
+  return record;
+}
+
+function dmvKeepReport(id) {
+  return dmvLocked_(function () {
+    var report = dmvReportHere_(id);
+    report.draft = false;
+    return dmvSave_('report', report);
+  });
+}
+
 function dmvSaveReport(input) {
   input = input || {};
   return dmvLocked_(function () {
@@ -138,6 +162,7 @@ function dmvSaveReport(input) {
     );
     report.revision = previous ? (previous.revision || 0) + 1 : 1;
     report.status = 'ready';
+    dmvDraftState_(report, input, previous);
     ['lastRun', 'lastRowCount'].forEach(function (key) {
       if (previous && previous[key] !== undefined) report[key] = previous[key];
     });
@@ -234,7 +259,8 @@ function dmvRunReport(id) {
   return dmvExecuteReport_(dmvReportHere_(id));
 }
 
-function dmvExecuteReport_(requested) {
+// deadline is optional: chat passes its remaining time so a report started late stops with it.
+function dmvExecuteReport_(requested, deadline) {
   var token = dmvId_(),
     connectionRevision,
     spreadsheet = SpreadsheetApp.openById(requested.spreadsheetId);
@@ -259,7 +285,7 @@ function dmvExecuteReport_(requested) {
     if (dmvPendingReport_(report)) dmvLocked_(dmvEnsureSchedule_);
     var result = dmvPendingReport_(report)
       ? dmvFetchContinued_(report, spreadsheet, token, connectionRevision)
-      : dmvFetchReport_(report, spreadsheet);
+      : dmvFetchReport_(report, spreadsheet, deadline);
     return dmvLocked_(function () {
       var current = dmvRead_('report', report.id);
       if (current.runToken !== token || current.revision !== report.revision)

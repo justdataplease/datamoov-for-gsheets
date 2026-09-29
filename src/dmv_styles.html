@@ -243,6 +243,70 @@
     gap: 12px;
     margin-bottom: 15px;
   }
+  /* Saved and Drafts groups: open by default, folded with one click, their count in the header. */
+  .list-group {
+    margin-bottom: 6px;
+  }
+  .list-group > .field-help {
+    margin: 0 0 10px;
+  }
+  .list-group-heading {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    cursor: pointer;
+    list-style: none;
+    font-size: 11px;
+    font-weight: 650;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    padding: 6px 0 10px;
+  }
+  .list-group-heading::-webkit-details-marker {
+    display: none;
+  }
+  .list-group-heading::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg) translateY(-2px);
+    transition: transform 0.15s;
+  }
+  .list-group:not([open]) > .list-group-heading::before {
+    transform: rotate(-45deg) translateX(-1px);
+  }
+  .draft-badge {
+    font-size: 9px;
+    font-weight: 650;
+    padding: 2px 5px;
+    border-radius: var(--radius);
+    background: #fff4e0;
+    color: #9a5b00;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .card-note {
+    font-size: 10px;
+    color: var(--muted);
+  }
+  .card-highlight {
+    box-shadow: 0 0 0 2px var(--primary);
+    transition: box-shadow 0.3s;
+  }
+  .sidebar-link {
+    color: var(--primary);
+    font-weight: 600;
+    text-decoration: underline;
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+  }
   .report-card,
   .connection-card {
     border: 1px solid var(--line);

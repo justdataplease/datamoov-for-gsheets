@@ -105,11 +105,14 @@
             <div>
               <h1 class="list-title">Reports</h1>
               <p>
-                Build a report yourself with the + button. Pick a connection, fields and dates;
-                refresh it any time.
+                Build a report with the + button, or ask Chat to create one. Chat saves under Drafts
+                until you save it.
               </p>
             </div>
             <div class="heading-actions">
+              <button type="button" id="create-report-chat" class="text-button">
+                Create in chat
+              </button>
               <button
                 type="button"
                 class="icon-button"
@@ -134,7 +137,22 @@
               </button>
             </div>
           </div>
-          <div id="reports-list" class="card-list"></div>
+          <details id="reports-saved" class="list-group" open>
+            <summary class="list-group-heading">
+              <span>Saved</span><span id="reports-saved-count" class="tab-count">0</span>
+            </summary>
+            <div id="reports-list" class="card-list"></div>
+          </details>
+          <details id="reports-drafts" class="list-group" open hidden>
+            <summary class="list-group-heading">
+              <span>Drafts</span><span id="reports-drafts-count" class="tab-count">0</span>
+            </summary>
+            <p class="field-help">
+              Created in Chat. Run a draft to check it, then Save to keep it and schedule refreshes,
+              or Remove it.
+            </p>
+            <div id="reports-drafts-list" class="card-list"></div>
+          </details>
           <section id="dashboards-section" aria-labelledby="dashboards-heading">
             <div class="section-heading">
               <h2 id="dashboards-heading">Dashboards</h2>
@@ -147,7 +165,22 @@
               Dashboard tab shows scorecards and charts, rebuilt on every refresh without AI. No
               saved reports are needed. Your setup stays private.
             </p>
-            <div id="dashboards-list" class="card-list"></div>
+            <details id="dashboards-saved" class="list-group" open>
+              <summary class="list-group-heading">
+                <span>Saved</span><span id="dashboards-saved-count" class="tab-count">0</span>
+              </summary>
+              <div id="dashboards-list" class="card-list"></div>
+            </details>
+            <details id="dashboards-drafts" class="list-group" open hidden>
+              <summary class="list-group-heading">
+                <span>Drafts</span><span id="dashboards-drafts-count" class="tab-count">0</span>
+              </summary>
+              <p class="field-help">
+                Created in Chat. Refresh a draft to check it, then Save to keep it and schedule
+                refreshes, or Remove it with its tabs.
+              </p>
+              <div id="dashboards-drafts-list" class="card-list"></div>
+            </details>
           </section>
           <p class="footnote">
             Your reports, dashboards, credentials, connections and refresh schedules stay private to

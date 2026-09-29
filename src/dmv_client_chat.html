@@ -2,7 +2,26 @@
   (function () {
     'use strict';
     const $ = (id) => document.getElementById(id);
-    const { api, el, button, notice, provider, state, tab, sheetLink } = window.dmvSidebar;
+    const { api, el, button, notice, provider, state, tab, sheetLink, showRecord, refreshReports } =
+      window.dmvSidebar;
+    // Places the model may point to with a sidebar:<place> link; anything else stays text.
+    const SIDEBAR_PLACES = {
+      reports: ['reports', 'reports-saved'],
+      drafts: ['reports', 'reports-drafts'],
+      dashboards: ['reports', 'dashboards-section'],
+      chat: ['chat'],
+      connections: ['connections'],
+      settings: ['settings', 'ai-settings'],
+    };
+    function goSidebar(place) {
+      const [name, target] = SIDEBAR_PLACES[place];
+      tab(name);
+      const node = target && $(target);
+      // An empty Drafts group stays hidden; the tab itself is the destination then.
+      if (!node || node.hidden) return;
+      if (node.tagName === 'DETAILS') node.open = true;
+      node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
     // generation changes on every reset; a reply from an older generation is dropped.
     const chat = {
       ai: null,
@@ -137,10 +156,10 @@
         );
       }
       if (connections.length) ideas.push('Which campaign had the highest spend last month?');
-      ideas.push(
-        connections.length ? 'Chart daily clicks for the last 14 days' : 'What can you do?'
-      );
-      for (const idea of ideas.slice(0, 3)) row.append(button(idea, 'chip', () => send(idea)));
+      // The guide chip is always there: the answer names the user's own connections and the
+      // next click, so it doubles as the tour of the add-on.
+      const chips = ideas.slice(0, 2).concat(['What can you do?']);
+      for (const idea of chips) row.append(button(idea, 'chip', () => send(idea)));
     }
     // Render model text only through DOM text nodes; no HTML, images or remote resources.
     function appendInline(parent, text, depth = 0) {
@@ -183,7 +202,18 @@
           try {
             url = new URL(link[2]);
           } catch {}
-          if (url && ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) {
+          const place = /^sidebar:([a-z]+)$/.exec(link[2]);
+          if (place && SIDEBAR_PLACES[place[1]]) {
+            flush();
+            const node = button('', 'sidebar-link', () => goSidebar(place[1]));
+            appendInline(node, link[1], depth + 1);
+            parent.append(node);
+          } else if (
+            url &&
+            ['http:', 'https:'].includes(url.protocol) &&
+            !url.username &&
+            !url.password
+          ) {
             flush();
             const node = el('a');
             node.href = url.href;
@@ -378,7 +408,46 @@
       const written = extra.events?.some(
         (event) => event.kind === 'write' || event.kind === 'chart'
       );
-      if (saved) {
+      // One fixed line under every answer that saved something: where it is, what to do next,
+      // and a link to the card. The wording is the same for reports and dashboards.
+      const savedReport = (extra.events || [])
+        .filter((event) => event.kind === 'saved_report')
+        .at(-1);
+      const savedDashboard = (extra.events || [])
+        .filter((event) => event.kind === 'dashboard' && event.record)
+        .at(-1);
+      for (const [kind, event] of [
+        ['report', savedReport],
+        ['dashboard', savedDashboard],
+      ]) {
+        if (!event) continue;
+        const draft = event.record?.draft === true;
+        const noun = kind === 'dashboard' ? 'dashboard' : 'report';
+        const guidance = el('p', 'field-help chat-dashboard-status');
+        if (recovering && kind === 'dashboard')
+          guidance.append('Dashboard tabs updated; saving refresh status needs recovery. ');
+        else if (kind === 'dashboard' && !refreshed)
+          guidance.append(
+            'Dashboard setup saved; its output has not been refreshed in this reply. '
+          );
+        guidance.append(
+          draft
+            ? 'Saved as a draft under Reports > ' +
+                (kind === 'dashboard' ? 'Dashboards > ' : '') +
+                'Drafts. Save it to keep it and schedule refreshes, or remove it' +
+                (kind === 'dashboard' ? ' to delete its tabs. ' : '. ')
+            : 'Saved under Reports > ' +
+                (kind === 'dashboard' ? 'Dashboards' : 'Saved') +
+                '. Refresh or schedule it from its card. '
+        );
+        guidance.append(
+          button('Open the ' + noun, 'text-button', () => showRecord(kind, event.record?.id))
+        );
+        node.append(guidance);
+      }
+      // Dashboard events without a record (older saved answers, recovery paths) keep the
+      // established wording.
+      if (saved && !savedDashboard) {
         const savedOnly = extra.events.some((event) => event.action === 'saved') && !refreshed;
         const guidance = el(
           'p',
@@ -394,25 +463,18 @@
                 : 'Your dashboard is saved. '
         );
         guidance.append(
-          document.createTextNode(
-            'Find it under Reports > Dashboards and use Refresh dashboard for new data. '
-          )
-        );
-        guidance.append(
-          button('View dashboards', 'text-button', () => {
-            tab('reports');
-            $('dashboards-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          })
+          'Find it under Reports > Dashboards and use Refresh dashboard for new data. ',
+          button('View dashboards', 'text-button', () => goSidebar('dashboards'))
         );
         node.append(guidance);
       }
-      if (written || refreshed) {
+      if (written || refreshed || savedReport) {
         const outputs = el('div', 'chat-output-links');
         outputs.append(el('p', 'field-help', 'Sheets updated. Open your output:'));
         const list = el('ul');
         const seen = new Set();
         for (const event of extra.events || []) {
-          if (!['write', 'chart', 'dashboard'].includes(event.kind)) continue;
+          if (!['write', 'chart', 'dashboard', 'saved_report'].includes(event.kind)) continue;
           for (const output of Array.isArray(event.links) ? event.links : []) {
             const link = sheetLink(String(output?.label || 'Open sheet'), output?.url);
             if (!link) continue;
@@ -570,6 +632,10 @@
         if (reply.events?.some((event) => event.kind === 'dashboard'))
           window.dmvSidebar.refreshDashboards().catch(() => {
             // Dashboard status is independent of the completed answer.
+          });
+        if (reply.events?.some((event) => event.kind === 'saved_report'))
+          refreshReports().catch(() => {
+            // The card appears on the next Reports refresh at the latest.
           });
         addMessage('assistant', reply.text || '', {
           events: reply.events,

@@ -67,6 +67,8 @@ function dmvValidateDashboard_(input, spreadsheet) {
     'target',
     'schedule',
     'at',
+    'draft',
+    'origin',
   ]);
   if (
     !Array.isArray(input.datasets) ||
@@ -516,6 +518,8 @@ function dmvDashboardSummary_(dashboard, spreadsheet) {
     at: dashboard.at || null,
     nextRunAt: dashboard.nextRunAt || null,
     lastError: legacy ? DMV_DASHBOARD_LEGACY : dashboard.lastError || '',
+    draft: dashboard.draft === true,
+    origin: dashboard.origin || 'chat',
     private: true,
   };
 }
@@ -605,6 +609,7 @@ function dmvSaveDashboard(input) {
       at: plan.at,
       nextRunAt: dmvFirstRun_(plan.schedule, plan.at, spreadsheet.getSpreadsheetTimeZone()),
     };
+    dmvDraftState_(dashboard, input, previous);
     ['lastRun', 'lastRowCount'].forEach(function (key) {
       if (previous && previous[key] !== undefined) dashboard[key] = previous[key];
     });
@@ -722,6 +727,8 @@ function dmvScheduleDashboard(id, schedule, at) {
   return dmvLocked_(function () {
     var dashboard = dmvDashboardHere_(id);
     if (dmvDashboardLegacy_(dashboard)) throw new Error(DMV_DASHBOARD_LEGACY);
+    if (dashboard.draft && dmvSchedule_(schedule) !== 'manual')
+      throw new Error('Save this draft before scheduling refreshes.');
     dashboard.schedule = dmvSchedule_(schedule);
     dashboard.at = dmvScheduleAt_(dashboard.schedule, at);
     var spreadsheet = dmvSpreadsheet_();
@@ -733,6 +740,17 @@ function dmvScheduleDashboard(id, schedule, at) {
     dmvSave_('dashboard', dashboard);
     dmvEnsureSchedule_();
     return dmvDashboardSummary_(dashboard, spreadsheet);
+  });
+}
+
+// Keeping a draft moves it under Saved; nothing else about it changes.
+function dmvKeepDashboard(id) {
+  return dmvLocked_(function () {
+    var dashboard = dmvDashboardHere_(id);
+    if (dmvDashboardLegacy_(dashboard)) throw new Error(DMV_DASHBOARD_LEGACY);
+    dashboard.draft = false;
+    dmvSave_('dashboard', dashboard);
+    return dmvDashboardSummary_(dashboard, dmvSpreadsheet_());
   });
 }
 

@@ -259,114 +259,156 @@
     function renderTabCount() {
       $('report-count').textContent = String(state.reports.length + state.dashboards.length);
     }
+    // Saved and Drafts are two groups of the same cards; a draft came from Chat and waits for
+    // Save (or Remove). An empty Drafts group is hidden so the form-only user never sees it.
+    function splitDrafts(items) {
+      const drafts = items.filter((item) => item.draft === true);
+      return { saved: items.filter((item) => !drafts.includes(item)), drafts };
+    }
+    function renderGroups(prefix, items) {
+      const { saved, drafts } = splitDrafts(items);
+      $(prefix + '-saved-count').textContent = String(saved.length);
+      $(prefix + '-drafts-count').textContent = String(drafts.length);
+      $(prefix + '-drafts').hidden = !drafts.length;
+      return { saved, drafts };
+    }
+    function draftBadge() {
+      return el('span', 'draft-badge', 'Draft');
+    }
+    function cardTitle(item) {
+      const title = el('div', 'card-title', item.name);
+      if (item.draft) title.append(draftBadge());
+      return title;
+    }
     function renderReports() {
       renderTabCount();
-      const list = $('reports-list');
-      list.replaceChildren();
-      if (!state.reports.length)
-        list.append(
+      const { saved, drafts } = renderGroups('reports', state.reports);
+      $('reports-list').replaceChildren();
+      $('reports-drafts-list').replaceChildren();
+      if (!saved.length)
+        $('reports-list').append(
           empty(
             'Your first report starts here',
             'Connect a data source and bring the numbers you care about into Sheets.'
           )
         );
-      for (const report of state.reports) {
-        const source = provider(report.connectorId);
-        const card = el('article', 'report-card');
-        const content = el('div', 'card-content');
-        const top = el('div', 'card-top');
-        const names = el('div');
-        names.append(
-          el('div', 'card-title', report.name),
-          el('div', 'card-subtitle', source?.label || report.connectorId)
-        );
-        const failed = Boolean(report.lastError) || ['failed', 'error'].includes(report.status);
-        const running = ['running', 'started'].includes(report.status);
-        const paused = report.status === 'paused';
-        const status = failed
-          ? ['Needs attention', 'error']
-          : running
-            ? ['Running', 'running']
-            : paused
-              ? ['Paused', 'paused']
-              : report.lastRun
-                ? ['Up to date', 'success']
-                : ['Ready', ''];
-        top.append(providerBadge(source), names, el('span', 'status ' + status[1], status[0]));
-        content.append(
-          top,
-          detail(
-            '↳',
-            (report.target?.sheetName || '') + ' · ' + (report.target?.startCell || 'A1')
-          ),
-          detail('Refresh', scheduleText(report) + nextRunLabel(report)),
-          detail(
-            'Updated',
-            timeLabel(report.lastRun) +
-              (report.lastRowCount != null
-                ? ' · ' + report.lastRowCount.toLocaleString() + ' rows'
-                : '')
-          )
-        );
-        if (paused) content.append(el('p', 'card-progress', continuationMessage(report)));
-        if (report.lastError) content.append(el('p', 'card-error', report.lastError));
-        const actions = el('div', 'card-bottom');
+      for (const report of saved) $('reports-list').append(reportCard(report));
+      for (const report of drafts) $('reports-drafts-list').append(reportCard(report));
+    }
+    function reportCard(report) {
+      const source = provider(report.connectorId);
+      const card = el('article', 'report-card');
+      card.dataset.reportId = report.id;
+      const content = el('div', 'card-content');
+      const top = el('div', 'card-top');
+      const names = el('div');
+      names.append(
+        cardTitle(report),
+        el(
+          'div',
+          'card-subtitle',
+          (source?.label || report.connectorId) + (report.origin === 'chat' ? ' · from Chat' : '')
+        )
+      );
+      const failed = Boolean(report.lastError) || ['failed', 'error'].includes(report.status);
+      const running = ['running', 'started'].includes(report.status);
+      const paused = report.status === 'paused';
+      const status = failed
+        ? ['Needs attention', 'error']
+        : running
+          ? ['Running', 'running']
+          : paused
+            ? ['Paused', 'paused']
+            : report.lastRun
+              ? ['Up to date', 'success']
+              : ['Ready', ''];
+      top.append(providerBadge(source), names, el('span', 'status ' + status[1], status[0]));
+      content.append(
+        top,
+        detail('↳', (report.target?.sheetName || '') + ' · ' + (report.target?.startCell || 'A1')),
+        detail(
+          'Refresh',
+          report.draft
+            ? 'On demand · save to schedule'
+            : scheduleText(report) + nextRunLabel(report)
+        ),
+        detail(
+          'Updated',
+          timeLabel(report.lastRun) +
+            (report.lastRowCount != null
+              ? ' · ' + report.lastRowCount.toLocaleString() + ' rows'
+              : '')
+        )
+      );
+      if (paused) content.append(el('p', 'card-progress', continuationMessage(report)));
+      if (report.lastError) content.append(el('p', 'card-error', report.lastError));
+      const actions = el('div', 'card-bottom');
+      if (report.draft)
         actions.append(
-          button('Edit', 'text-button subtle', () => editReport(report)),
-          button('Remove', 'text-button subtle', (event) =>
-            busy(event.currentTarget, 'Removing…', async () => {
-              if (
-                !window.confirm('Remove "' + report.name + '"? Existing sheet data stays in place.')
-              )
-                return;
-              await api('dmvDeleteReport', report.id);
-              state.reports = state.reports.filter((item) => item.id !== report.id);
+          button('Save', 'text-button', (event) =>
+            busy(event.currentTarget, 'Saving…', async () => {
+              const kept = await api('dmvKeepReport', report.id);
+              upsertReport({ ...report, ...kept, draft: false });
               renderReports();
-              if (state.reportId === report.id) resetReport();
-              notice('Report removed. Existing sheet data was kept.');
-            })
-          ),
-          button(paused ? '▶ Resume' : '▶ Run', 'run-button', (event) =>
-            busy(event.currentTarget, paused ? 'Resuming…' : 'Running…', async () => {
-              notice((paused ? 'Resuming ' : 'Refreshing ') + report.name + '…', 'info');
-              try {
-                const result = await api('dmvRunReport', report.id);
-                if (result.pending) {
-                  report.fetchedRowCount = result.rowCount;
-                  report.lastError = null;
-                  report.status = 'paused';
-                  renderReports();
-                  notice(continuationMessage(report), 'info');
-                  return;
-                }
-                report.lastRun = result.updatedAt || new Date().toISOString();
-                report.lastRowCount = result.rowCount;
-                report.lastError = null;
-                report.status = 'success';
-                delete report.fetchedRowCount;
-                renderReports();
-                notice(
-                  (result.rowCount || 0).toLocaleString() +
-                    ' rows updated in ' +
-                    report.target.sheetName +
-                    '.' +
-                    (result.warning ? ' ' + result.warning : ''),
-                  result.warning ? 'info' : 'success'
-                );
-              } catch (error) {
-                report.status = 'failed';
-                report.lastError = error.message;
-                renderReports();
-                throw error;
-              }
+              notice('Report saved. Edit it to set a refresh schedule.');
             })
           )
         );
-        const run = actions.querySelector('.run-button');
-        run.disabled = running;
-        card.append(content, actions);
-        list.append(card);
-      }
+      actions.append(
+        button('Edit', 'text-button subtle', () => editReport(report)),
+        button('Remove', 'text-button subtle', (event) =>
+          busy(event.currentTarget, 'Removing…', async () => {
+            if (
+              !window.confirm('Remove "' + report.name + '"? Existing sheet data stays in place.')
+            )
+              return;
+            await api('dmvDeleteReport', report.id);
+            state.reports = state.reports.filter((item) => item.id !== report.id);
+            renderReports();
+            if (state.reportId === report.id) resetReport();
+            notice('Report removed. Existing sheet data was kept.');
+          })
+        ),
+        button(paused ? '▶ Resume' : '▶ Run', 'run-button', (event) =>
+          busy(event.currentTarget, paused ? 'Resuming…' : 'Running…', async () => {
+            notice((paused ? 'Resuming ' : 'Refreshing ') + report.name + '…', 'info');
+            try {
+              const result = await api('dmvRunReport', report.id);
+              if (result.pending) {
+                report.fetchedRowCount = result.rowCount;
+                report.lastError = null;
+                report.status = 'paused';
+                renderReports();
+                notice(continuationMessage(report), 'info');
+                return;
+              }
+              report.lastRun = result.updatedAt || new Date().toISOString();
+              report.lastRowCount = result.rowCount;
+              report.lastError = null;
+              report.status = 'success';
+              delete report.fetchedRowCount;
+              renderReports();
+              notice(
+                (result.rowCount || 0).toLocaleString() +
+                  ' rows updated in ' +
+                  report.target.sheetName +
+                  '.' +
+                  (result.warning ? ' ' + result.warning : ''),
+                result.warning ? 'info' : 'success'
+              );
+            } catch (error) {
+              report.status = 'failed';
+              report.lastError = error.message;
+              renderReports();
+              throw error;
+            }
+          })
+        )
+      );
+      const run = actions.querySelector('.run-button');
+      run.disabled = running;
+      card.append(content, actions);
+      return card;
     }
     const dashboardView = {
       epoch: 0,
@@ -483,84 +525,139 @@
     }
     function renderDashboards() {
       renderTabCount();
-      const list = $('dashboards-list');
-      list.replaceChildren();
-      if (!state.dashboards.length) {
-        list.append(
+      const { saved, drafts } = renderGroups('dashboards', state.dashboards);
+      $('dashboards-list').replaceChildren();
+      $('dashboards-drafts-list').replaceChildren();
+      if (!saved.length) {
+        $('dashboards-list').append(
           empty(
             'Create your first dashboard in Chat',
             'Choose sources, metrics and dates in one conversation. Your dashboard appears here when saved.'
           )
         );
       }
-      for (const dashboard of state.dashboards) {
-        const card = el('article', 'report-card dashboard-card');
-        card.dataset.dashboardId = dashboard.id;
-        const content = el('div', 'card-content');
-        const top = el('div', 'card-top');
-        const names = el('div');
-        const datasets = Array.isArray(dashboard.datasets) ? dashboard.datasets : [];
-        const charts = Number(dashboard.chartCount || 0);
-        names.append(
-          el('div', 'card-title', dashboard.name),
-          el(
-            'div',
-            'card-subtitle',
-            datasets.length +
-              (datasets.length === 1 ? ' dataset · ' : ' datasets · ') +
-              charts +
-              (charts === 1 ? ' chart' : ' charts')
-          )
+      for (const dashboard of saved) $('dashboards-list').append(dashboardCard(dashboard));
+      for (const dashboard of drafts) $('dashboards-drafts-list').append(dashboardCard(dashboard));
+    }
+    function dashboardCard(dashboard) {
+      const card = el('article', 'report-card dashboard-card');
+      card.dataset.dashboardId = dashboard.id;
+      const content = el('div', 'card-content');
+      const top = el('div', 'card-top');
+      const names = el('div');
+      const datasets = Array.isArray(dashboard.datasets) ? dashboard.datasets : [];
+      const charts = Number(dashboard.chartCount || 0);
+      names.append(
+        cardTitle(dashboard),
+        el(
+          'div',
+          'card-subtitle',
+          datasets.length +
+            (datasets.length === 1 ? ' dataset · ' : ' datasets · ') +
+            charts +
+            (charts === 1 ? ' chart' : ' charts')
+        )
+      );
+      const running = dashboardRunning(dashboard);
+      const removing = dashboardView.removals.has(dashboard.id);
+      const failed = Boolean(dashboard.lastError) || ['failed', 'error'].includes(dashboard.status);
+      const status = running
+        ? ['Refreshing', 'running']
+        : failed
+          ? ['Needs attention', 'error']
+          : dashboard.lastRun
+            ? ['Up to date', 'success']
+            : ['Ready', ''];
+      top.append(names, el('span', 'status ' + status[1], status[0]));
+      content.append(top, dashboardDetail('Dashboard tab', dashboard.target, dashboard.reportUrl));
+      // One line per dataset: where its rows land and how many the last refresh wrote.
+      for (const dataset of datasets) {
+        const row = dashboardDetail(dataset.label, dataset.sheetName, dataset.url);
+        if (dataset.rowCount != null)
+          row.lastElementChild.append(' · ' + Number(dataset.rowCount).toLocaleString() + ' rows');
+        content.append(row);
+      }
+      // The schedule is changed on the card itself; a dashboard has no edit form. A draft
+      // refreshes by hand only: Save unlocks the schedule.
+      const scheduleRow = detail('Refresh', '');
+      scheduleRow.lastElementChild.className = 'card-schedule';
+      if (dashboard.draft)
+        scheduleRow.lastElementChild.replaceChildren(
+          'On demand',
+          el('span', 'card-note', ' · save this dashboard to schedule refreshes')
         );
-        const running = dashboardRunning(dashboard);
-        const removing = dashboardView.removals.has(dashboard.id);
-        const failed =
-          Boolean(dashboard.lastError) || ['failed', 'error'].includes(dashboard.status);
-        const status = running
-          ? ['Refreshing', 'running']
-          : failed
-            ? ['Needs attention', 'error']
-            : dashboard.lastRun
-              ? ['Up to date', 'success']
-              : ['Ready', ''];
-        top.append(names, el('span', 'status ' + status[1], status[0]));
-        content.append(
-          top,
-          dashboardDetail('Dashboard tab', dashboard.target, dashboard.reportUrl)
-        );
-        // One line per dataset: where its rows land and how many the last refresh wrote.
-        for (const dataset of datasets) {
-          const row = dashboardDetail(dataset.label, dataset.sheetName, dataset.url);
-          if (dataset.rowCount != null)
-            row.lastElementChild.append(
-              ' · ' + Number(dataset.rowCount).toLocaleString() + ' rows'
-            );
-          content.append(row);
-        }
-        // The schedule is changed on the card itself; a dashboard has no edit form.
-        const scheduleRow = detail('Refresh', '');
-        scheduleRow.lastElementChild.className = 'card-schedule';
+      else
         scheduleRow.lastElementChild.replaceChildren(
           ...scheduleControls(dashboard, running || removing || dashboard.legacy === true),
           nextRunLabel(dashboard)
         );
-        content.append(scheduleRow, detail('Updated', timeLabel(dashboard.lastRun)));
-        if (dashboard.statusMessage)
-          content.append(el('p', 'card-progress', dashboard.statusMessage));
-        if (dashboard.lastError) content.append(el('p', 'card-error', dashboard.lastError));
-        const actions = el('div', 'card-bottom');
-        const remove = button(removing ? 'Removing...' : 'Remove', 'text-button subtle', () =>
-          removeDashboard(dashboard)
-        );
-        const refresh = button(running ? 'Refreshing...' : 'Refresh dashboard', 'run-button', () =>
-          runDashboard(dashboard)
-        );
-        remove.disabled = running || removing;
-        refresh.disabled = running || removing || dashboard.legacy === true;
-        actions.append(remove, refresh);
-        card.append(content, actions);
-        list.append(card);
+      content.append(scheduleRow, detail('Updated', timeLabel(dashboard.lastRun)));
+      if (dashboard.statusMessage)
+        content.append(el('p', 'card-progress', dashboard.statusMessage));
+      if (dashboard.lastError) content.append(el('p', 'card-error', dashboard.lastError));
+      const actions = el('div', 'card-bottom');
+      if (dashboard.draft) {
+        const keep = button('Save', 'text-button', () => keepDashboard(dashboard));
+        keep.disabled = running || removing || dashboard.legacy === true;
+        actions.append(keep);
       }
+      const remove = button(removing ? 'Removing...' : 'Remove', 'text-button subtle', () =>
+        removeDashboard(dashboard)
+      );
+      const refresh = button(running ? 'Refreshing...' : 'Refresh dashboard', 'run-button', () =>
+        runDashboard(dashboard)
+      );
+      remove.disabled = running || removing;
+      refresh.disabled = running || removing || dashboard.legacy === true;
+      actions.append(remove, refresh);
+      card.append(content, actions);
+      return card;
+    }
+    async function keepDashboard(dashboard) {
+      try {
+        const kept = await api('dmvKeepDashboard', dashboard.id);
+        const current = state.dashboards.find((item) => item.id === dashboard.id) || dashboard;
+        upsert(state.dashboards, { ...current, ...kept, draft: false });
+        notice('Dashboard saved. You can now schedule its refreshes on the card.');
+      } catch (error) {
+        notice(error.message || 'The dashboard could not be saved.', 'error');
+      } finally {
+        renderDashboards();
+      }
+    }
+    // Chat points at the card it just created: open the Reports tab and its group, then
+    // scroll to the card and outline it for a moment.
+    function showRecord(kind, id) {
+      tab('reports');
+      const card = document.querySelector(
+        kind === 'dashboard' ? '[data-dashboard-id="' + id + '"]' : '[data-report-id="' + id + '"]'
+      );
+      const group = card?.closest('details');
+      if (group) group.open = true;
+      (card || $(kind === 'dashboard' ? 'dashboards-section' : 'reports-saved')).scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+      if (!card) return;
+      card.classList.add('card-highlight');
+      window.setTimeout(() => card.classList.remove('card-highlight'), 2500);
+    }
+    async function refreshReports() {
+      const items = await api('dmvListReports');
+      if (!Array.isArray(items)) throw new Error('Report status could not be read.');
+      state.reports = items;
+      renderReports();
+    }
+    function createReportInChat() {
+      tab('chat');
+      const input = $('chat-input');
+      if (input.disabled) {
+        notice('Wait for the current answer before creating a report.', 'info');
+        return;
+      }
+      input.value =
+        'Create a report from one of my connections into its own tab. Ask me which connection, report, fields and date range to use.';
+      input.focus();
     }
     async function runDashboard(dashboard) {
       if (dashboardRunning(dashboard) || dashboardView.removals.has(dashboard.id)) return;
@@ -1840,6 +1937,7 @@
       });
     });
     $('create-dashboard-chat').addEventListener('click', createDashboardInChat);
+    $('create-report-chat').addEventListener('click', createReportInChat);
     $('new-report').addEventListener('click', () => {
       resetReport();
       tab('compose');
@@ -2128,6 +2226,8 @@
       state,
       tab,
       refreshDashboards,
+      refreshReports,
+      showRecord,
       sheetLink,
     };
     tab('reports');

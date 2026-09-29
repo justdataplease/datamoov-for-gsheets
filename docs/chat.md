@@ -59,8 +59,15 @@ source fetches; multi-account and period comparisons can require several fetches
   writes one read-only SELECT against those names. The same SQL guard as saved reports
   applies, and the database role should be read-only. Keep the scope small to keep the
   model to the point.
+- **Save a report**: "Create a report of daily GA4 sessions in its own tab" saves a refreshable
+  report and runs it once; it appears under **Reports > Drafts** (see [Saved reports and
+  drafts](#saved-reports-and-drafts)).
 - **Ask when unsure**: if "revenue" could mean three things, it asks and shows the choices
   as buttons.
+- **Explain the add-on**: "What can you do?" or "How do I schedule this?" is answered from a
+  fixed description of the sidebar and the chat, naming your own connections and the next click.
+  Places in the sidebar come back as links that open the right tab. The first chip in an empty
+  chat asks exactly this.
 
 While a turn runs, live activity shows the actual actions: fetching reports, reading a sheet,
 combining results, summarizing data, writing a table or creating a chart. When the answer arrives,
@@ -139,8 +146,9 @@ Charts that compare platforms read several datasets together; Chat gives their c
 names (date, spend, clicks) so Google's cost and Facebook's spend line up.
 
 The answer in Chat lists what was fetched, links to every tab, and repeats the scorecard values.
-The saved card appears under **Reports > Dashboards** with a link per tab and the rows of the
-last refresh. **Refresh dashboard** fetches every dataset again and rebuilds every tab, scorecard
+The saved card appears under **Reports > Dashboards > Drafts** with a link per tab and the rows of
+the last refresh; a schedule asked for in the request ("refresh it daily at 8") saves it under
+**Saved** instead. See [Saved reports and drafts](#saved-reports-and-drafts). **Refresh dashboard** fetches every dataset again and rebuilds every tab, scorecard
 and chart from the saved plan: no AI call, no AI key needed. Charts the dashboard created are
 updated in place, so a chart you moved or resized stays where you put it; one you deleted comes
 back. **Create in chat** opens a draft request you can edit. **Remove** deletes the saved plan
@@ -195,11 +203,40 @@ not shared or copied with the workbook. Their output tabs remain visible to spre
 collaborators, provenance rows included, so anyone can see what fed each number. Dashboards saved
 before datasets and tiles existed are listed with a note to remove and recreate them.
 
+## Saved reports and drafts
+
+Chat can save a single-source report the same way the form does: **"Create a report of daily
+campaign cost for the last 30 days"** calls `list_reports`, then `save_report` with the connection,
+report, fields, dates, a name and a tab. The report is validated, stored and run through the
+ordinary report runtime, so it refreshes from its card, can be edited in the form and follows every
+report guarantee. A plain request for data in a tab ("put daily sessions in a tab") stays a one-off
+write with no card, and a question stays an answer.
+
+Everything Chat saves, reports and dashboards alike, lands under **Drafts**:
+
+- The Reports tab shows **Saved** and **Drafts** for reports and again for dashboards. Each group is
+  collapsible and open by default; an empty Drafts group is hidden.
+- A draft can be run or refreshed by hand, edited and removed, but not scheduled. Its card shows
+  a **Draft** badge, a **Save** button and "save to schedule" in place of the schedule.
+- **Save** moves the card to Saved and unlocks the schedule. Editing a draft report in the form and
+  saving it does the same. Chat editing a saved item never turns it back into a draft.
+- A schedule asked for in chat ("every morning at 8") saves the item outright with that schedule.
+  Chat never sets a schedule you did not ask for.
+- **Remove** on a report deletes the card and keeps the tab; on a dashboard it deletes the card and
+  the tabs the dashboard created.
+
+Under every answer that saved something the sidebar adds one fixed line, for example "Saved as a
+draft under Reports > Dashboards > Drafts. Save it to keep it and schedule refreshes, or remove it
+to delete its tabs." with an **Open the dashboard** button that opens the Reports tab and outlines
+the card. Chat-created cards say "from Chat" in their subtitle.
+
 ## What the model sees
 
 - The catalog: your connection labels and ids, non-secret connection values (account or
   property ids, chat schemas or datasets), the reports with their fields, the spreadsheet's
   tab names and timezone, and your saved instructions.
+- A fixed description of what the sidebar and the chat can and cannot do, with your connection
+  labels and the current row limit filled in.
 - Tool results: column descriptors, row counts, per-column statistics and a few sample rows
   (the first five and last three). Small results (20 rows or fewer) are returned whole.
   Summaries follow the same sampling rule. The requested summary limit controls the complete
@@ -270,11 +307,15 @@ Values that come back from providers are framed as data, not instructions.
 | `list_dashboards` | List private saved dashboards for this spreadsheet |
 | `save_dashboard` | Save a plan: datasets (a query, a tab and optional shared column names each) and tiles (kpi, chart or table over one or more datasets) plus the dashboard tab |
 | `run_dashboard` | Fetch every dataset and atomically rebuild all tabs, scorecards, charts and tables; return scorecard values, a short preview of each tile and tab links |
+| `list_reports` | List private saved reports (drafts included) with their revisions |
+| `save_report` | Save one report query with a name, tab and optional schedule through `dmvSaveReport`, run it once through the report runtime, and report where the card is listed |
 
 Providers are adapted in `src/dmv_ai.js`: Anthropic Messages API, OpenAI Chat Completions
 and Gemini `generateContent`, each with its own tool-call format, normalized to one shape for
 the loop in `src/dmv_chat.js`. Tool implementations live in `src/dmv_chat_tools.js`, `src/dmv_chat_sheets.js`,
-`src/dmv_chat_pivots.js` and `src/dmv_chat_dashboards.js`. Saved dashboard plans execute in
+`src/dmv_chat_pivots.js`, `src/dmv_chat_dashboards.js` and `src/dmv_chat_reports.js`. The capability
+description the model answers "what can you do?" from is `dmvChatCapabilities_` in `src/dmv_chat.js`;
+keep it in step with this document and the README. Saved dashboard plans execute in
 `src/dmv_dashboards.js`, which lays out the dashboard tab and builds its charts itself.
 
 Offline tests (`tests/chat.test.mjs`) drive the loop with scripted provider replies through an
