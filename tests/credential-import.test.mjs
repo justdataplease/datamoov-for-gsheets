@@ -96,6 +96,8 @@ test('import shares private credentials, checks each new account, and is idempot
   assert.deepEqual(plain(first.summary), {
     credentials: { saved: 1, existing: 0, failed: 0 },
     connections: { saved: 2, existing: 0, failed: 0 },
+    reports: { saved: 0, existing: 0, failed: 0 },
+    dashboards: { saved: 0, existing: 0, failed: 0 },
   });
   const credential = first.credentials[0];
   assert.equal(credential.verified, false);
@@ -116,6 +118,8 @@ test('import shares private credentials, checks each new account, and is idempot
   assert.deepEqual(plain(second.summary), {
     credentials: { saved: 0, existing: 1, failed: 0 },
     connections: { saved: 0, existing: 2, failed: 0 },
+    reports: { saved: 0, existing: 0, failed: 0 },
+    dashboards: { saved: 0, existing: 0, failed: 0 },
   });
   assert.deepEqual(f.state.user.getProperties(), before);
   assert.equal(f.checks.length, 2);
@@ -162,7 +166,7 @@ test('every structural error is rejected before any provider action or settings 
       b.version = 2;
     },
     (b) => {
-      b.credentials = Array.from({ length: 21 }, (_, i) => ({
+      b.credentials = Array.from({ length: 41 }, (_, i) => ({
         ...b.credentials[0],
         ref: 'ref-' + i,
       }));
@@ -186,10 +190,10 @@ test('UTF-8 byte size is enforced before saves', () => {
     ref: 'ref-' + i,
     label: 'Token',
     family: 'import_source',
-    values: { token: String.fromCodePoint(0x6f22).repeat(5000) },
+    values: { token: String.fromCodePoint(0x6f22).repeat(70000) },
   }));
-  assert.ok(JSON.stringify(input).length < 250000);
-  assert.throws(() => f.api.dmvImportCredentials(input), /250,000 bytes/);
+  assert.ok(JSON.stringify(input).length < 4000000);
+  assert.throws(() => f.api.dmvImportCredentials(input), /4,000,000 bytes/);
   assert.deepEqual(f.state.user.getProperties(), {});
 });
 

@@ -8,7 +8,7 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | src/dmv_core.js | Connector registry, catalog, validation, canonical JSON, relative dates including adjacent completed weeks, and typed result normalization |
 | src/dmv_store.js | Private per-user records, runtime locks, active spreadsheet and validated output-tab links |
 | src/dmv_credentials.js | Saved credentials: connector-derived types, Google token and available consumer checks on edits, delete refused while in use, and credential merging into connections at run time |
-| src/dmv_credential_import.js | Validated local credential-bundle import through the existing private save APIs, exact-match reuse and per-item results |
+| src/dmv_credential_import.js | Settings bundles: export of credentials, connections, reports and dashboards to a local file, and validated import of the same through the existing private save APIs, exact-match reuse and per-item results |
 | src/dmv_connections.js | Save, delete and test connections (a saved credential plus per-connection values); summaries never expose secrets |
 | src/dmv_reports.js | Bootstrap, report validation, discovery, preview, run and refresh-all |
 | src/dmv_continuation.js | Bounded per-user checkpoint storage, snapshot recovery and saved-report chunk execution |

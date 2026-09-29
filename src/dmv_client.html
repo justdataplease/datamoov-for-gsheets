@@ -1123,9 +1123,15 @@
     }
     // ---- Settings: saved credentials ----
     let credentialImportRunning = false;
+    const IMPORT_KINDS = [
+      ['credentials', 'Credentials'],
+      ['connections', 'Connections'],
+      ['reports', 'Reports'],
+      ['dashboards', 'Dashboards'],
+    ];
     function renderCredentialImport(result) {
       const region = $('credential-import-result');
-      const failed = ['credentials', 'connections'].flatMap((kind) =>
+      const failed = IMPORT_KINDS.flatMap(([kind]) =>
         (result[kind] || []).filter((item) => item.status === 'failed')
       );
       region.replaceChildren();
@@ -1137,11 +1143,10 @@
           failed.length ? 'Import finished with items that need attention.' : 'Import complete.'
         )
       );
-      for (const [kind, label] of [
-        ['credentials', 'Credentials'],
-        ['connections', 'Connections'],
-      ]) {
+      for (const [kind, label] of IMPORT_KINDS) {
         const items = result[kind] || [];
+        // A version 1 file has no reports or dashboards; say nothing about them.
+        if (!items.length && kind !== 'credentials' && kind !== 'connections') continue;
         const count = (status) => items.filter((item) => item.status === status).length;
         region.append(
           el(
@@ -1186,39 +1191,46 @@
         let contents = '',
           bundle = null;
         region.className = 'notice info credential-import-result';
-        region.textContent = 'Importing credentials and checking connections\u2026';
+        region.textContent = 'Importing settings and checking connections\u2026';
         region.hidden = false;
         region.setAttribute('aria-busy', 'true');
         try {
-          if (file.size > 250000) throw new Error('Choose a credentials file smaller than 250 KB.');
+          if (file.size > 4000000) throw new Error('Choose a settings file smaller than 4 MB.');
           try {
             contents = await file.text();
           } catch {
             throw new Error('Could not read the selected file. Choose it again.');
           }
           file = null;
-          if (contents.length > 250000)
-            throw new Error('Choose a credentials file smaller than 250 KB.');
+          if (contents.length > 4000000)
+            throw new Error('Choose a settings file smaller than 4 MB.');
           try {
             bundle = JSON.parse(contents);
           } catch {
-            throw new Error('Choose a valid DataMoov credentials JSON file.');
+            throw new Error('Choose a valid DataMoov settings JSON file.');
           }
           contents = '';
+          // Version 1 holds credentials and connections; version 2 adds reports and dashboards.
           if (
             !bundle ||
             typeof bundle !== 'object' ||
             Array.isArray(bundle) ||
-            bundle.version !== 1 ||
+            ![1, 2].includes(bundle.version) ||
             !Array.isArray(bundle.credentials) ||
-            !Array.isArray(bundle.connections)
+            !Array.isArray(bundle.connections) ||
+            (bundle.version === 2 &&
+              (!Array.isArray(bundle.reports) || !Array.isArray(bundle.dashboards)))
           )
-            throw new Error('Choose a valid DataMoov credentials file with version 1.');
+            throw new Error('Choose a valid DataMoov settings file (version 1 or 2).');
           let result;
           try {
             result = await api('dmvImportCredentials', bundle);
-          } catch {
-            throw new Error('Import could not finish. Check the credentials file and try again.');
+          } catch (error) {
+            // A rejected file names the rule it broke; nothing was saved.
+            throw new Error(
+              'Import could not finish. ' +
+                (error.message || 'Check the settings file and try again.')
+            );
           }
           bundle = null;
           if (!result || !Array.isArray(result.credentials) || !Array.isArray(result.connections))
@@ -2039,6 +2051,50 @@
           'Sample saved as ' +
             sample.fileName +
             '. It covers every source with placeholder values; replace them with your own before importing.'
+        );
+      })
+    );
+    // Export writes every private setting, secrets included, to a local file. The download is
+    // a deliberate act: the user confirms first, and the file never touches the spreadsheet.
+    $('export-settings').addEventListener('click', (event) =>
+      busy(event.currentTarget, 'Preparing…', async () => {
+        if (
+          !window.confirm(
+            'Export your credentials, connections, reports and dashboards to a file?\n\nThe file will contain your saved secrets (tokens, keys, passwords) in clear text. Keep it private and delete it when you no longer need it.'
+          )
+        )
+          return;
+        const bundle = await api('dmvExportSettings');
+        try {
+          const url = URL.createObjectURL(new Blob([bundle.json], { type: 'application/json' }));
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = bundle.fileName;
+          document.body.append(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
+        } catch (error) {
+          throw new Error(
+            'This sidebar could not start the download. Use the ⤡ button to open DataMoov in a window and try again.'
+          );
+        }
+        const counts = bundle.counts || {};
+        const skipped = Array.isArray(bundle.skipped) ? bundle.skipped : [];
+        notice(
+          'Download started: ' +
+            bundle.fileName +
+            ' with ' +
+            IMPORT_KINDS.map(
+              ([kind, label]) => (counts[kind] || 0) + ' ' + label.toLowerCase()
+            ).join(', ') +
+            '. It contains your secrets; keep it private.' +
+            (skipped.length
+              ? ' Left out: ' +
+                skipped.map((item) => item.label + ' (' + item.reason + ')').join(', ') +
+                '.'
+              : ''),
+          skipped.length ? 'info' : 'success'
         );
       })
     );

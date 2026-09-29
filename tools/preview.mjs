@@ -305,17 +305,86 @@ function installPreview(initial) {
         ),
       };
     },
+    // The preview export carries the fixture's placeholder values; the real one carries secrets.
+    dmvExportSettings() {
+      const ref = (label) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const credentials = data.credentials.map((item) => ({
+        ref: ref(item.label),
+        label: item.label,
+        family: item.family,
+        values: { ...(item.values || {}), token: 'PREVIEW_SECRET' },
+      }));
+      const credentialRef = new Map(data.credentials.map((item) => [item.id, ref(item.label)]));
+      const connections = data.connections.map((item) => ({
+        ref: ref(item.label),
+        label: item.label,
+        connectorId: item.connectorId,
+        credentialRef: credentialRef.get(item.credentialId) || credentials[0]?.ref,
+        credentials: { ...(item.values || {}) },
+      }));
+      const connectionRef = new Map(data.connections.map((item) => [item.id, ref(item.label)]));
+      const reports = data.reports.map((item) => ({
+        ref: ref(item.name),
+        name: item.name,
+        connectionRef: connectionRef.get(item.connectionId),
+        reportType: item.reportType,
+        fields: item.fields,
+        config: item.config || {},
+        dateRange: item.dateRange,
+        maxRows: item.maxRows,
+        target: item.target,
+        schedule: item.schedule || 'manual',
+        at: item.at || null,
+      }));
+      const dashboards = (data.dashboards || []).map((item) => ({
+        ref: ref(item.name),
+        name: item.name,
+        target: { sheetName: item.target.sheetName },
+        datasets: item.datasets.map((dataset) => ({
+          id: dataset.id,
+          label: dataset.label,
+          sheetName: dataset.sheetName,
+          connectionRef: connections[0]?.ref,
+          reportType: 'campaigns',
+          fields: ['date', 'spend'],
+          dateRange: { preset: 'last30' },
+        })),
+        tiles: [{ title: 'Spend', type: 'line' }],
+        schedule: item.schedule || 'manual',
+        at: item.at || null,
+      }));
+      const bundle = {
+        version: 2,
+        exportedAt: new Date().toISOString(),
+        credentials,
+        connections,
+        reports,
+        dashboards,
+      };
+      return {
+        fileName: 'datamoov-settings.json',
+        json: JSON.stringify(bundle, null, 2),
+        skipped: [],
+        counts: {
+          credentials: credentials.length,
+          connections: connections.length,
+          reports: reports.length,
+          dashboards: dashboards.length,
+        },
+      };
+    },
     dmvImportCredentials(bundle) {
       if (window.DATAMOOV_PREVIEW_IMPORT_RESULT) return copy(window.DATAMOOV_PREVIEW_IMPORT_RESULT);
       if (
         !bundle ||
-        bundle.version !== 1 ||
+        ![1, 2].includes(bundle.version) ||
         !Array.isArray(bundle.credentials) ||
         !Array.isArray(bundle.connections)
       )
-        throw new Error('Choose a valid DataMoov credentials file.');
-      const result = { credentials: [], connections: [] },
-        refs = new Map();
+        throw new Error('Choose a valid DataMoov settings file.');
+      const result = { credentials: [], connections: [], reports: [], dashboards: [] },
+        refs = new Map(),
+        connectionRefs = new Map();
       for (const item of bundle.credentials) {
         try {
           const existing = data.credentials.find(
@@ -349,6 +418,7 @@ function installPreview(initial) {
               value.label === item.label
           );
           const saved = existing || handlers.dmvSaveConnection({ ...item, credentialId });
+          connectionRefs.set(item.ref, saved.id);
           result.connections.push({
             label: item.label,
             status: existing ? 'existing' : 'saved',
@@ -363,8 +433,75 @@ function installPreview(initial) {
           });
         }
       }
+      for (const item of bundle.reports || []) {
+        try {
+          const connectionId = connectionRefs.get(item.connectionRef);
+          if (!connectionId) throw new Error('unresolved');
+          const existing = data.reports.find(
+            (value) =>
+              value.connectionId === connectionId &&
+              value.target?.sheetName === item.target?.sheetName
+          );
+          const connection = data.connections.find((value) => value.id === connectionId);
+          const saved =
+            existing ||
+            handlers.dmvSaveReport({
+              ...item,
+              connectionId,
+              connectorId: connection.connectorId,
+              ref: undefined,
+              connectionRef: undefined,
+            });
+          result.reports.push({
+            label: item.name,
+            status: existing ? 'existing' : 'saved',
+            id: saved.id,
+          });
+        } catch (error) {
+          result.reports.push({
+            label: item.name,
+            status: 'failed',
+            message:
+              error.message === 'unresolved'
+                ? 'The referenced connection was not imported. Resolve its error and import again.'
+                : 'Could not save this report: ' + error.message,
+          });
+        }
+      }
+      for (const item of bundle.dashboards || []) {
+        try {
+          if ((item.datasets || []).some((dataset) => !connectionRefs.get(dataset.connectionRef)))
+            throw new Error('unresolved');
+          const existing = (data.dashboards || []).find(
+            (value) => value.name === item.name && value.target?.sheetName === item.target?.sheetName
+          );
+          const saved =
+            existing ||
+            handlers.dmvSaveDashboard({
+              name: item.name,
+              target: item.target,
+              datasets: item.datasets,
+              tiles: item.tiles,
+              origin: 'import',
+            });
+          result.dashboards.push({
+            label: item.name,
+            status: existing ? 'existing' : 'saved',
+            id: saved.id,
+          });
+        } catch (error) {
+          result.dashboards.push({
+            label: item.name,
+            status: 'failed',
+            message:
+              error.message === 'unresolved'
+                ? 'The referenced connection was not imported. Resolve its error and import again.'
+                : 'Could not save this dashboard: ' + error.message,
+          });
+        }
+      }
       result.summary = Object.fromEntries(
-        ['credentials', 'connections'].map((kind) => [
+        ['credentials', 'connections', 'reports', 'dashboards'].map((kind) => [
           kind,
           Object.fromEntries(
             ['saved', 'existing', 'failed'].map((status) => [

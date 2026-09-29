@@ -712,6 +712,13 @@
                 Import from file</button
               ><button
                 type="button"
+                id="export-settings"
+                class="button secondary"
+                aria-describedby="credential-import-help"
+              >
+                Export to file</button
+              ><button
+                type="button"
                 id="sample-credentials"
                 class="button secondary"
                 aria-describedby="credential-import-help"
@@ -727,7 +734,9 @@
               hidden
             />
             <p id="credential-import-help" class="field-help">
-              Import a local DataMoov credentials file into your private Google account settings.
+              Import a DataMoov settings file into your private Google account, or export your
+              credentials, connections and this spreadsheet's reports and dashboards to one. The
+              exported file contains your secrets: keep it private.
             </p>
             <div
               id="credential-import-result"

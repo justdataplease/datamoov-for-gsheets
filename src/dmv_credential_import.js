@@ -132,31 +132,68 @@ function dmvImportValues_(fields, input) {
   return active;
 }
 
-// Validate the entire package before any provider request or settings mutation.
+// Validate the entire package before any provider request or settings mutation. Version 1 holds
+// credentials and connections; version 2 (what Export to file writes) adds reports and dashboards
+// that refer to the bundle's connections by ref.
+var DMV_IMPORT_MAX_BYTES = 4000000;
+
 function dmvImportPlan_(bundle) {
-  dmvImportObject_(bundle, ['version', 'credentials', 'connections'], 'Credential import');
+  dmvImportObject_(
+    bundle,
+    ['version', 'exportedAt', 'credentials', 'connections', 'reports', 'dashboards'],
+    'Settings import'
+  );
   var text;
   try {
     text = JSON.stringify(bundle);
   } catch (ignored) {
-    throw new Error('Choose a valid credential import JSON file.');
+    throw new Error('Choose a valid DataMoov settings JSON file.');
   }
-  if (text.length > 250000 || Utilities.newBlob(text).getBytes().length > 250000)
-    throw new Error('The credential import must be at most 250,000 bytes.');
   if (
-    bundle.version !== 1 ||
+    text.length > DMV_IMPORT_MAX_BYTES ||
+    Utilities.newBlob(text).getBytes().length > DMV_IMPORT_MAX_BYTES
+  )
+    throw new Error('The settings import must be at most 4,000,000 bytes.');
+  if (
+    (bundle.version !== 1 && bundle.version !== 2) ||
     !Array.isArray(bundle.credentials) ||
-    !Array.isArray(bundle.connections)
+    !Array.isArray(bundle.connections) ||
+    (bundle.version === 1 && (bundle.reports !== undefined || bundle.dashboards !== undefined)) ||
+    (bundle.version === 2 && (!Array.isArray(bundle.reports) || !Array.isArray(bundle.dashboards)))
   )
     throw new Error(
-      'Choose a version 1 credential import with credentials and connections arrays.'
+      'Choose a version 1 credentials file (credentials and connections) or a version 2 settings file (credentials, connections, reports and dashboards).'
+    );
+  var reportItems = bundle.reports || [],
+    dashboardItems = bundle.dashboards || [];
+  // An export of a full account can list every credential and connection, plus one credential
+  // per older connection that embedded its own; the account caps still apply when saving.
+  if (
+    bundle.credentials.length > DMV_LIMITS.maxCredentials + DMV_LIMITS.maxConnections ||
+    bundle.connections.length > DMV_LIMITS.maxConnections
+  )
+    throw new Error(
+      'Import at most ' +
+        (DMV_LIMITS.maxCredentials + DMV_LIMITS.maxConnections) +
+        ' credentials and ' +
+        DMV_LIMITS.maxConnections +
+        ' connections at a time.'
     );
   if (
-    bundle.credentials.length > 20 ||
-    bundle.connections.length > 20 ||
-    !bundle.credentials.length
+    !bundle.credentials.length &&
+    !bundle.connections.length &&
+    !reportItems.length &&
+    !dashboardItems.length
   )
-    throw new Error('Import between 1 and 20 credentials and at most 20 connections at a time.');
+    throw new Error('The file holds no credentials, connections, reports or dashboards.');
+  if (reportItems.length > DMV_LIMITS.maxReports || dashboardItems.length > DMV_LIMITS.maxReports)
+    throw new Error(
+      'Import at most ' +
+        DMV_LIMITS.maxReports +
+        ' reports and ' +
+        DMV_LIMITS.maxReports +
+        ' dashboards at a time.'
+    );
   var byRef = Object.create(null),
     connectionRefs = Object.create(null);
   var credentials = bundle.credentials.map(function (item) {
@@ -217,7 +254,150 @@ function dmvImportPlan_(bundle) {
     });
     return planned;
   });
-  return { credentials: credentials, connections: connections };
+  // Reports and dashboards are checked for shape here; their queries need the saved connection,
+  // so the report and dashboard validators run at save time, after connections are resolved.
+  var reportRefs = Object.create(null);
+  var reports = reportItems.map(function (item, index) {
+    dmvImportObject_(
+      item,
+      [
+        'ref',
+        'name',
+        'connectionRef',
+        'reportType',
+        'fields',
+        'config',
+        'dateRange',
+        'maxRows',
+        'target',
+        'schedule',
+        'at',
+      ],
+      'Imported report'
+    );
+    var ref = dmvImportRef_(item.ref === undefined ? 'report-' + (index + 1) : item.ref);
+    if (reportRefs[ref]) throw new Error('Each imported report needs a distinct reference.');
+    reportRefs[ref] = true;
+    var connectionRef = dmvImportRef_(item.connectionRef);
+    if (!connectionRefs[connectionRef])
+      throw new Error('Each imported report must reference a connection in this import.');
+    return {
+      ref: ref,
+      name: dmvText_(item.name, 'Imported report name', 80, true),
+      connectionRef: connectionRef,
+      reportType: dmvText_(item.reportType, 'Imported report type', 80, true),
+      fields: dmvImportStrings_(item.fields, 'Imported report fields'),
+      config: dmvImportPlain_(
+        item.config === undefined ? {} : item.config,
+        'Imported report settings'
+      ),
+      dateRange: dmvImportPlain_(
+        item.dateRange === undefined ? {} : item.dateRange,
+        'Imported date range'
+      ),
+      maxRows: item.maxRows,
+      target: dmvImportObject_(
+        item.target || {},
+        ['sheetName', 'startCell'],
+        'Imported report tab'
+      ),
+      schedule: dmvSchedule_(item.schedule),
+      at: item.at === undefined ? null : dmvImportPlain_(item.at, 'Imported schedule time'),
+    };
+  });
+  var dashboardRefs = Object.create(null);
+  var dashboards = dashboardItems.map(function (item, index) {
+    dmvImportObject_(
+      item,
+      ['ref', 'name', 'target', 'datasets', 'tiles', 'schedule', 'at'],
+      'Imported dashboard'
+    );
+    var ref = dmvImportRef_(item.ref === undefined ? 'dashboard-' + (index + 1) : item.ref);
+    if (dashboardRefs[ref]) throw new Error('Each imported dashboard needs a distinct reference.');
+    dashboardRefs[ref] = true;
+    if (!Array.isArray(item.datasets) || !item.datasets.length || !Array.isArray(item.tiles))
+      throw new Error('Each imported dashboard needs datasets and tiles.');
+    var datasets = item.datasets.map(function (dataset) {
+      dmvImportObject_(
+        dataset,
+        [
+          'id',
+          'label',
+          'sheetName',
+          'connectionRef',
+          'reportType',
+          'fields',
+          'config',
+          'dateRange',
+          'maxRows',
+          'mapping',
+        ],
+        'Imported dashboard dataset'
+      );
+      var connectionRef = dmvImportRef_(dataset.connectionRef);
+      if (!connectionRefs[connectionRef])
+        throw new Error('Each dashboard dataset must reference a connection in this import.');
+      var planned = Object.assign({}, dmvImportPlain_(dataset, 'Imported dashboard dataset'));
+      planned.connectionRef = connectionRef;
+      return planned;
+    });
+    return {
+      ref: ref,
+      name: dmvText_(item.name, 'Imported dashboard name', 80, true),
+      target: {
+        sheetName: dmvSheetName_(
+          dmvImportObject_(item.target || {}, ['sheetName'], 'Imported dashboard tab').sheetName
+        ),
+      },
+      datasets: datasets,
+      tiles: dmvImportPlain_(item.tiles, 'Imported dashboard tiles'),
+      schedule: dmvSchedule_(item.schedule),
+      at: item.at === undefined ? null : dmvImportPlain_(item.at, 'Imported schedule time'),
+    };
+  });
+  return {
+    credentials: credentials,
+    connections: connections,
+    reports: reports,
+    dashboards: dashboards,
+  };
+}
+
+function dmvImportStrings_(value, label) {
+  if (
+    !Array.isArray(value) ||
+    value.length > DMV_LIMITS.maxColumns ||
+    value.some(function (item) {
+      return typeof item !== 'string' || !item || item.length > 150;
+    })
+  )
+    throw new Error(label + ' must be a list of field names.');
+  return value.slice();
+}
+
+// Plain JSON only: objects and arrays of text, numbers, booleans and null, without prototype
+// keys, so a bundle can never smuggle code or reach beyond the validators that read it.
+function dmvImportPlain_(value, label, depth) {
+  depth = depth || 0;
+  if (depth > 8) throw new Error(label + ' is nested too deeply.');
+  if (value === null || ['string', 'boolean'].indexOf(typeof value) >= 0) return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error(label + ' contains an invalid number.');
+    return value;
+  }
+  if (Array.isArray(value))
+    return value.map(function (item) {
+      return dmvImportPlain_(item, label, depth + 1);
+    });
+  if (Object.prototype.toString.call(value) !== '[object Object]')
+    throw new Error(label + ' must contain only plain values.');
+  var out = {};
+  Object.keys(value).forEach(function (key) {
+    if (['constructor', 'prototype', '__proto__'].indexOf(key) >= 0 || key.length > 150)
+      throw new Error(label + ' contains an unsupported key.');
+    out[key] = dmvImportPlain_(value[key], label, depth + 1);
+  });
+  return out;
 }
 
 function dmvImportSameValues_(fields, left, right) {
@@ -269,6 +449,16 @@ function dmvImportFailure_(error, kind) {
       message:
         'Your private settings limit was reached. Remove unused entries before importing again.',
     };
+  // Reports and dashboards are validated without provider requests, so their messages name
+  // the field or tab at fault and are safe to show.
+  if (kind === 'report' || kind === 'dashboard') {
+    if (message === 'unresolved connection') return dmvImportUnresolved_('connection');
+    return {
+      code: 'invalid',
+      message:
+        'Could not save this ' + kind + ': ' + (message || 'check its settings.').slice(0, 300),
+    };
+  }
   return {
     code: 'verification_failed',
     message:
@@ -281,17 +471,22 @@ function dmvImportFailure_(error, kind) {
 function dmvImportCredentials(bundle) {
   var plan = dmvImportPlan_(bundle),
     deadline = Date.now() + 200000;
-  var resolved = Object.create(null);
+  var resolved = Object.create(null),
+    resolvedConnections = Object.create(null);
   var response = {
     credentials: [],
     connections: [],
+    reports: [],
+    dashboards: [],
     summary: {
       credentials: { saved: 0, existing: 0, failed: 0 },
       connections: { saved: 0, existing: 0, failed: 0 },
+      reports: { saved: 0, existing: 0, failed: 0 },
+      dashboards: { saved: 0, existing: 0, failed: 0 },
     },
   };
   function record(kind, item, action) {
-    var outcome = { ref: item.ref, label: item.label };
+    var outcome = { ref: item.ref, label: item.label || item.name };
     try {
       if (Date.now() > deadline - 10000) throw new Error('Import time limit reached.');
       Object.assign(
@@ -304,7 +499,12 @@ function dmvImportCredentials(bundle) {
     } catch (error) {
       Object.assign(outcome, { status: 'failed' }, dmvImportFailure_(error, kind));
     }
-    var group = kind === 'credential' ? 'credentials' : 'connections';
+    var group = {
+      credential: 'credentials',
+      connection: 'connections',
+      report: 'reports',
+      dashboard: 'dashboards',
+    }[kind];
     response[group].push(outcome);
     response.summary[group][outcome.status]++;
   }
@@ -363,6 +563,32 @@ function dmvImportCredentials(bundle) {
           dmvImportSameValues_(fields, connection.credentials, item.credentials)
         );
       })[0];
+      // An older connection that embeds the same credential values is the same connection;
+      // link it to the imported credential so reports resolve to it and nothing is duplicated.
+      if (!existing) {
+        var legacy = saved.filter(function (connection) {
+          return (
+            connection.connectorId === item.connectorId &&
+            !connection.credentialId &&
+            dmvImportSameValues_(
+              connector.authFields || [],
+              connection.credentials,
+              Object.assign({}, current.values, item.credentials)
+            )
+          );
+        })[0];
+        if (legacy)
+          existing = dmvSaveConnection(
+            {
+              id: legacy.id,
+              connectorId: legacy.connectorId,
+              credentialId: credential.id,
+              label: legacy.label,
+              credentials: item.credentials,
+            },
+            deadline
+          );
+      }
       var result =
         existing ||
         dmvSaveConnection(
@@ -376,8 +602,290 @@ function dmvImportCredentials(bundle) {
         );
       var outcome = { id: result.id, label: result.label, status: existing ? 'existing' : 'saved' };
       if (!existing) outcome.verified = result.verified === true;
+      resolvedConnections[item.ref] = result.id;
       return outcome;
     });
   });
+  // Reports and dashboards are saved into this spreadsheet through the ordinary validators;
+  // no data is fetched. An item that matches a saved one is reused, never overwritten.
+  var spreadsheet = dmvSpreadsheet_();
+  plan.reports.forEach(function (item) {
+    record('report', item, function () {
+      var connectionId = resolvedConnections[item.connectionRef];
+      if (!connectionId) return dmvImportUnresolved_('connection');
+      var input = {
+        name: item.name,
+        connectionId: connectionId,
+        reportType: item.reportType,
+        fields: item.fields,
+        config: item.config,
+        dateRange: item.dateRange,
+        maxRows: item.maxRows,
+        target: item.target,
+        schedule: item.schedule,
+        at: item.at,
+      };
+      var wanted = dmvValidateReport_(input, spreadsheet);
+      var identity = dmvImportReportIdentity_(wanted);
+      var existing = dmvListReports_(spreadsheet).filter(function (report) {
+        return dmvImportReportIdentity_(report) === identity;
+      })[0];
+      var result = existing || dmvSaveReport(input);
+      return { id: result.id, label: result.name, status: existing ? 'existing' : 'saved' };
+    });
+  });
+  plan.dashboards.forEach(function (item) {
+    record('dashboard', item, function () {
+      var datasets = item.datasets.map(function (dataset) {
+        var connectionId = resolvedConnections[dataset.connectionRef];
+        if (!connectionId) throw new Error('unresolved connection');
+        var query = Object.assign({}, dataset, { connectionId: connectionId });
+        delete query.connectionRef;
+        return query;
+      });
+      var existing = dmvList_('dashboard').filter(function (dashboard) {
+        return (
+          dashboard.spreadsheetId === spreadsheet.getId() &&
+          dashboard.name === item.name &&
+          dashboard.target &&
+          dashboard.target.sheetName === item.target.sheetName
+        );
+      })[0];
+      var result =
+        existing ||
+        dmvSaveDashboard({
+          name: item.name,
+          target: item.target,
+          datasets: datasets,
+          tiles: item.tiles,
+          schedule: item.schedule,
+          at: item.at,
+        });
+      return { id: result.id, label: result.name, status: existing ? 'existing' : 'saved' };
+    });
+  });
   return response;
+}
+
+function dmvImportUnresolved_(kind) {
+  return {
+    status: 'failed',
+    code: kind + '_unavailable',
+    message: 'The referenced ' + kind + ' was not imported. Resolve its error and import again.',
+  };
+}
+
+// Two reports are the same when they read the same query into the same place.
+function dmvImportReportIdentity_(report) {
+  return JSON.stringify(
+    dmvCanonical_({
+      connectionId: report.connectionId,
+      reportType: report.reportType,
+      fields: (report.fields || []).slice().sort(),
+      config: report.config || {},
+      dateRange: report.dateRange || {},
+      target: report.target || {},
+    })
+  );
+}
+
+// Every private setting of this account and spreadsheet as a version 2 bundle: credentials with
+// their secrets, connections, and this spreadsheet's reports and dashboards, linked by refs the
+// importer resolves. It is written only when the user asks for the download; keep the file private.
+function dmvExportSettings() {
+  var spreadsheet = dmvSpreadsheet_();
+  var used = Object.create(null);
+  function ref(label, fallback) {
+    var base =
+      String(label || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60) || fallback;
+    if (!/^[a-z]/.test(base) || ['constructor', 'prototype', '__proto__'].indexOf(base) >= 0)
+      base = fallback + '-' + base;
+    var next = base,
+      index = 2;
+    while (used[next]) next = base + '-' + index++;
+    used[next] = true;
+    return next;
+  }
+  var credentialRefs = Object.create(null),
+    connectionRefs = Object.create(null),
+    skipped = [];
+  var credentials = [];
+  dmvList_('credential').forEach(function (credential, index) {
+    try {
+      dmvCredentialFamily_(credential.family);
+    } catch (ignored) {
+      skipped.push({
+        kind: 'credential',
+        label: credential.label,
+        reason: 'its source is no longer installed',
+      });
+      return;
+    }
+    var item = {
+      ref: ref(credential.label, 'credential-' + (index + 1)),
+      label: credential.label,
+      family: credential.family,
+      values: credential.values || {},
+    };
+    credentialRefs[credential.id] = item.ref;
+    credentials.push(item);
+  });
+  var connections = [];
+  dmvList_('connection').forEach(function (connection, index) {
+    var connector;
+    try {
+      connector = dmvConnector_(connection.connectorId);
+    } catch (ignored) {
+      skipped.push({
+        kind: 'connection',
+        label: connection.label,
+        reason: 'its source is no longer installed',
+      });
+      return;
+    }
+    var credentialRef = credentialRefs[connection.credentialId];
+    var own = {};
+    if (!credentialRef) {
+      // An older connection embeds its whole credential: split it into a credential entry of its
+      // family plus the connection's own values, the shape newer records use.
+      var family = dmvFamilyId_(connector),
+        values = {};
+      dmvCredentialFields_(connector).forEach(function (field) {
+        if (connection.credentials && connection.credentials[field.key] !== undefined)
+          values[field.key] = connection.credentials[field.key];
+      });
+      credentialRef = ref(
+        connection.label + ' credential',
+        'credential-' + (credentials.length + 1)
+      );
+      credentials.push({
+        ref: credentialRef,
+        label: connection.label,
+        family: family,
+        values: values,
+      });
+    }
+    dmvConnectionFields_(connector).forEach(function (field) {
+      if (connection.credentials && connection.credentials[field.key] !== undefined)
+        own[field.key] = connection.credentials[field.key];
+    });
+    var item = {
+      ref: ref(connection.label, 'connection-' + (index + 1)),
+      label: connection.label,
+      connectorId: connection.connectorId,
+      credentialRef: credentialRef,
+      credentials: own,
+    };
+    connectionRefs[connection.id] = item.ref;
+    connections.push(item);
+  });
+  var reports = dmvListReports_(spreadsheet)
+    .filter(function (report) {
+      if (connectionRefs[report.connectionId]) return true;
+      skipped.push({ kind: 'report', label: report.name, reason: 'its connection is missing' });
+      return false;
+    })
+    .map(function (report, index) {
+      return {
+        ref: ref(report.name, 'report-' + (index + 1)),
+        name: report.name,
+        connectionRef: connectionRefs[report.connectionId],
+        reportType: report.reportType,
+        fields: report.fields,
+        config: report.config || {},
+        dateRange: report.dateRange,
+        maxRows: report.maxRows,
+        target: report.target,
+        schedule: report.schedule || 'manual',
+        at: report.at || null,
+      };
+    });
+  var dashboards = [];
+  dmvList_('dashboard').forEach(function (dashboard, index) {
+    if (dashboard.spreadsheetId !== spreadsheet.getId()) return;
+    var plan;
+    try {
+      plan = dmvDashboardPlan_(dashboard);
+    } catch (ignored) {
+      skipped.push({
+        kind: 'dashboard',
+        label: dashboard.name,
+        reason: 'it was saved by an earlier version',
+      });
+      return;
+    }
+    if (
+      plan.datasets.some(function (dataset) {
+        return !connectionRefs[dataset.connectionId];
+      })
+    ) {
+      skipped.push({
+        kind: 'dashboard',
+        label: dashboard.name,
+        reason: 'a dataset connection is missing',
+      });
+      return;
+    }
+    dashboards.push({
+      ref: ref(dashboard.name, 'dashboard-' + (index + 1)),
+      name: dashboard.name,
+      target: { sheetName: dashboard.target.sheetName },
+      datasets: plan.datasets.map(function (dataset) {
+        var item = {
+          id: dataset.id,
+          label: dataset.label,
+          sheetName: dataset.sheetName,
+          connectionRef: connectionRefs[dataset.connectionId],
+          reportType: dataset.reportType,
+          fields: dataset.fields,
+          config: dataset.config || {},
+          dateRange: dataset.dateRange,
+          maxRows: dataset.maxRows,
+        };
+        if (dataset.mapping) item.mapping = dataset.mapping;
+        return item;
+      }),
+      tiles: plan.tiles,
+      schedule: dashboard.schedule || 'manual',
+      at: dashboard.at || null,
+    });
+  });
+  if (!credentials.length && !connections.length && !reports.length && !dashboards.length)
+    throw new Error(
+      'There is nothing to export yet' +
+        (skipped.length ? ': every saved item was skipped (' + skipped[0].reason + ').' : '.')
+    );
+  var bundle = {
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    credentials: credentials,
+    connections: connections,
+    reports: reports,
+    dashboards: dashboards,
+  };
+  // Dashboard plans are stored compressed and grow when written out; the file must stay
+  // within what Import accepts, so drop the pretty printing before refusing.
+  var json = JSON.stringify(bundle, null, 2);
+  if (json.length > DMV_IMPORT_MAX_BYTES) json = JSON.stringify(bundle);
+  if (Utilities.newBlob(json).getBytes().length > DMV_IMPORT_MAX_BYTES)
+    throw new Error(
+      'The export is larger than the ' +
+        DMV_IMPORT_MAX_BYTES.toLocaleString() +
+        ' bytes Import accepts. Remove dashboards you no longer need and export again.'
+    );
+  return {
+    fileName: 'datamoov-settings.json',
+    json: json,
+    skipped: skipped,
+    counts: {
+      credentials: credentials.length,
+      connections: connections.length,
+      reports: reports.length,
+      dashboards: dashboards.length,
+    },
+  };
 }
