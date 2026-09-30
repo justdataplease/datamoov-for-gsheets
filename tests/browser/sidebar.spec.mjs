@@ -301,7 +301,7 @@ test('a connection picks a saved credential or adds one inline; Google defaults 
   await expect(page.locator('#auth-customerId')).toHaveValue('1234567890');
   await page.locator('#connection-label').fill('Marketing account renamed');
   await page.locator('#save-connection').click();
-  await expect(page.locator('#notice')).toContainText('Connection saved and verified');
+  await expect(page.locator('#notice')).toContainText('Source saved and verified');
   const saved = (await rpc(page, 'dmvBootstrap')).connections.find(item => item.label === 'Marketing account renamed');
   expect(saved.credentialId).toBe('demo-credential-google');
   expect(saved.values).not.toHaveProperty('serviceAccountJson');
@@ -313,10 +313,10 @@ test('a connection picks a saved credential or adds one inline; Google defaults 
   await page.locator('#connection-label').fill('Second property');
   await page.locator('#auth-propertyId').fill('987654');
   await page.locator('#save-connection').click();
-  await expect(page.locator('#notice')).toContainText('Connection saved');
+  await expect(page.locator('#notice')).toContainText('Source saved');
   await expect(page.locator('.connection-card').filter({ hasText: 'Second property' })).toContainText('Google Cloud · Demo key');
   await page.locator('#tab-settings').click();
-  await expect(page.locator('#credentials-list .connection-card').filter({ hasText: 'Google Cloud · Demo key' })).toContainText('5 connections');
+  await expect(page.locator('#credentials-list .connection-card').filter({ hasText: 'Google Cloud · Demo key' })).toContainText('5 sources');
 });
 
 test('discovery and custom date/configuration selections survive save and edit', async ({ page }) => {
@@ -380,7 +380,7 @@ test('a new inline credential is kept when the connection save fails, and the re
   await expect(page.locator('#connection-credential')).toHaveValue(created.find(item => item.label === 'QA private app').id);
   await expect(page.locator('#credential-inline')).toBeHidden();
   await page.locator('#save-connection').click();
-  await expect(page.locator('#notice')).toContainText('Connection saved');
+  await expect(page.locator('#notice')).toContainText('Source saved');
   await expect(page.locator('#connections-list .connection-card')).toHaveCount(count + 1);
   expect((await rpc(page, 'dmvBootstrap')).credentials.length).toBe(credentials + 1, 'no duplicate credential on retry');
   await expect(page.locator('#connections-list .connection-card').filter({ hasText: 'QA CRM connection' })).toContainText('QA private app');
@@ -491,7 +491,7 @@ test('Find accounts works with a saved credential, fills the ID, and saving neve
   await expect(page.locator('#account-discovery-status')).toContainText('filled in above');
   await noOverflow(page);
   await page.locator('#save-connection').click();
-  await expect(page.locator('#notice')).toContainText('Connection saved');
+  await expect(page.locator('#notice')).toContainText('Source saved');
   const saved=(await rpc(page,'dmvBootstrap')).connections.find(item=>item.label==='Selected Google property');
   expect(saved.values.propertyId).toBe('900000002');
   expect(saved.credentialId).toBe('demo-credential-google');
@@ -571,7 +571,7 @@ test('an inline OAuth credential requires a grant, survives a failed connection 
   await expect(page.locator('#credential-inline')).toBeHidden();
   await expect(page.locator('#connection-credential')).not.toHaveValue('__new');
   await page.locator('#save-connection').click();
-  await expect(page.locator('#notice')).toContainText('Connection saved');
+  await expect(page.locator('#notice')).toContainText('Source saved');
   const bootstrap=await rpc(page,'dmvBootstrap');
   const saved=bootstrap.connections.find(item=>item.label==='Own OAuth analytics');
   const credential=bootstrap.credentials.find(item=>item.label==='Own OAuth client');
@@ -589,7 +589,7 @@ test('an inline OAuth credential requires a grant, survives a failed connection 
   // The notice still reads "Connection saved" from the first save, so wait for this save's own
   // result: its card is rendered in the same step that returns to the Connections tab.
   await expect(page.locator('#connections-list')).toContainText('Renamed own OAuth');
-  await expect(page.locator('#notice')).toContainText('Connection saved');
+  await expect(page.locator('#notice')).toContainText('Source saved');
   // The credential itself is edited under Settings; secrets stay blank there too.
   await page.locator('#tab-settings').click();
   await page.locator('#credentials-list .connection-card').filter({hasText:'Own OAuth client'}).getByRole('button',{name:'Edit',exact:true}).click();
@@ -654,7 +654,7 @@ test('the Settings tab manages credentials: add, guide per type, edit, and refus
   await expect(page.locator('#notice')).toContainText('Credential saved and verified');
   await expect(cards).toHaveCount(before + 1);
   const card = cards.filter({ hasText: 'Agency service account' });
-  await expect(card).toContainText('No connection yet');
+  await expect(card).toContainText('No source yet');
   await expect(card).toContainText('Service account');
   await expect(page.locator('#credential-label')).toHaveValue('');
   await noOverflow(page);

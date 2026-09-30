@@ -138,7 +138,7 @@ test('the real chat request carries artifact intent, reusable periods and bounde
     request.system,
     /Explicit user dates, rolling last 7 days and week-to-date requests take precedence/
   );
-  assert.match(request.system, /Fetch once per requested connection per period/);
+  assert.match(request.system, /Fetch once per requested source per period/);
   assert.match(request.system, /do not fetch a wider range spanning both periods/);
   assert.match(
     request.system,

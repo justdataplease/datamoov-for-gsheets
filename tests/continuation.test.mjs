@@ -157,7 +157,7 @@ test('changed credentials invalidate continuation before any more provider calls
   const f = fixture(), report = f.save();
   f.api.dmvRunReport(report.id);
   f.api.dmvSaveConnection({ id: f.connection.id, connectorId: 'arbitrary', label: 'Updated', credentials: { token: 'new-secret' } });
-  assert.throws(() => f.api.dmvRunReport(report.id), /connection changed/);
+  assert.throws(() => f.api.dmvRunReport(report.id), /source changed/);
   assert.equal(f.calls.length, 1);
   assert.equal(f.state.batches.length, 0);
   assert.deepEqual(f.chunks(), []);
@@ -184,7 +184,7 @@ test('a connection changed after a slow request outlives its lease cannot commit
       f.api.dmvSaveConnection({ id: f.connection.id, connectorId: 'arbitrary', label: 'Other account',
         credentials: { token: 'replacement-token' } });
     });
-    assert.throws(() => f.api.dmvRunReport(report.id), /connection changed/);
+    assert.throws(() => f.api.dmvRunReport(report.id), /source changed/);
     assert.equal(f.state.batches.length, 0);
     assert.deepEqual(f.chunks(), []);
   }

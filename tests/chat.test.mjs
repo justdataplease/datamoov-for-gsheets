@@ -506,3 +506,32 @@ test('read_sheet keeps long cell text whole for later writes and shortens only w
   assert.equal(seen.rows[0].note.length, 81, 'the model sees a shortened sample');
   assert.equal(f.value(f.tab('Copy'), 2, 1), long, 'the written cell is complete');
 });
+
+test('chat limits its catalog and report fetches to selected sources', () => {
+  const f = fixture();
+  const other = f.api.dmvSaveConnection({
+    connectorId: 'orchard',
+    label: 'Orchard other',
+    credentials: { account: 'acct-2', token: PROVIDER_TOKEN },
+  });
+  const session = f.api.dmvChatSession_(f.book, [f.connection.id]);
+  assert.deepEqual(plain(session.connections.map((item) => item.id)), [f.connection.id]);
+  assert.throws(
+    () => f.api.dmvChatRunReport_(session, {
+      connectionId: other.id,
+      reportType: 'daily',
+      dateRange: { preset: 'last7' },
+    }),
+    /sources selected in Chat/
+  );
+  assert.equal(f.fetched.length, 0);
+  f.state.responses.push(anthropic([{ type: 'text', text: 'Ready' }]));
+  f.api.dmvChat({ text: 'What can you use?', connectionIds: [f.connection.id] });
+  const system = JSON.stringify(payload(f.state.http[0]).system);
+  assert.match(system, /Orchard main/);
+  assert.doesNotMatch(system, /Orchard other/);
+  assert.throws(
+    () => f.api.dmvChat({ text: 'hi', connectionIds: [other.id, 'not-a-source'] }),
+    /no longer available/
+  );
+});

@@ -101,20 +101,20 @@ function dmvAiInstructionInput_(instructions, sourceInstructions, connectionInst
     !connectionInstructions ||
     Object.prototype.toString.call(connectionInstructions) !== '[object Object]'
   )
-    throw new Error('Connection instructions must be an object.');
+    throw new Error('Source instructions must be an object.');
   var connections = Object.create(null);
   Object.keys(connectionInstructions).forEach(function (id) {
     if (!/^[a-zA-Z0-9-]{1,80}$/.test(id))
-      throw new Error('Choose a valid connection for its chat instructions.');
+      throw new Error('Choose a valid source for its chat instructions.');
     var text = connectionInstructions[id];
-    if (typeof text !== 'string') throw new Error('Connection instructions must be text.');
+    if (typeof text !== 'string') throw new Error('Source instructions must be text.');
     total += text.length;
     // An empty override intentionally suppresses a legacy source default.
     connections[id] = text.trim().replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
   });
   if (total > DMV_AI.maxInstructionsLength)
     throw new Error(
-      'Chat instructions are too long. General, source and connection instructions together may contain at most 100,000 characters.'
+      'Chat instructions are too long. General and source instructions together may contain at most 100,000 characters.'
     );
   return {
     instructions: instructions
@@ -444,7 +444,7 @@ function dmvSaveConnectionChatInstructions(input) {
     var previous = dmvAiRead_();
     if (!previous) throw new Error('Add an AI provider and API key under Settings first.');
     if (!Number.isInteger(input.revision) || input.revision !== (previous.revision || 0))
-      throw new Error('Chat settings changed. Reopen the connection instructions and try again.');
+      throw new Error('Chat settings changed. Reopen the source instructions and try again.');
     var overrides = Object.assign(Object.create(null), previous.connectionInstructions);
     overrides[connection.id] = input.instructions;
     var defaults = Object.assign({}, previous.sourceInstructions);

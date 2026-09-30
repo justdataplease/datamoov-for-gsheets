@@ -36,7 +36,7 @@ test('the Reports tab starts with open Saved groups, hidden Drafts groups and a 
   await expect(page.locator('#reports-saved')).not.toHaveAttribute('open', '');
   await page.locator('#create-report-chat').click();
   await expect(page.locator('#panel-chat')).toBeVisible();
-  await expect(page.locator('#chat-input')).toHaveValue(/Create a report from one of my connections/);
+  await expect(page.locator('#chat-input')).toHaveValue(/Create a report from one of my selected sources/);
 });
 
 test('a report created in chat is a draft until Save; the answer says where it is and opens the card', async ({

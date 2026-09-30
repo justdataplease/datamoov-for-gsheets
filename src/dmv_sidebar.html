@@ -79,7 +79,7 @@
           aria-selected="false"
           data-tab="connections"
         >
-          Connections
+          Sources
         </button>
         <button
           type="button"
@@ -104,10 +104,6 @@
           <div class="section-heading">
             <div>
               <h1 class="list-title">Reports</h1>
-              <p>
-                Build a report with the + button, or ask Chat to create one. Chat saves under Drafts
-                until you save it.
-              </p>
             </div>
             <div class="heading-actions">
               <button type="button" id="create-report-chat" class="text-button">
@@ -137,6 +133,10 @@
               </button>
             </div>
           </div>
+          <p class="field-help">
+            Build a report with the + button, or ask Chat to create one. Chat saves under Drafts
+            until you save it.
+          </p>
           <details id="reports-saved" class="list-group" open>
             <summary class="list-group-heading">
               <span>Saved</span><span id="reports-saved-count" class="tab-count">0</span>
@@ -183,7 +183,7 @@
             </details>
           </section>
           <p class="footnote">
-            Your reports, dashboards, credentials, connections and refresh schedules stay private to
+            Your reports, dashboards, credentials, sources and refresh schedules stay private to
             your Google account. DataMoov has no servers.
           </p>
         </section>
@@ -203,15 +203,15 @@
                   <h2>Choose your data</h2>
                   <span class="step-summary" id="step-data-summary"></span>
                 </summary>
-                <label for="report-provider">Data source</label>
+                <label for="report-provider">Provider</label>
                 <div class="select-with-badge">
                   <span class="field-badge" id="report-provider-badge" aria-hidden="true"></span
                   ><select id="report-provider" required></select>
                 </div>
-                <label for="report-connection">Your connection</label
+                <label for="report-connection">Your source</label
                 ><select id="report-connection" required></select>
                 <div id="connection-empty" class="inline-note" hidden>
-                  Add a connection to access this source.
+                  Add a source to access this provider.
                   <button type="button" id="connect-source" class="text-button">
                     Connect account &rarr;
                   </button>
@@ -362,7 +362,7 @@
                   output range.
                 </p>
                 <p id="schedule-note" class="inline-note" hidden>
-                  Scheduled refreshes run with your account and connections; a daily or weekly one
+                  Scheduled refreshes run with your account and sources; a daily or weekly one
                   within the hour after the chosen time, in the spreadsheet's timezone.
                 </p>
               </details>
@@ -431,6 +431,14 @@
           </div>
           <div id="chat-ready" hidden>
             <p id="ai-status" class="field-help"></p>
+            <details id="chat-sources" class="chat-source-picker">
+              <summary id="chat-sources-summary">Sources: All</summary>
+              <div class="chat-source-actions">
+                <button type="button" id="chat-sources-all" class="text-button">Select all</button>
+                <button type="button" id="chat-sources-none" class="text-button">Clear</button>
+              </div>
+              <div id="chat-source-options" class="chat-source-options"></div>
+            </details>
             <div id="chat-suggestions" class="chip-row" aria-label="Suggestions"></div>
             <div id="chat-messages" class="chat-messages" role="log" aria-live="polite"></div>
             <div id="chat-working" class="chat-progress" role="status" aria-live="polite" hidden>
@@ -463,15 +471,15 @@
         <section id="panel-connections" role="tabpanel" aria-labelledby="tab-connections" hidden>
           <div class="section-heading">
             <div>
-              <h1>Connections</h1>
+              <h1>Sources</h1>
               <p>Connect an account once. Use it for reports and in chat.</p>
             </div>
             <button
               type="button"
               class="icon-button primary"
               id="new-connection"
-              aria-label="Add a connection"
-              title="Add a connection"
+              aria-label="Add a source"
+              title="Add a source"
             >
               <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path d="M12 5v14M5 12h14" />
@@ -483,21 +491,19 @@
         <section id="panel-connect" role="tabpanel" aria-labelledby="tab-connections" hidden>
           <div class="section-heading">
             <div>
-              <h1 id="connection-editor-title">Add a connection</h1>
-              <p>Pick a source, choose a credential, point at an account.</p>
+              <h1 id="connection-editor-title">Add a source</h1>
+              <p>Pick a provider, choose a credential, point at an account.</p>
             </div>
-            <button type="button" class="text-button" id="cancel-connection">
-              &larr; Connections
-            </button>
+            <button type="button" class="text-button" id="cancel-connection">&larr; Sources</button>
           </div>
           <form id="connection-form">
             <fieldset id="connection-fields" disabled>
-              <label for="connection-provider">Data source</label>
+              <label for="connection-provider">Provider</label>
               <div class="select-with-badge">
                 <span class="field-badge" id="connection-provider-badge" aria-hidden="true"></span
                 ><select id="connection-provider" required></select>
               </div>
-              <label for="connection-label">Connection name</label
+              <label for="connection-label">Source name</label
               ><input
                 id="connection-label"
                 type="text"
@@ -566,7 +572,7 @@
                 Secrets are never displayed again.
               </p>
               <button type="submit" id="save-connection" class="button primary full">
-                Save connection
+                Save source
               </button>
             </fieldset>
           </form>
@@ -653,7 +659,7 @@
                   preferred tabs or chart styles.
                 </p>
                 <p class="field-help">
-                  Set account-specific chat instructions under Connections &gt; Edit connection.
+                  Set account-specific chat instructions under Sources &gt; Edit source.
                 </p>
                 <p
                   id="ai-instruction-count"
@@ -735,7 +741,7 @@
             />
             <p id="credential-import-help" class="field-help">
               Import a DataMoov settings file into your private Google account, or export your
-              credentials, connections and this spreadsheet's reports and dashboards to one. The
+              credentials, sources and this spreadsheet's reports and dashboards to one. The
               exported file contains your secrets: keep it private.
             </p>
             <div

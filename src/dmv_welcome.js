@@ -23,21 +23,21 @@ function dmvWelcomeRows_() {
     ['section', '1  ·  Connect an account'],
     [
       'body',
-      'Open the Connections tab in the sidebar and press +. Choose a data source, name the ' +
-        'connection, and supply the credential it asks for. Each source carries a “How to get ' +
+      'Open the Sources tab in the sidebar and press +. Choose a provider, name the ' +
+        'source, and supply the credential it asks for. Each source carries a “How to get ' +
         'these credentials” guide that links straight to the right console. DataMoov tests the ' +
-        'connection before it saves it.',
+        'source before it saves it.',
     ],
     [
       'body',
-      'A credential is saved once under Settings and reused by as many connections as you like, ' +
+      'A credential is saved once under Settings and reused by as many sources as you like, ' +
         'so an agency key is entered a single time.',
     ],
     ['blank', ''],
     ['section', '2  ·  Build a report'],
     [
       'body',
-      'Reports ▸ New report. Choose the source, the connection, the report and the date range, ' +
+      'Reports ▸ New report. Choose the provider, your source, the report and the date range, ' +
         'tick the columns you want, then say which tab and cell it should land on. Preview data ' +
         'shows you the first rows before anything is written.',
     ],
@@ -68,7 +68,7 @@ function dmvWelcomeRows_() {
     ['section', 'Worth knowing'],
     [
       'body',
-      '·  Your connections, reports and dashboards are private to you. Sharing this spreadsheet ' +
+      '·  Your sources, reports and dashboards are private to you. Sharing this spreadsheet ' +
         'shares the output, never your credentials or your schedules.',
     ],
     [

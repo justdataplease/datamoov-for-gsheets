@@ -193,10 +193,7 @@ function dmvVerifyCredentialConnections_(family, values, previous, connections, 
       verified = true;
     } catch (error) {
       throw new Error(
-        'Could not verify connection "' +
-          connection.label +
-          '": ' +
-          dmvSafeError_(error, credentials)
+        'Could not verify source "' + connection.label + '": ' + dmvSafeError_(error, credentials)
       );
     }
   });
@@ -287,7 +284,7 @@ function dmvDeleteCredential(id) {
               return connection.label;
             })
             .join(', ') +
-          '. Point those connections at another credential first.'
+          '. Point those sources at another credential first.'
       );
     dmvStore_().deleteProperty(dmvKey_('credential', id));
     return { ok: true };

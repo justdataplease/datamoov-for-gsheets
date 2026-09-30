@@ -417,7 +417,7 @@ test('a dashboard saved by the earlier single-table version asks to be recreated
   assert.equal(card.status, 'error');
   assert.match(card.lastError, /earlier version.*create it again/);
   assert.throws(() => f.api.dmvRunDashboard('legacy-1'), /earlier version/);
-  assert.throws(() => f.api.dmvDeleteConnection(f.connections.gads.id), /reports and dashboards using this connection/);
+  assert.throws(() => f.api.dmvDeleteConnection(f.connections.gads.id), /reports and dashboards using this source/);
   f.api.dmvDeleteDashboard('legacy-1');
   assert.equal(f.api.dmvListDashboards().length, 0);
 });

@@ -656,7 +656,7 @@
         return;
       }
       input.value =
-        'Create a report from one of my connections into its own tab. Ask me which connection, report, fields and date range to use.';
+        'Create a report from one of my selected sources into its own tab. Ask me which source, report, fields and date range to use.';
       input.focus();
     }
     async function runDashboard(dashboard) {
@@ -826,10 +826,11 @@
         list.append(
           empty(
             'Bring your accounts together',
-            'Add a connection below. You can reuse it across your reports.',
+            'Add a source below. You can reuse it across your reports.',
             '⌁'
           )
         );
+      if (window.dmvChatUi) window.dmvChatUi.updateSources();
       for (const connection of state.connections) {
         const source = provider(connection.connectorId);
         const card = el('article', 'connection-card');
@@ -854,7 +855,7 @@
               ? credential.label
               : connection.credentialMissing
                 ? 'Missing: choose another'
-                : 'Stored with this connection'
+                : 'Stored with this source'
           )
         );
         const actions = el('div', 'card-bottom');
@@ -866,7 +867,7 @@
                 !window.confirm(
                   'Remove "' +
                     connection.label +
-                    '"? Reports using this connection must be updated first.'
+                    '"? Reports using this source must be updated first.'
                 )
               )
                 return;
@@ -875,14 +876,14 @@
               renderConnections();
               refreshConnections();
               if (state.connectionId === connection.id) resetConnection();
-              notice('Connection removed.');
+              notice('Source removed.');
             })
           ),
           button('Test', 'run-button', (event) =>
             busy(event.currentTarget, 'Testing…', async () => {
               const result = await api('dmvTestConnection', connection.id);
-              if (!result.ok) throw new Error(result.message || 'Connection test failed.');
-              notice(result.message || 'Connection is ready.');
+              if (!result.ok) throw new Error(result.message || 'Source test failed.');
+              notice(result.message || 'Source is ready.');
             })
           )
         );
@@ -1023,7 +1024,7 @@
       select.replaceChildren();
       const saved = state.credentials.filter((item) => item.family === fam?.id);
       for (const credential of saved) select.append(option(credential.id, credential.label));
-      if (embedded) select.append(option('__embedded', 'Stored with this connection'));
+      if (embedded) select.append(option('__embedded', 'Stored with this source'));
       select.append(
         option('__new', saved.length ? 'Add a new credential\u2026' : 'New credential')
       );
@@ -1037,7 +1038,7 @@
           : '__new';
       $('connection-credential-help').textContent = fam
         ? saved.length
-          ? 'One ' + fam.label + ' credential can serve every ' + fam.label + ' connection.'
+          ? 'One ' + fam.label + ' credential can serve every ' + fam.label + ' source.'
           : 'No ' + fam.label + ' credential saved yet; add one here or under Settings.'
         : '';
       if (reset) $('inline-credential-label').value = embedded ? current.label + ' credential' : '';
@@ -1125,7 +1126,7 @@
     let credentialImportRunning = false;
     const IMPORT_KINDS = [
       ['credentials', 'Credentials'],
-      ['connections', 'Connections'],
+      ['connections', 'Sources'],
       ['reports', 'Reports'],
       ['dashboards', 'Dashboards'],
     ];
@@ -1191,7 +1192,7 @@
         let contents = '',
           bundle = null;
         region.className = 'notice info credential-import-result';
-        region.textContent = 'Importing settings and checking connections\u2026';
+        region.textContent = 'Importing settings and checking sources\u2026';
         region.hidden = false;
         region.setAttribute('aria-busy', 'true');
         try {
@@ -1263,7 +1264,7 @@
         list.append(
           empty(
             'No credentials yet',
-            'Save a key once here, or while adding a connection, and reuse it everywhere.',
+            'Save a key once here, or while adding a source, and reuse it everywhere.',
             '🔑'
           )
         );
@@ -1282,7 +1283,7 @@
         content.append(
           detail(
             'Used by',
-            count ? count + (count === 1 ? ' connection' : ' connections') : 'No connection yet'
+            count ? count + (count === 1 ? ' source' : ' sources') : 'No source yet'
           )
         );
         if (credential.values?.authMode)
@@ -1299,9 +1300,7 @@
           button('Edit', 'text-button subtle', () => editCredential(credential)),
           button('Remove', 'text-button subtle', (event) =>
             busy(event.currentTarget, 'Removing…', async () => {
-              if (
-                !window.confirm('Remove "' + credential.label + '"? Connections must not use it.')
-              )
+              if (!window.confirm('Remove "' + credential.label + '"? Sources must not use it.'))
                 return;
               await api('dmvDeleteCredential', credential.id);
               state.credentials = state.credentials.filter((item) => item.id !== credential.id);
@@ -1512,13 +1511,13 @@
         $('connection-chat-status').textContent = !saved.configured
           ? 'Set up your AI provider in Settings to add chat instructions.'
           : saved.inherited
-            ? 'Showing your previous source instructions. Edit them to customize this connection.'
-            : 'Private guidance for this connection only: business context, campaign naming, datasets or how its numbers should be read.';
+            ? 'Showing your previous source instructions. Edit them to customize this source.'
+            : 'Private guidance for this source only: business context, campaign naming, datasets or how its numbers should be read.';
         updateConnectionChatCount();
       } catch (error) {
         if (epoch === connectionChat.epoch)
           $('connection-chat-status').textContent =
-            error.message || 'Could not load chat instructions. Reopen this connection to retry.';
+            error.message || 'Could not load chat instructions. Reopen this source to retry.';
       }
     }
     $('connection-chat-instructions').addEventListener('input', updateConnectionChatCount);
@@ -1539,12 +1538,12 @@
     function resetConnection(connectorId) {
       state.connectionId = null;
       state.connectionReturnTo = 'connections';
-      $('cancel-connection').textContent = '\u2190 Connections';
+      $('cancel-connection').textContent = '\u2190 Sources';
       $('connection-form').reset();
       fillProviders($('connection-provider'), connectorId || $('report-provider').value);
       $('connection-provider').disabled = false;
-      $('connection-editor-title').textContent = 'Add a connection';
-      $('save-connection').textContent = 'Save connection';
+      $('connection-editor-title').textContent = 'Add a source';
+      $('save-connection').textContent = 'Save source';
       renderAuth();
       loadConnectionChat(null);
     }
@@ -1552,18 +1551,18 @@
       resetConnection(connectorId);
       state.connectionReturnTo = returnTo;
       $('cancel-connection').textContent =
-        returnTo === 'compose' ? '\u2190 Report' : '\u2190 Connections';
+        returnTo === 'compose' ? '\u2190 Report' : '\u2190 Sources';
       tab('connect');
       $('connection-label').focus();
     }
     function editConnection(connection) {
       state.connectionId = connection.id;
       state.connectionReturnTo = 'connections';
-      $('cancel-connection').textContent = '\u2190 Connections';
+      $('cancel-connection').textContent = '\u2190 Sources';
       fillProviders($('connection-provider'), connection.connectorId);
       $('connection-provider').disabled = true;
       $('connection-label').value = connection.label;
-      $('connection-editor-title').textContent = 'Edit connection';
+      $('connection-editor-title').textContent = 'Edit source';
       $('save-connection').textContent = 'Save changes';
       renderAuth(connection);
       loadConnectionChat(connection.id);
@@ -2060,7 +2059,7 @@
       busy(event.currentTarget, 'Preparing…', async () => {
         if (
           !window.confirm(
-            'Export your credentials, connections, reports and dashboards to a file?\n\nThe file will contain your saved secrets (tokens, keys, passwords) in clear text. Keep it private and delete it when you no longer need it.'
+            'Export your credentials, sources, reports and dashboards to a file?\n\nThe file will contain your saved secrets (tokens, keys, passwords) in clear text. Keep it private and delete it when you no longer need it.'
           )
         )
           return;
@@ -2141,7 +2140,7 @@
         if ($('auth-' + key)) $('auth-' + key).value = account.credentials?.[key] || '';
       }
       $('account-discovery-status').textContent =
-        (discovery?.label || 'Account') + ' filled in above. Save the connection to continue.';
+        (discovery?.label || 'Account') + ' filled in above. Save the source to continue.';
     });
     $('cancel-connection').addEventListener('click', () => {
       const returnTo = state.connectionReturnTo;
@@ -2188,11 +2187,11 @@
             // The connection itself is saved; keep the editor and the draft so Save can retry.
             state.connectionId = saved.id;
             $('connection-provider').disabled = true;
-            $('connection-editor-title').textContent = 'Edit connection';
+            $('connection-editor-title').textContent = 'Edit source';
             $('save-connection').textContent = 'Save changes';
             loadConnectionChat(saved.id, true);
             notice(
-              'Connection saved, but its chat instructions were not: ' +
+              'Source saved, but its chat instructions were not: ' +
                 (error.message || 'try again.') +
                 ' Your draft is kept.',
               'error'
@@ -2203,8 +2202,8 @@
         tab(returnTo);
         notice(
           saved.verified
-            ? 'Connection saved and verified with the provider.'
-            : 'Connection saved. Test it before running your first report.'
+            ? 'Source saved and verified with the provider.'
+            : 'Source saved. Test it before running your first report.'
         );
       });
     });
@@ -2229,8 +2228,7 @@
     });
     $('discover-fields').addEventListener('click', (event) =>
       busy(event.currentTarget, 'Loading…', async () => {
-        if (!$('report-connection').value)
-          throw new Error('Add a connection before loading columns.');
+        if (!$('report-connection').value) throw new Error('Add a source before loading columns.');
         const fields = await api('dmvDiscoverFields', {
           connectionId: $('report-connection').value,
           reportType: $('report-type').value,

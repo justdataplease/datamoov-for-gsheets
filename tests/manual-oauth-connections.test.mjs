@@ -140,7 +140,7 @@ test('manual OAuth keeps referenced account identity and active-run locks intact
         id: saved.id,
         credentials: { ...credentials(), account: '9999999999' },
       }),
-    /new connection/
+    /new source/
   );
   assert.equal(f.checked.length, 1);
   f.api.dmvSave_('report', {

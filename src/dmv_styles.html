@@ -1369,6 +1369,41 @@
   .chat-message .chip-row {
     margin: 10px 0 0;
   }
+  .chat-source-picker {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: #fff;
+    margin: 10px 0;
+  }
+  .chat-source-picker > summary {
+    cursor: pointer;
+    padding: 9px 11px;
+    font-size: 11px;
+    font-weight: 650;
+    color: var(--primary);
+  }
+  .chat-source-actions {
+    display: flex;
+    gap: 14px;
+    padding: 2px 11px 6px;
+  }
+  .chat-source-options {
+    max-height: 180px;
+    overflow: auto;
+    padding: 0 11px 8px;
+  }
+  .chat-source-options label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    padding: 5px 0;
+    font-weight: 450;
+  }
+  .chat-source-options input {
+    flex: 0 0 auto;
+    margin: 0;
+  }
   .chat-composer {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;

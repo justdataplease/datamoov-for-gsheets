@@ -109,7 +109,7 @@ function dmvDiscoverAccounts(input) {
     throw new Error('This source does not support account discovery.');
   var previous = input.id ? dmvRead_('connection', input.id) : null;
   if (previous && previous.connectorId !== connector.id)
-    throw new Error('Choose a connection for this source.');
+    throw new Error('Choose a source for this provider.');
   var keys = dmvAccountSelectionKeys_(connector);
   var credentials;
   var discoveryConnection = {};
@@ -185,11 +185,11 @@ function dmvSaveConnection(input, deadline) {
     var connector = dmvConnector_(input.connectorId);
     var previous = input.id ? dmvRead_('connection', input.id) : null;
     if (previous && previous.connectorId !== input.connectorId)
-      throw new Error('Create a separate connection for a different source.');
+      throw new Error('Create a separate source for a different provider.');
     if (previous && dmvConnectionInUse_(previous.id, true))
-      throw new Error('Wait for the current refresh to finish before editing this connection.');
+      throw new Error('Wait for the current refresh to finish before editing this source.');
     if (!previous && dmvList_('connection').length >= DMV_LIMITS.maxConnections)
-      throw new Error('Keep at most ' + DMV_LIMITS.maxConnections + ' connections in this app.');
+      throw new Error('Keep at most ' + DMV_LIMITS.maxConnections + ' sources in this app.');
     // With a saved credential the connection keeps only its own values (account ids, chat scope);
     // older connections may still embed the whole credential.
     var credential = null;
@@ -222,13 +222,13 @@ function dmvSaveConnection(input, deadline) {
       });
     if (selectionChanged && dmvConnectionInUse_(previous.id, false))
       throw new Error(
-        'Create a new connection to change the account used by saved reports or dashboards.'
+        'Create a new source to change the account used by saved reports or dashboards.'
       );
     // New or changed credentials are checked with the provider before they are saved, so a bad
     // key fails here instead of at the first scheduled refresh. Label-only edits skip the check.
     var verified = changed && (typeof connector.test === 'function' || !!connector.googleScopes);
     if (verified) {
-      if (Date.now() > deadline - 10000) throw new Error('Connection save reached its time limit.');
+      if (Date.now() > deadline - 10000) throw new Error('Source save reached its time limit.');
       try {
         // Rotated secrets from the check land on the credential record, or (embedded) on the
         // very object stored below.
@@ -253,7 +253,7 @@ function dmvSaveConnection(input, deadline) {
     }
     var connection = {
       id: previous ? previous.id : dmvId_(),
-      label: dmvText_(input.label, 'Connection name', 80, true),
+      label: dmvText_(input.label, 'Source name', 80, true),
       connectorId: connector.id,
       credentialId: credential ? credential.id : undefined,
       credentials: own,
@@ -297,7 +297,7 @@ function dmvDeleteConnection(id) {
   return dmvLocked_(function () {
     dmvRead_('connection', id);
     if (dmvConnectionInUse_(id, false))
-      throw new Error('Remove or update the reports and dashboards using this connection first.');
+      throw new Error('Remove or update the reports and dashboards using this source first.');
     dmvStore_().deleteProperty(dmvKey_('connection', id));
     return { ok: true };
   });
@@ -313,7 +313,7 @@ function dmvTestConnection(id) {
     };
   try {
     connector.test(dmvContext_(connector, connection, { config: {}, fields: [], maxRows: 1 }, {}));
-    return { ok: true, message: 'Connection verified.' };
+    return { ok: true, message: 'Source verified.' };
   } catch (error) {
     throw new Error(dmvSafeError_(error, connection.credentials));
   }

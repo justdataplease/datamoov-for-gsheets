@@ -58,22 +58,28 @@ function dmvChatReportTools_(session, baseTools) {
       run: function (active, input) {
         dmvChatSheetObject_(input || {}, []);
         return {
-          reports: dmvListReports().map(function (report) {
-            return {
-              id: report.id,
-              revision: report.revision,
-              name: report.name,
-              draft: report.draft === true,
-              connectionId: report.connectionId,
-              reportType: report.reportType,
-              fields: report.fields,
-              dateRange: report.dateRange,
-              target: report.target,
-              schedule: report.schedule,
-              lastRun: report.lastRun || null,
-              lastRowCount: report.lastRowCount === undefined ? null : report.lastRowCount,
-            };
-          }),
+          reports: dmvListReports()
+            .filter(function (report) {
+              return active.connections.some(function (connection) {
+                return connection.id === report.connectionId;
+              });
+            })
+            .map(function (report) {
+              return {
+                id: report.id,
+                revision: report.revision,
+                name: report.name,
+                draft: report.draft === true,
+                connectionId: report.connectionId,
+                reportType: report.reportType,
+                fields: report.fields,
+                dateRange: report.dateRange,
+                target: report.target,
+                schedule: report.schedule,
+                lastRun: report.lastRun || null,
+                lastRowCount: report.lastRowCount === undefined ? null : report.lastRowCount,
+              };
+            }),
         };
       },
     },
@@ -92,6 +98,7 @@ function dmvChatReportTools_(session, baseTools) {
 }
 
 function dmvChatSaveReport_(session, input) {
+  dmvChatRequireSource_(session, (input || {}).connectionId);
   dmvChatSheetObject_(input, [
     'id',
     'revision',

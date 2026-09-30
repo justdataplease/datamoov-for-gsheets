@@ -68,6 +68,9 @@ function dmvChatStoreResult_(session, result) {
     rows: result.rows,
     source: result.source,
     metadata: result.metadata,
+    connectionIds: session.connections.map(function (connection) {
+      return connection.id;
+    }),
   });
   var cached = false;
   if (text.length <= DMV_CHAT_RESULTS.maxChars) {
@@ -98,6 +101,15 @@ function dmvChatResult_(session, id) {
   } catch (error) {
     throw new Error('Result ' + id + ' has expired. Run the report again.');
   }
+  if (
+    !Array.isArray(parsed.connectionIds) ||
+    parsed.connectionIds.some(function (sourceId) {
+      return !session.connections.some(function (connection) {
+        return connection.id === sourceId;
+      });
+    })
+  )
+    throw new Error('This result belongs to a different source selection. Run the report again.');
   session.results[id] = parsed;
   return parsed;
 }
@@ -303,6 +315,7 @@ function dmvChatRunReport_(session, input) {
   } catch (error) {
     throw new Error(error.message + ' ' + dmvChatReportHint_(session, input));
   }
+  dmvChatRequireSource_(session, query.connectionId);
   var connection = dmvReadConnection_(query.connectionId),
     revision = dmvConnectionRevision_(connection),
     definition = dmvDefinition_(dmvConnector_(query.connectorId), query.reportType),
@@ -446,7 +459,7 @@ function dmvChatReportHint_(session, input) {
     );
   var connector = session.catalog[connection.connectorId];
   return (
-    'Reports for this connection: ' +
+    'Reports for this source: ' +
     connector.reports
       .map(function (report) {
         return report.id;
@@ -461,6 +474,7 @@ function dmvChatReportHint_(session, input) {
 /* discover_fields: account-specific columns (custom fields, SQL result columns). */
 /* describe_database: tables and columns of the schemas/datasets the user scoped for chat. */
 function dmvChatDescribeDatabase_(session, input) {
+  dmvChatRequireSource_(session, (input || {}).connectionId);
   var connection = dmvReadConnection_((input || {}).connectionId);
   var connector = dmvConnector_(connection.connectorId);
   if (typeof connector.describeTables !== 'function')
@@ -518,6 +532,7 @@ function dmvChatDescribeDatabase_(session, input) {
   return response;
 }
 function dmvChatDiscoverFields_(session, input) {
+  dmvChatRequireSource_(session, (input || {}).connectionId);
   dmvRead_('connection', (input || {}).connectionId);
   var fields = dmvDiscoverFields({
     connectionId: input.connectionId,

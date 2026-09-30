@@ -544,3 +544,37 @@ test('debug off hides routine completed actions but keeps live progress and part
   await expect(answer.locator('.chat-events')).toBeVisible();
   await expect(answer.locator('.chat-events li.error')).toHaveText('A source failed');
 });
+
+test('chat source dropdown selects multiple sources and sends only checked IDs', async ({ page }) => {
+  await configuredChat(page);
+  await controlledChat(page);
+  await page.locator('#chat-sources-summary').click();
+  const options = page.locator('#chat-source-options input[type="checkbox"]');
+  const total = await options.count();
+  expect(total).toBeGreaterThan(1);
+  await expect(options).toHaveCount(total);
+  await page.locator('#chat-sources-none').click();
+  await expect(page.locator('#chat-sources-summary')).toContainText('None selected');
+  const first = await options.first().inputValue();
+  const second = await options.nth(1).inputValue();
+  await options.first().check();
+  await options.nth(1).check();
+  await send(page, 'Compare these sources');
+  await page.waitForFunction(() => window.chatProbe.chats.length === 1);
+  expect(await page.evaluate(() => window.chatProbe.chats[0].input.connectionIds)).toEqual([
+    first,
+    second,
+  ]);
+  await expect(options.first()).toBeDisabled();
+  await page.evaluate(() =>
+    window.chatProbe.chats[0].succeed({
+      text: 'Done',
+      transcriptAppend: [{ role: 'user', text: 'Compare these sources' }, { role: 'assistant', text: 'Done' }],
+      events: [],
+    })
+  );
+  await expect(page.locator('#chat-working')).toBeHidden();
+  await options.nth(1).uncheck();
+  await expect(page.locator('#chat-messages')).toBeEmpty();
+  await expect(page.locator('#chat-sources-summary')).toContainText('1 of');
+});

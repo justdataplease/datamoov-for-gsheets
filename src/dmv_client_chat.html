@@ -31,7 +31,71 @@
       settingsDirty: false,
       generation: 0,
       active: null,
+      selectedSourceIds: null,
+      availableSourceIds: [],
     };
+    function selectedSourceIds() {
+      return state.connections
+        .filter((item) => chat.selectedSourceIds?.has(item.id))
+        .map((item) => item.id);
+    }
+    function renderSources() {
+      const available = state.connections;
+      const previous = chat.selectedSourceIds ? [...chat.selectedSourceIds].join('|') : null;
+      if (chat.selectedSourceIds === null)
+        chat.selectedSourceIds = new Set(available.map((item) => item.id));
+      else {
+        const allPreviouslySelected = chat.availableSourceIds.every((id) =>
+          chat.selectedSourceIds.has(id)
+        );
+        chat.selectedSourceIds = new Set(
+          available
+            .filter((item) => allPreviouslySelected || chat.selectedSourceIds.has(item.id))
+            .map((item) => item.id)
+        );
+      }
+      chat.availableSourceIds = available.map((item) => item.id);
+      if (previous !== null && [...chat.selectedSourceIds].join('|') !== previous)
+        resetConversation();
+      const options = $('chat-source-options');
+      options.replaceChildren();
+      for (const source of available) {
+        const choice = el('label');
+        const checkbox = el('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = source.id;
+        checkbox.checked = chat.selectedSourceIds.has(source.id);
+        checkbox.disabled = chat.busy;
+        choice.append(
+          checkbox,
+          el(
+            'span',
+            '',
+            source.label + ' (' + (provider(source.connectorId)?.label || source.connectorId) + ')'
+          )
+        );
+        options.append(choice);
+      }
+      if (!available.length) options.append(el('p', 'field-help', 'Add a source under Sources.'));
+      const count = selectedSourceIds().length;
+      $('chat-sources-summary').textContent = !available.length
+        ? 'Sources: None available'
+        : count === available.length
+          ? 'Sources: All ' + count
+          : count
+            ? 'Sources: ' + count + ' of ' + available.length
+            : 'Sources: None selected';
+      $('chat-sources-all').disabled = chat.busy || !available.length;
+      $('chat-sources-none').disabled = chat.busy || !available.length;
+      renderSuggestions();
+    }
+    function changeSources(ids) {
+      if (chat.busy) return;
+      const previous = selectedSourceIds().join('|');
+      chat.selectedSourceIds = new Set(ids);
+      if (selectedSourceIds().join('|') !== previous) resetConversation();
+      renderSources();
+    }
 
     function providerInfo(id) {
       return (chat.ai?.providers || []).find((item) => item.id === id);
@@ -79,9 +143,7 @@
         count.toLocaleString() + ' / 100,000 characters across all instructions';
       $('ai-instruction-count').className = 'field-help instruction-count' + (over ? ' error' : '');
       $('ai-instructions').setCustomValidity(
-        over
-          ? 'Keep all general and connection instructions within 100,000 characters combined.'
-          : ''
+        over ? 'Keep all general and source instructions within 100,000 characters combined.' : ''
       );
     }
     function updateProviderFields(model) {
@@ -137,7 +199,9 @@
       row.replaceChildren();
       if (chat.transcript.length) return;
       const ideas = [];
-      const connections = state.connections.slice(0, 2);
+      const connections = state.connections
+        .filter((item) => chat.selectedSourceIds?.has(item.id))
+        .slice(0, 2);
       for (const connection of connections) {
         const source = provider(connection.connectorId);
         const report = source?.reports?.[0];
@@ -622,6 +686,7 @@
         let reply = await api('dmvChat', {
           text,
           transcript: chat.transcript,
+          connectionIds: selectedSourceIds(),
           requestId: turn.requestId,
         });
         // A request longer than one Apps Script execution continues in the next one.
@@ -668,6 +733,13 @@
       $('chat-input').disabled = busy;
       $('chat-working').hidden = !busy;
       $('chat-new').disabled = busy;
+      $('chat-source-options')
+        .querySelectorAll('input')
+        .forEach((input) => {
+          input.disabled = busy;
+        });
+      $('chat-sources-all').disabled = busy;
+      $('chat-sources-none').disabled = busy;
       // A running request keeps the provider, model and time limit it started with.
       $('ai-remove').disabled = busy;
       $('ai-save').disabled = busy;
@@ -753,6 +825,17 @@
       resetConversation();
       render();
     });
+    $('chat-source-options').addEventListener('change', (event) => {
+      if (event.target.type !== 'checkbox') return;
+      const ids = new Set(selectedSourceIds());
+      if (event.target.checked) ids.add(event.target.value);
+      else ids.delete(event.target.value);
+      changeSources(ids);
+    });
+    $('chat-sources-all').addEventListener('click', () =>
+      changeSources(state.connections.map((item) => item.id))
+    );
+    $('chat-sources-none').addEventListener('click', () => changeSources([]));
     $('chat-form').addEventListener('submit', (event) => {
       event.preventDefault();
       send($('chat-input').value);
@@ -779,7 +862,9 @@
         chat.ai = data.ai || { configured: false, providers: [] };
         renderSettings();
         render();
+        renderSources();
       },
+      updateSources: renderSources,
     };
   })();
 </script>

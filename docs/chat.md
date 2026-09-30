@@ -20,8 +20,8 @@ network destination is the AI provider you configure.
    **Time limit per chat request** sets how long one question may work before it answers
    from what it has: 60 to 1,800 seconds (initially 600).
    **Instructions for the assistant** supplies general standing context.
-3. Add at least one connection in **Connections**. To set account-specific rules, fill
-   **Chat instructions** in the connection form; the form's one **Save** button saves them.
+3. Add at least one source in **Sources**. To set account-specific rules, fill
+   **Chat instructions** in the source form; the form's one **Save** button saves them.
    Rules can describe campaign naming, attribution or SQL tables for that particular connection;
    two accounts on the same platform can have different rules. General and connection instructions
    share a 100,000-character limit, shown by the live counters.
@@ -32,7 +32,13 @@ network destination is the AI provider you configure.
    context. Long instructions are compressed into bounded pieces; a new version becomes active
    only after every piece has been saved and read back successfully. Existing compressed instructions
    remain readable without resetting the API key or connection rules. The chat uses your own private
-   connections; sharing or copying the spreadsheet does not supply another user's connection or credentials.
+   sources; sharing or copying the spreadsheet does not supply another user's connection or credentials.
+
+In **Chat**, open the **Sources** dropdown to select one or more saved sources before asking.
+All available sources are selected initially. The selected source names and report metadata go
+to the AI provider; only those sources can be fetched or used for a saved report or dashboard
+in that chat turn. Changing the selection starts a new chat. Use **Select all** or **Clear**
+for quick changes.
 
 Usage is billed by the AI provider to your key. A question uses model calls plus any required
 source fetches; multi-account and period comparisons can require several fetches.

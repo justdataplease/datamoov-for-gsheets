@@ -142,7 +142,7 @@ test('credential replacements verify every dashboard source and keep the old sec
   assert.throws(
     () => f.api.dmvSaveCredential(f.credentialInput()),
     (error) => {
-      assert.match(error.message, /Could not verify connection/);
+      assert.match(error.message, /Could not verify source/);
       assert.equal(error.message.includes('new-private-token'), false);
       return true;
     }

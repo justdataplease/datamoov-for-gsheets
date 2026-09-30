@@ -70,7 +70,7 @@ test('referenced account identity and active-run locks are preserved', () => {
   const input = { connectorId: 'orchard', label: 'One', credentials: { account: 'one', token: 'private-fixture-token' } };
   const saved = f.api.dmvSaveConnection(input);
   f.api.dmvSave_('report', { id: 'report-one', connectionId: saved.id });
-  assert.throws(() => f.api.dmvSaveConnection({ ...input, id: saved.id, credentials: { ...input.credentials, account: 'two' } }), /new connection/);
+  assert.throws(() => f.api.dmvSaveConnection({ ...input, id: saved.id, credentials: { ...input.credentials, account: 'two' } }), /new source/);
   f.api.dmvSave_('report', { id: 'report-one', connectionId: saved.id, runToken: 'running', startedAt: f.api.Date.now() });
   assert.throws(() => f.api.dmvSaveConnection({ ...input, id: saved.id, label: 'Rename' }), /current refresh/);
   assert.equal(f.api.dmvRead_('connection', saved.id).credentials.account, 'one');

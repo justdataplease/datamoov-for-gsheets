@@ -38,7 +38,7 @@ function dmvValidateQuery_(input, spreadsheet) {
   var connection = dmvRead_('connection', input.connectionId);
   var connector = dmvConnector_(connection.connectorId);
   if (input.connectorId && input.connectorId !== connector.id)
-    throw new Error('The connection does not match this source.');
+    throw new Error('The source does not match this provider.');
   var query = dmvQuerySettings_(input, connector, spreadsheet);
   query.connectionId = connection.id;
   return query;
@@ -291,7 +291,7 @@ function dmvExecuteReport_(requested, deadline) {
       if (current.runToken !== token || current.revision !== report.revision)
         throw new Error('The report changed during the refresh. Run it again.');
       if (dmvConnectionRevision_(dmvReadConnection_(current.connectionId)) !== connectionRevision)
-        throw new Error('The connection changed during the refresh. Run it again.');
+        throw new Error('The source changed during the refresh. Run it again.');
       if (result.pending) {
         current.status = 'paused';
         current.runToken = null;

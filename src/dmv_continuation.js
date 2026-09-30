@@ -129,7 +129,7 @@ function dmvFinishContinuation_(reportId) {
 function dmvFetchContinued_(report, spreadsheet, token, connectionRevision) {
   var connection = dmvReadConnection_(report.connectionId);
   if (dmvConnectionRevision_(connection) !== connectionRevision)
-    throw new Error('The connection changed during the refresh. Run it again.');
+    throw new Error('The source changed during the refresh. Run it again.');
   var connector = dmvConnector_(connection.connectorId);
   var definition = dmvDefinition_(connector, report.reportType);
   var snapshot = dmvReadContinuation_(report);
@@ -139,13 +139,11 @@ function dmvFetchContinued_(report, spreadsheet, token, connectionRevision) {
         'This report was paused before credential revision tracking was added. Its existing output is unchanged. Run again to restart safely.'
       );
     if (snapshot.connectionRevision !== (connection.revision || 0))
-      throw new Error(
-        'The connection changed during continuation. Run the report again to restart.'
-      );
+      throw new Error('The source changed during continuation. Run the report again to restart.');
     snapshot.connectionRevision = dmvConnectionRevision_(connection);
   }
   if (snapshot && snapshot.connectionRevision !== dmvConnectionRevision_(connection))
-    throw new Error('The connection changed during continuation. Run the report again to restart.');
+    throw new Error('The source changed during continuation. Run the report again to restart.');
   if (snapshot && Date.now() - snapshot.createdAt > DMV_CONTINUATION.lifetimeMs)
     throw new Error('The saved continuation expired. Run the report again to restart.');
   if (!snapshot)
@@ -177,7 +175,7 @@ function dmvFetchContinued_(report, spreadsheet, token, connectionRevision) {
         if (current.runToken !== token || current.revision !== report.revision)
           throw new Error('The report changed during the refresh. Run it again.');
         if (dmvConnectionRevision_(dmvReadConnection_(current.connectionId)) !== connectionRevision)
-          throw new Error('The connection changed during the refresh. Run it again.');
+          throw new Error('The source changed during the refresh. Run it again.');
         dmvSaveContinuation_(current, snapshot);
       });
       chunks++;

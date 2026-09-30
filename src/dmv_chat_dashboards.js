@@ -107,7 +107,15 @@ function dmvChatDashboardTools_(session, baseTools) {
       input_schema: { type: 'object', properties: {} },
       run: function (active, input) {
         dmvChatSheetObject_(input || {}, []);
-        return { dashboards: dmvListDashboards() };
+        return {
+          dashboards: dmvListDashboards().filter(function (dashboard) {
+            return (dmvDashboardHere_(dashboard.id).connectionIds || []).every(function (id) {
+              return active.connections.some(function (connection) {
+                return connection.id === id;
+              });
+            });
+          }),
+        };
       },
     },
     {
@@ -192,6 +200,9 @@ function dmvChatSaveDashboard_(session, input) {
   if (input.id && !Number.isInteger(input.revision))
     throw new Error('List dashboards first and use the saved revision when editing a dashboard.');
   if (!Array.isArray(input.datasets)) throw new Error('Choose the dashboard datasets.');
+  input.datasets.forEach(function (dataset) {
+    dmvChatRequireSource_(session, dataset.connectionId);
+  });
   var cap = session.maxRows || DMV_LIMITS.chatDefaultRows;
   plan.datasets = input.datasets.map(function (dataset) {
     var item = Object.assign({}, dataset);
@@ -243,6 +254,9 @@ function dmvChatSaveDashboard_(session, input) {
 function dmvChatRunDashboard_(session, input) {
   dmvChatSheetObject_(input, ['id']);
   dmvChatSheetDeadline_(session);
+  (dmvDashboardHere_(input.id).connectionIds || []).forEach(function (id) {
+    dmvChatRequireSource_(session, id);
+  });
   var result;
   try {
     result = dmvRunDashboard(input.id, session.deadline);

@@ -135,7 +135,7 @@ test('save_report saves a draft through the report runtime, runs it once and tel
   // Prompt guidance: the capability block names the user's own connection and the draft rule.
   const system = requests[0].system.map((block) => block.text).join(' ');
   assert.match(system, /CAPABILITIES/);
-  assert.match(system, /Connections now: Main account \(Google Ads fixture\)/);
+  assert.match(system, /Selected sources now: Main account \(Google Ads fixture\)/);
   assert.match(system, /sidebar:drafts/);
   assert.ok(!system.includes(SOURCE_KEY) && !system.includes(AI_KEY));
 });
