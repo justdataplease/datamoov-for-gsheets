@@ -485,24 +485,8 @@ function planFor(tier, connections) {
   // every row, as the dashboards that overflowed the row limit and the Sheets write did.
   const top = v2 ? { top: 300 } : undefined;
   datasets.push(
-    dataset(
-      'keywords',
-      LABELS[0] + ' keywords',
-      'Keywords Data',
-      one,
-      'keyword',
-      'lastMonth',
-      top
-    ),
-    dataset(
-      'assets',
-      LABELS[0] + ' assets',
-      'Assets Data',
-      one,
-      'ad_asset',
-      'lastMonth',
-      top
-    )
+    dataset('keywords', LABELS[0] + ' keywords', 'Keywords Data', one, 'keyword', 'lastMonth', top),
+    dataset('assets', LABELS[0] + ' assets', 'Assets Data', one, 'ad_asset', 'lastMonth', top)
   );
   const both = ['ads1', 'ads2'];
   const periods = ['ads1', 'ads2', 'ads1_prev', 'ads2_prev'];
