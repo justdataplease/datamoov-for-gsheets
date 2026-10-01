@@ -874,19 +874,6 @@ var DMV_GOOGLE_ADS_TOP = {
   help: 'Ranks rows by spend (impressions without spend) and keeps this many. Blank keeps every row up to the row limit.',
 };
 
-// The form sends '' for a blank field and the chat may send "100"; both read as configured.
-function dmvGoogleAdsTop_(value) {
-  if (value === undefined || value === null || String(value).trim() === '') return 0;
-  var top = Number(value);
-  if (!Number.isInteger(top) || top < 1 || top > DMV_LIMITS.maxRows)
-    throw new Error(
-      'Keep the top rows must be a whole number from 1 to ' +
-        DMV_LIMITS.maxRows.toLocaleString() +
-        ', or blank for every row.'
-    );
-  return top;
-}
-
 function dmvGoogleAdsLevelReport_(level) {
   var curated = dmvGoogleAdsLevelFields_(level);
   var rankable =
@@ -925,34 +912,27 @@ function dmvGoogleAdsLevelReport_(level) {
       var period = names.filter(function (name) {
         return DMV_GOOGLE_ADS_PERIODS.test(name);
       })[0];
-      var top = rankable ? dmvGoogleAdsTop_((ctx.config || {}).top) : 0;
-      var rank = period
-        ? ''
-        : DMV_GOOGLE_ADS_RANKS.filter(function (name, index) {
-            return (top || index === 0) && names.indexOf(name) >= 0;
-          })[0] || '';
-      if (top && !rank) {
-        var split = period ? labels[period] || dmvGoogleAdsQueryColumn_(period).label : '';
-        throw new Error(
-          period
-            ? 'Keep the top rows ranks totals for the date range, so it cannot be combined with ' +
-                split +
-                '. Remove ' +
-                split +
-                ' or clear Keep the top rows.'
-            : 'Keep the top rows ranks by spend or impressions. Select one of them.'
-        );
-      }
-      // More top rows than the row limit allows would fail on the limit, whose advice (dates,
-      // dimensions) does not fit: say which of the two settings to change.
-      if (top > ctx.maxRows)
-        throw new Error(
-          'Keep the top rows (' +
-            top.toLocaleString() +
-            ") is above this report's row limit (" +
-            ctx.maxRows.toLocaleString() +
-            '). Lower it or raise the row limit.'
-        );
+      // A set top needs spend or impressions and no period; dmvTopRows_ names what to change.
+      var ranks = DMV_GOOGLE_ADS_RANKS.filter(function (name) {
+        return names.indexOf(name) >= 0;
+      });
+      var split = period ? labels[period] || dmvGoogleAdsQueryColumn_(period).label : '';
+      var top = rankable
+        ? dmvTopRows_(
+            ctx,
+            period
+              ? 'Keep the top rows ranks totals for the date range, so it cannot be combined with ' +
+                  split +
+                  '. Remove ' +
+                  split +
+                  ' or clear Keep the top rows.'
+              : ranks.length
+                ? ''
+                : 'Keep the top rows ranks by spend or impressions. Select one of them.'
+          )
+        : 0;
+      // A blank top ranks by spend only.
+      var rank = !period && (top || ranks[0] === DMV_GOOGLE_ADS_RANKS[0]) ? ranks[0] : '';
       var limit = top || ctx.maxRows;
       var query = Object.create(ctx);
       query.fields = [];

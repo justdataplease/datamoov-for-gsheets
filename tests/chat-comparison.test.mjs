@@ -110,10 +110,11 @@ test('the real chat request carries artifact intent, reusable periods and bounde
   );
   assert.doesNotMatch(request.system, /subjects the standard reports lack/);
   // Item lists are the rows someone acts on, ranked and labelled by the source, never a whole
-  // account's dump, and never the base of a total.
+  // account's dump, and never the base of a total. Every source whose report declares top uses
+  // it, not only the first one that did.
   assert.match(
     request.system,
-    /Item lists \(keywords, search terms, ads, assets, placements, landing pages\) are action lists, never dumps: the source's report for the subject with config top \(300 unless asked, at most 1,000\), else a custom query keeping its top rows only where its description says how \(its result is then labelled\), no date field, and the condition in the query or a tile filter \(spend with zero conversions, low CTR with impressions\)\. A top-N dataset never feeds kpi totals or shares\./
+    /Item lists \(keywords, search terms, ads, assets, placements, landing pages, products\) are action lists, never dumps, on every source: the source's report for the subject with config top \(300 unless asked, at most 1,000\) wherever the catalog lists top for it, else a custom query keeping its top rows only where its description says how \(its result is then labelled\), no date field, and the condition in the query or a tile filter \(spend with zero conversions, low CTR with impressions\)\. A top-N dataset never feeds kpi totals or shares\./
   );
   assert.match(request.system, /Requested insights are the Highlights block the runtime writes on every refresh/);
   assert.match(
@@ -166,8 +167,12 @@ test('the real chat request carries artifact intent, reusable periods and bounde
   // SQL datasets cover the whole population: aggregate, never LIMIT to fit the cap.
   assert.match(request.system, /never add a LIMIT to fit the row cap/);
   // Only sources that label the rows a LIMIT keeps may cut a list with one; a SQL LIMIT would
-  // cut it without a word, so SQL datasets aggregate.
-  assert.match(request.system, /never LIMIT a SQL dataset, as nothing would label the rows it drops/);
+  // cut it without a word, so a SQL list keeps its top rows through the report's own top and
+  // rankBy, which label the cut, and a SQL dataset behind totals aggregates without either.
+  assert.match(
+    request.system,
+    /never LIMIT a SQL dataset, as nothing would label the rows it drops: an item list sets config top and rankBy \(the result column to rank by, highest first\), and a dataset feeding totals has neither\./
+  );
   assert.doesNotMatch(request.system, /custom query ordered by a metric DESC with LIMIT/);
   assert.doesNotMatch(request.system, /performance_label/, 'Google no longer fills the asset performance label for Search and Display');
   assert.match(request.system, /The tab links are shown to the user automatically/);

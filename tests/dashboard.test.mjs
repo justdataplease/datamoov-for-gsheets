@@ -1368,6 +1368,32 @@ test('each dataset allows the larger of its saved row limit and the Settings row
   assert.match(plain(f.api.dmvListDashboards())[0].lastError, /^Source 1: .*allows 2 rows/);
 });
 
+// A SQL source's own over-limit advice (Keep the top rows with Rank by column, never a LIMIT)
+// leaves room for the dashboard's around it: every sentence arrives whole within the 400
+// characters an error keeps, the row limit setting last, for a label of a usual length.
+test('a SQL dataset over the row limit keeps the whole dashboard advice', () => {
+  const f = fixture();
+  f.input.datasets[0].label = 'Products by revenue this month';
+  f.input.datasets[0].maxRows = 30000;
+  const saved = f.save();
+  for (const subject of ['BigQuery result', 'The SQL result']) {
+    // The sandbox's Error is another realm's; the fixture throws its own with the same text.
+    f.setRows('one', new Error(f.api.dmvSqlOverLimit_(subject).message));
+    let message = '';
+    assert.throws(
+      () => f.run(saved.id),
+      (error) => {
+        message = error.message;
+        return true;
+      }
+    );
+    assert.ok(message.length <= 400, subject);
+    assert.ok(message.startsWith('Products by revenue this month: ' + subject + ' exceeds the row limit.'), message);
+    assert.match(message, /\(not a LIMIT\)\. This dataset allows 30,000 rows\. Keep only the rows worth acting on: .* or fewer dimensions\./);
+    assert.match(message, / Only then raise Maximum rows per chat report \(Settings > AI provider, up to 30,000\)\.$/, subject);
+  }
+});
+
 test('ownership journals recover every committed tab after a receipt-storage failure', () => {
   const f = fixture(),
     saved = f.save();

@@ -30,6 +30,22 @@ var DMV_LINKEDIN_RATIOS = {
 // LinkedIn leaves these out of professional demographic (MEMBER_) reports.
 var DMV_LINKEDIN_NOT_DEMOGRAPHIC = ['conversionValueInLocalCurrency', 'approximateMemberReach'];
 
+// Keep the top rows ranks by spend, or by impressions when spend is not selected. A blank one
+// ranks by spend in the account currency only, as before.
+var DMV_LINKEDIN_RANKS = ['costInLocalCurrency', 'costInUsd', 'impressions'];
+
+// Whole-period rows are a list that can keep only its top rows: the actionable part of it.
+var DMV_LINKEDIN_TOP = {
+  key: 'top',
+  label: 'Keep the top rows',
+  type: 'number',
+  required: false,
+  min: 1,
+  // DMV_LIMITS.maxRows, written out: a connector can register before dmv_core.js has run.
+  max: 30000,
+  help: 'Ranks rows by spend (impressions without spend) and keeps this many. Blank keeps every row up to the row limit.',
+};
+
 function dmvLinkedinFields_() {
   var f = dmvField_;
   return [
@@ -225,13 +241,37 @@ function dmvLinkedinEntityNames_(ctx, connection, urns) {
 // selected columns decide the pivots and the period.
 function dmvLinkedinAnalytics_(ctx, available, fixed) {
   var columns = dmvSelectFields_(ctx.fields, available);
-  var connection = dmvLinkedinConnection_(ctx);
-  var account = dmvLinkedinAccount_(ctx, connection);
   var has = function (key) {
     return columns.some(function (field) {
       return field.key === key;
     });
   };
+  // Without a period the rows are totals for the range: a ranking. Keep the top rows keeps that
+  // many (by impressions without spend). A period makes a trend, whose periods each need every
+  // row: it refuses a top before any request, the token exchange included.
+  var split = columns.filter(function (field) {
+    return field.key === 'date' || field.key === 'month';
+  })[0];
+  var rankKey = DMV_LINKEDIN_RANKS.filter(has)[0];
+  var rank = columns.filter(function (field) {
+    return field.key === rankKey;
+  })[0];
+  var top = fixed
+    ? 0
+    : dmvTopRows_(
+        ctx,
+        split
+          ? 'Keep the top rows ranks totals for the date range, so it cannot be combined with ' +
+              split.label +
+              '. Remove ' +
+              split.label +
+              ' or clear Keep the top rows.'
+          : rank
+            ? ''
+            : 'Keep the top rows ranks by spend or impressions. Select one of them.'
+      );
+  var connection = dmvLinkedinConnection_(ctx);
+  var account = dmvLinkedinAccount_(ctx, connection);
   if (has('date') && has('month')) throw new Error('Choose Date or Month, not both.');
   var granularity = fixed || has('date') ? 'DAILY' : has('month') ? 'MONTHLY' : 'ALL';
   var pivots = fixed ? ['CAMPAIGN'] : [];
@@ -291,6 +331,23 @@ function dmvLinkedinAnalytics_(ctx, available, fixed) {
     throw new Error(
       'LinkedIn returned its 15,000-element maximum; the report may be incomplete. Narrow the date range.'
     );
+  // LinkedIn has no sort, so a top is ranked here and kept before any name is looked up.
+  var elements = payload.elements,
+    kept = {};
+  if (top) {
+    kept = dmvKeepTopRows_(
+      elements.map(function (element) {
+        var value = element && element[rank.key];
+        return { element: element, value: dmvNumber_(value === undefined ? null : value) };
+      }),
+      top,
+      'value',
+      rank.label.charAt(0).toLowerCase() + rank.label.slice(1)
+    );
+    elements = kept.rows.map(function (item) {
+      return item.element;
+    });
+  }
   var campaigns = has('campaign_name') ? dmvLinkedinNames_(ctx, connection, 'adCampaigns') : {};
   var groups = has('campaign_group_name')
     ? dmvLinkedinNames_(ctx, connection, 'adCampaignGroups')
@@ -300,7 +357,7 @@ function dmvLinkedinAnalytics_(ctx, available, fixed) {
     listed = Object.create(null),
     note = '';
   if (demographic)
-    payload.elements.forEach(function (element) {
+    elements.forEach(function (element) {
       (element.pivotValues || []).forEach(function (value, position) {
         value = String(value);
         if (
@@ -321,7 +378,7 @@ function dmvLinkedinAnalytics_(ctx, available, fixed) {
   }
   var seen = Object.create(null),
     rows = [];
-  var mapped = payload.elements.map(function (element) {
+  var mapped = elements.map(function (element) {
     var start = element.dateRange && element.dateRange.start;
     if (granularity !== 'ALL' && (!start || !start.year))
       throw new Error('LinkedIn returned a row without a date.');
@@ -361,20 +418,26 @@ function dmvLinkedinAnalytics_(ctx, available, fixed) {
                   : groups[id]
                 : entities[value] || id;
       } else if (ratio) {
-        var top = dmvNumber_(element[ratio[0]] === undefined ? null : element[ratio[0]]),
-          bottom = dmvNumber_(element[ratio[1]] === undefined ? null : element[ratio[1]]);
-        row[field.key] = bottom ? ((top || 0) / bottom) * ratio[2] : null;
+        var part = dmvNumber_(element[ratio[0]] === undefined ? null : element[ratio[0]]),
+          whole = dmvNumber_(element[ratio[1]] === undefined ? null : element[ratio[1]]);
+        row[field.key] = whole ? ((part || 0) / whole) * ratio[2] : null;
       } else
         row[field.key] = dmvNumber_(element[field.key] === undefined ? null : element[field.key]);
     });
     return row;
   });
-  // Without a period the rows are a ranking, so the biggest spenders come first.
-  if (granularity === 'ALL' && has('costInLocalCurrency'))
+  // Without a period the rows are a ranking, so the biggest spenders come first. Without a top
+  // every row is kept, so the report fails over the row limit as before.
+  if (!top && granularity === 'ALL' && has('costInLocalCurrency'))
     mapped.sort(function (a, b) {
       return (b.costInLocalCurrency || 0) - (a.costInLocalCurrency || 0);
     });
   dmvAppendPage_(rows, mapped, ctx.maxRows);
+  note =
+    note ||
+    (demographic
+      ? 'Audience values are approximate, need at least 3 events and keep the top 100 values per creative per day.'
+      : 'Days without delivery are omitted by LinkedIn.');
   var metadata = {
     apiVersion: DMV_LINKEDIN_VERSION,
     accountId: connection.id,
@@ -394,13 +457,18 @@ function dmvLinkedinAnalytics_(ctx, available, fixed) {
           .toLowerCase()
           .replace(/member_|_v2/g, '')
           .replace(/_/g, ' ') || 'account'),
-    note:
-      note ||
-      (demographic
-        ? 'Audience values are approximate, need at least 3 events and keep the top 100 values per creative per day.'
-        : 'Days without delivery are omitted by LinkedIn.'),
+    note: note,
     complete: true,
   };
+  // A list cut to its top rows says so with topRows (a dashboard labels totals over it) and a
+  // note leading with "Top 300 by spend", only when exactly that many came back.
+  if (kept.topRows) {
+    metadata.topRows = kept.topRows;
+    metadata.note =
+      kept.note +
+      '; ' +
+      (/^[A-Z][a-z]*\b/.test(note) ? note.charAt(0).toLowerCase() + note.slice(1) : note);
+  }
   return { columns: columns, rows: rows, metadata: metadata };
 }
 
@@ -509,9 +577,9 @@ dmvRegisterConnector_({
       id: 'analytics',
       label: 'Analytics (any level and audience)',
       description:
-        'One row per combination of the dimensions you select: campaign group, campaign or creative, and the companies, industries, job titles, seniorities, countries or devices reached (at most three). Date or Month sets the period; with none, rows are totals ranked by spend.',
+        'One row per combination of the dimensions you select: campaign group, campaign or creative, and the companies, industries, job titles, seniorities, countries or devices reached (at most three). Date or Month sets the period; with none, rows are totals ranked by spend, and Keep the top rows keeps only the top of them.',
       fields: dmvLinkedinAnalyticsFields_(),
-      configFields: [],
+      configFields: [Object.assign({}, DMV_LINKEDIN_TOP)],
       dateRange: true,
       fetch: function (ctx) {
         return dmvLinkedinAnalytics_(ctx, dmvLinkedinAnalyticsFields_(), false);

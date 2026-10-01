@@ -23,9 +23,18 @@ professional demographics, audience, landing page, Shopping product, Performance
 group, conversions by goal, goals and funnels, keyword impression share and website placements.
 
 - **Period:** Date, Week (from Monday), Month, Day of week or Hour of day; only one. With none,
-  rows are totals for the date range, ranked by spend, and the row limit keeps the top of the
-  ranking. Microsoft reports whole weeks and months, so the first and last period can include
-  days outside the range; the report notes say so.
+  rows are totals for the date range, ranked by spend; with spend selected the row limit keeps
+  the top of the ranking and says so ("Top 10,000 rows by spend; raise the row limit for
+  more."), and without spend the report fails over the row limit. Microsoft reports whole weeks
+  and months, so the first and last period can include days outside the range; the report notes
+  say so.
+- **Keep the top rows** (every level except account and goals and funnels) keeps only that many
+  rows of the totals, ranked by spend, or by impressions when spend is not selected, from 1 to
+  the report's row limit; blank keeps every row up to the row limit. A list cut this way, or by
+  the row limit, carries `metadata.topRows` and a note ("Top 300 by spend"), so dashboards label
+  totals over it "Total (top 300)", as for Google Ads. A list shorter than its top is whole and
+  unlabelled. It cannot be combined with a period column, which the message names, and needs
+  spend or impressions selected; a value above the row limit is refused with both numbers.
 - **Columns:** each level starts with its usual dimensions and metrics. **Load columns** reads
   the report type's column list from the service's own schema (its public WSDL), so every column
   Microsoft defines is offered. Columns are typed by name: money, rates, counts, scores, text.
@@ -53,6 +62,14 @@ ranked by spend. CTR, CPC and CPM are computed from the counts LinkedIn returns.
   available by audience.
 - A request holds at most 18 metrics and LinkedIn returns at most 15,000 rows without paging; a
   report that hits the ceiling fails instead of being cut. There is no weekly grain in the API.
+- **Keep the top rows** keeps only that many whole-period rows, ranked by spend (Spend, else
+  Spend (USD)) or by impressions when no spend is selected, from 1 to the report's row limit;
+  blank keeps every row and fails over the row limit. `adAnalytics` takes no sort, so the report
+  ranks every row LinkedIn returns (the 15,000 ceiling still applies) and keeps the top before
+  any name is looked up. A list cut this way carries `metadata.topRows` and a note that starts
+  "Top 300 by spend", so dashboards label totals over it; a list shorter than its top is whole
+  and unlabelled. It cannot be combined with Date or Month, which the message names, and needs
+  spend or impressions selected; a value above the row limit is refused with both numbers.
 
 ### Facebook Ads Insights
 
@@ -63,9 +80,17 @@ dimensions selected, so the columns decide the request:
   Buying type); with none of them the rows are account totals.
 - **Period:** Date gives daily rows, Month calendar months, Week calendar weeks from Monday cut
   to the requested dates (the same rule as the chat's weekly buckets; at most 60 weeks). With
-  none, each row covers the whole date range. Only one of the three can be selected. Reach,
-  frequency and unique clicks come from Meta at the selected period, which is why Week and
-  Month are requested from Meta instead of being added up from days.
+  none, each row covers the whole date range and Meta returns the rows ranked by spend. Only one
+  of the three can be selected. Reach, frequency and unique clicks come from Meta at the
+  selected period, which is why Week and Month are requested from Meta instead of being added up
+  from days.
+- **Keep the top rows** keeps only that many whole-period rows, ranked by spend, or by
+  impressions when spend is not selected (Meta sorts them, and paging stops once the top is in),
+  from 1 to the report's row limit; blank keeps every row and fails over the row limit. A list
+  cut this way carries `metadata.topRows` and the note "Top 300 by spend", so dashboards label
+  totals over it; a list shorter than its top is whole and unlabelled. It cannot be combined with
+  Date, Week, Month or Hour of day, which the message names, and needs spend or impressions
+  selected; a value above the row limit is refused with both numbers.
 - **Breakdowns:** Age, Gender, Country, Region, DMA region, Platform, Placement, Impression
   device, Device platform and Hour of day are sent as `breakdowns`. Meta supports only some
   combinations (age with gender; platform with placement and impression device); a refused

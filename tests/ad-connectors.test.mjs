@@ -305,6 +305,7 @@ test('Microsoft Ads report levels take the period and the ranking from the selec
   assert.deepEqual(ranked.request.Columns, ['SearchQuery', 'Spend', 'Ctr'], 'search terms carry no currency column');
   assert.deepEqual(plain(ranked.output.rows), [{ SearchQuery: 'boots', Spend: 1200, Ctr: 0.05 }, { SearchQuery: 'hats', Spend: 30, Ctr: null }]);
   assert.equal(ranked.output.metadata.note, 'Top 2 rows by spend; raise the row limit for more.');
+  assert.equal(ranked.output.metadata.topRows, 2, 'a dashboard labels totals over the cut list');
   assert.equal(ranked.output.metadata.grain, 'Search terms, whole period');
 
   // Week is Microsoft's TimePeriod at the Monday-week aggregation; money brings the currency along.
@@ -327,6 +328,73 @@ test('Microsoft Ads report levels take the period and the ranking from the selec
   assert.deepEqual(plain(audience.output.rows), [{ AudienceName: 'Buyers', Clicks: 4, AudienceId: '900' }]);
   assert.throws(() => level('campaign').fetch(f.context('microsoft_ads', credentials, { fields: ['Week', 'Month', 'Spend'] })), /one of Date, Week, Month/);
   assert.throws(() => level('campaign').fetch(f.context('microsoft_ads', credentials, { fields: ['not a column'] })), /Unknown or unavailable report field/);
+});
+
+test('Keep the top rows on a Microsoft Ads level ranks totals by spend or impressions and says when the list was cut', () => {
+  const f = load(['microsoft_ads']);
+  const credentials = { accountId: '111', customerId: '222', developerToken: 'd', authMode: 'token', accessToken: 'tok' };
+  const level = (id) => f.api.DMV_CONNECTORS.microsoft_ads.reports.find((report) => report.id === id);
+  const run = (id, fields, csv, extra = {}) => {
+    const before = f.state.http.length;
+    f.state.responses.push({ body: { ReportRequestId: 'r' } },
+      { body: { ReportRequestStatus: { Status: 'Success', ReportDownloadUrl: 'https://bingadsappsstorageprod.blob.core.windows.net/report.zip?sig=x' } } },
+      { bytes: zip('report.csv', csv) });
+    const output = level(id).fetch(f.context('microsoft_ads', credentials, { fields, ...extra }));
+    return { output, request: request(f, before).body.ReportRequest };
+  };
+
+  // Every level whose rows are a list with spend or impressions offers it, as Google Ads does.
+  const [top] = plain(level('search_term').configFields);
+  assert.deepEqual([top.key, top.label, top.type, top.required, top.min, top.max], ['top', 'Keep the top rows', 'number', false, 1, f.api.DMV_LIMITS.maxRows]);
+  assert.match(top.help, /^Ranks rows by spend \(impressions without spend\) and keeps this many\. Blank keeps every row up to the row limit\.$/);
+  for (const id of ['campaign', 'ad_group', 'ad', 'keyword', 'search_term', 'geographic', 'user_location', 'age_gender', 'professional', 'audience', 'landing_page', 'product', 'asset_group', 'conversion', 'share_of_voice', 'publisher'])
+    assert.deepEqual(plain(level(id).configFields).map((field) => field.key), ['top'], id);
+  // One row per account and split, the daily campaign report and goals without spend do not.
+  for (const id of ['campaign_daily', 'account', 'goal']) assert.deepEqual(plain(level(id).configFields), [], id);
+  assert.match(level('keyword').description, /ranked by spend, and Keep the top rows keeps only the top of them\./);
+  assert.doesNotMatch(level('account').description, /Keep the top rows/);
+  const config = (values) => f.api.dmvFieldsInput_(level('search_term').configFields, values);
+  assert.deepEqual(plain(config({ top: '2' })), { top: 2 });
+
+  const csv = 'SearchQuery,Spend,Impressions\nshoes,1.50,900\nboots,"1,200.00",40\nhats,30.00,300\nsocks,--,5000\n';
+  const cut = run('search_term', ['SearchQuery', 'Spend', 'Impressions'], csv, { config: config({ top: '2' }) });
+  assert.equal(cut.request.Aggregation, 'Summary');
+  assert.deepEqual(plain(cut.output.rows).map((row) => row.SearchQuery), ['boots', 'hats']);
+  assert.deepEqual([cut.output.metadata.topRows, cut.output.metadata.note], [2, 'Top 2 by spend']);
+  // Fewer rows than asked for are the whole list, ranked with blanks last and never labelled.
+  const whole = run('search_term', ['SearchQuery', 'Spend', 'Impressions'], csv, { config: { top: 10 } });
+  assert.deepEqual(plain(whole.output.rows).map((row) => row.SearchQuery), ['boots', 'hats', 'shoes', 'socks']);
+  assert.deepEqual([whole.output.metadata.topRows, whole.output.metadata.note], [undefined, undefined]);
+  // Without spend a top ranks by impressions.
+  const reach = run('search_term', ['SearchQuery', 'Impressions'], 'SearchQuery,Impressions\nshoes,900\nboots,40\nhats,300\nsocks,5000\n', { config: { top: 2 } });
+  assert.deepEqual(plain(reach.output.rows), [{ SearchQuery: 'socks', Impressions: 5000 }, { SearchQuery: 'shoes', Impressions: 900 }]);
+  assert.deepEqual([reach.output.metadata.topRows, reach.output.metadata.note], [2, 'Top 2 by impressions']);
+
+  // Blank keeps every row up to the row limit, as before: a cut there carries topRows and advice,
+  // a list that fits exactly is whole, and without spend there is no ranking to keep the top of.
+  const exact = run('search_term', ['SearchQuery', 'Spend'], 'SearchQuery,Spend\nshoes,1\nboots,2\n', { maxRows: 2 });
+  assert.deepEqual([exact.output.metadata.topRows, exact.output.metadata.note], [undefined, undefined]);
+  f.state.responses.push({ body: { ReportRequestId: 'r' } },
+    { body: { ReportRequestStatus: { Status: 'Success', ReportDownloadUrl: 'https://bingadsappsstorageprod.blob.core.windows.net/report.zip?sig=x' } } },
+    { bytes: zip('report.csv', 'SearchQuery,Impressions\nshoes,1\nboots,2\nhats,3\n') });
+  assert.throws(() => level('search_term').fetch(f.context('microsoft_ads', credentials, { fields: ['SearchQuery', 'Impressions'], maxRows: 2 })), /exceeds the row limit/);
+
+  // Refusals come before any request: a malformed top, a period column (a trend needs every row),
+  // nothing to rank by, then a top above the row limit, naming both settings.
+  const before = f.state.http.length;
+  const refuse = (fields, value, pattern, extra = {}) =>
+    assert.throws(() => level('campaign').fetch(f.context('microsoft_ads', credentials, { fields, config: { top: value }, ...extra })), pattern, `${fields} ${value}`);
+  for (const value of [0, 1.5, 'many', 30001]) refuse(['CampaignName', 'Spend'], value, /Keep the top rows must be a whole number from 1 to 30,000/);
+  for (const [key, label] of [['TimePeriod', 'Date'], ['Week', 'Week'], ['Month', 'Month'], ['DayOfWeek', 'Day of week (1 = Sunday)'], ['HourOfDay', 'Hour of day']])
+    refuse([key, 'CampaignName', 'Spend'], 50, new RegExp(`^Error: Keep the top rows ranks totals for the date range, so it cannot be combined with ${label.replace(/[()]/g, '\\$&')}\\. Remove ${label.replace(/[()]/g, '\\$&')} or clear Keep the top rows\\.$`), { maxRows: 10 });
+  refuse(['CampaignName', 'Clicks'], 50, /^Error: Keep the top rows ranks by spend or impressions\. Select one of them\.$/);
+  refuse(['CampaignName', 'Spend'], 1001, /^Error: Keep the top rows \(1,001\) is above this report's row limit \(1,000\)\. Lower it or raise the row limit\.$/);
+  assert.equal(f.state.http.length, before, 'nothing was requested');
+  // A level without the setting ignores a stray value, and a trend without a top still runs.
+  const account = run('account', ['AccountName', 'Spend'], 'AccountName,Spend\nShop,5\n', { config: { top: 1 } });
+  assert.equal(account.output.metadata.topRows, undefined);
+  const trend = run('campaign', ['Week', 'CampaignName', 'Spend'], 'TimePeriod,CampaignName,Spend,CurrencyCode\n2026-08-31,Brand,10.00,EUR\n', { config: { top: '' } });
+  assert.equal(trend.request.Aggregation, 'WeeklyStartingMonday');
 });
 
 test('Microsoft Ads types any column by its name, loads columns from the service schema, finds accounts and honours a tenant', () => {
@@ -403,4 +471,82 @@ test('LinkedIn analytics takes pivots and period from the columns, resolves audi
   refuse(['date', 'month', 'impressions'], /Date or Month/);
   refuse(['campaign_name', 'creative_id', 'industry', 'country', 'impressions'], /at most three/);
   refuse(['industry', 'conversionValueInLocalCurrency'], /does not report conversionValueInLocalCurrency by company, industry/);
+});
+
+test('Keep the top rows on LinkedIn analytics ranks totals by spend or impressions before names are looked up and says when the list was cut', () => {
+  const f = load(['linkedin_ads']);
+  const credentials = { accountId: '506', authMode: 'token', accessToken: 'li-private' };
+  const report = f.api.DMV_CONNECTORS.linkedin_ads.reports.find((item) => item.id === 'analytics');
+  const [top] = plain(report.configFields);
+  assert.deepEqual([top.key, top.label, top.type, top.required, top.min, top.max], ['top', 'Keep the top rows', 'number', false, 1, f.api.DMV_LIMITS.maxRows]);
+  assert.equal(top.help, 'Ranks rows by spend (impressions without spend) and keeps this many. Blank keeps every row up to the row limit.');
+  assert.match(report.description, /rows are totals ranked by spend, and Keep the top rows keeps only the top of them\.$/);
+  // The original campaign report is always daily: nothing to keep the top of.
+  assert.deepEqual(plain(f.report('linkedin_ads').configFields), []);
+  assert.deepEqual(plain(f.api.dmvFieldsInput_(report.configFields, { top: '2' })), { top: 2 });
+
+  const range = { start: { year: 2026, month: 9, day: 1 }, end: { year: 2026, month: 9, day: 2 } };
+  const companies = [
+    { dateRange: range, pivotValues: ['urn:li:organization:1'], impressions: 900, costInLocalCurrency: '5' },
+    { dateRange: range, pivotValues: ['urn:li:organization:2'], impressions: 40, costInLocalCurrency: '50' },
+    { dateRange: range, pivotValues: ['urn:li:organization:3'], impressions: 5000 },
+    { dateRange: range, pivotValues: ['urn:li:organization:4'], impressions: 300, costInLocalCurrency: '20.5' },
+  ];
+  const run = (fields, elements, extra, names) => {
+    const before = f.state.http.length;
+    f.state.responses.push({ body: { id: 506, currency: 'EUR' } }, { body: { elements } });
+    if (names) f.state.responses.push({ body: { elements: names } });
+    const output = report.fetch(f.context('linkedin_ads', credentials, { fields, ...extra }));
+    return { output, urls: f.state.http.slice(before).map((call) => call.url) };
+  };
+  const audience = 'audience values are approximate, need at least 3 events and keep the top 100 values per creative per day.';
+
+  // LinkedIn has no sort: the totals are ranked here, and only the kept companies are named.
+  const cut = run(['company', 'impressions', 'costInLocalCurrency'], companies, { config: { top: 2 } }, [{ urn: 'urn:li:organization:2', name: 'Acme' }, { urn: 'urn:li:organization:4', name: 'Globex' }]);
+  assert.match(cut.urls[1], /adAnalytics\?q=analytics&pivot=MEMBER_COMPANY&timeGranularity=ALL&/);
+  assert.doesNotMatch(cut.urls[1], /[?&](sort|count|pageSize)=/);
+  assert.equal(cut.urls[2], 'https://api.linkedin.com/rest/adTargetingEntities?q=urns&urns=List(urn%3Ali%3Aorganization%3A2,urn%3Ali%3Aorganization%3A4)');
+  assert.deepEqual(plain(cut.output.rows), [{ company: 'Acme', impressions: 40, costInLocalCurrency: 50 }, { company: 'Globex', impressions: 300, costInLocalCurrency: 20.5 }]);
+  assert.equal(cut.output.metadata.topRows, 2);
+  assert.equal(cut.output.metadata.note, 'Top 2 by spend; ' + audience, 'the card label leads, the provider note follows');
+
+  // Fewer rows than asked for are the whole list, ranked with blanks last and never labelled.
+  const whole = run(['company', 'impressions', 'costInLocalCurrency'], companies, { config: { top: 10 } }, []);
+  assert.deepEqual(plain(whole.output.rows).map((row) => row.company), ['2', '4', '1', '3']);
+  assert.deepEqual([whole.output.metadata.topRows, whole.output.metadata.note], [undefined, 'A' + audience.slice(1)]);
+
+  // Without spend a top ranks by impressions; spend in US dollars ranks before impressions.
+  const campaigns = [
+    { dateRange: range, pivotValues: ['urn:li:sponsoredCampaign:11'], impressions: 10, costInUsd: '9' },
+    { dateRange: range, pivotValues: ['urn:li:sponsoredCampaign:12'], impressions: 30, costInUsd: '1' },
+  ];
+  const reach = run(['campaign_id', 'impressions'], campaigns, { config: { top: 1 } });
+  assert.deepEqual(plain(reach.output.rows), [{ campaign_id: '12', impressions: 30 }]);
+  assert.equal(reach.output.metadata.note, 'Top 1 by impressions; days without delivery are omitted by LinkedIn.');
+  const usd = run(['campaign_id', 'impressions', 'costInUsd'], campaigns, { config: { top: 1 } });
+  assert.deepEqual(plain(usd.output.rows), [{ campaign_id: '11', impressions: 10, costInUsd: 9 }]);
+  assert.match(usd.output.metadata.note, /^Top 1 by spend \(USD\); /);
+
+  // A top cuts a list longer than the row limit; blank keeps every row and fails over it, as before.
+  const three = companies.slice(0, 3).map((element, index) => ({ ...element, pivotValues: [`urn:li:sponsoredCampaign:${index + 1}`] }));
+  const kept = run(['campaign_id', 'costInLocalCurrency'], three, { config: { top: 2 }, maxRows: 2 });
+  assert.deepEqual(plain(kept.output.rows), [{ campaign_id: '2', costInLocalCurrency: 50 }, { campaign_id: '1', costInLocalCurrency: 5 }]);
+  assert.equal(kept.output.metadata.topRows, 2);
+  assert.throws(() => run(['campaign_id', 'costInLocalCurrency'], three, { config: { top: '' }, maxRows: 2 }), /exceeds the row limit/);
+  const blank = run(['campaign_id', 'costInLocalCurrency'], three, { config: {} });
+  assert.deepEqual(plain(blank.output.rows).map((row) => row.campaign_id), ['2', '1', '3']);
+  assert.deepEqual([blank.output.metadata.topRows, blank.output.metadata.note], [undefined, 'Days without delivery are omitted by LinkedIn.']);
+
+  // Refusals come before any request, the OAuth token exchange included: a malformed top, a period
+  // column (a trend needs every row), nothing to rank by, then a top above the row limit.
+  const oauth = { accountId: '506', authMode: 'oauth', clientId: 'c', clientSecret: 's', refreshToken: 'r' };
+  const before = f.state.http.length;
+  const refuse = (fields, value, pattern) =>
+    assert.throws(() => report.fetch(f.context('linkedin_ads', oauth, { fields, config: { top: value } })), pattern, `${fields} ${value}`);
+  for (const value of [0, 1.5, 'many', 30001]) refuse(['campaign_name', 'costInLocalCurrency'], value, /^Error: Keep the top rows must be a whole number from 1 to 30,000, or blank for every row\.$/);
+  for (const [key, label] of [['date', 'Date'], ['month', 'Month']])
+    refuse([key, 'campaign_name', 'costInLocalCurrency'], 5, new RegExp(`^Error: Keep the top rows ranks totals for the date range, so it cannot be combined with ${label}\\. Remove ${label} or clear Keep the top rows\\.$`));
+  refuse(['campaign_name', 'clicks'], 5, /^Error: Keep the top rows ranks by spend or impressions\. Select one of them\.$/);
+  refuse(['campaign_name', 'costInLocalCurrency'], 1001, /^Error: Keep the top rows \(1,001\) is above this report's row limit \(1,000\)\. Lower it or raise the row limit\.$/);
+  assert.equal(f.state.http.length, before, 'nothing was requested');
 });

@@ -24,6 +24,29 @@ var DMV_FACEBOOK_ADS_BREAKDOWNS = [
   'hourly_stats_aggregated_by_advertiser_time_zone',
 ];
 
+// Columns that split the date range into periods: a report with one is a trend, not a ranking.
+var DMV_FACEBOOK_ADS_PERIODS = [
+  'date_start',
+  'week',
+  'month',
+  'hourly_stats_aggregated_by_advertiser_time_zone',
+];
+
+// Keep the top rows ranks by spend, or by impressions when spend is not selected.
+var DMV_FACEBOOK_ADS_RANKS = ['spend', 'impressions'];
+
+// Whole-period rows are a list that can keep only its top rows: the actionable part of it.
+var DMV_FACEBOOK_ADS_TOP = {
+  key: 'top',
+  label: 'Keep the top rows',
+  type: 'number',
+  required: false,
+  min: 1,
+  // DMV_LIMITS.maxRows, written out: a connector can register before dmv_core.js has run.
+  max: 30000,
+  help: 'Ranks rows by spend (impressions without spend) and keeps this many. Blank keeps every row up to the row limit.',
+};
+
 // Metrics Meta returns as a list with one entry rather than as a number.
 var DMV_FACEBOOK_ADS_LISTS = [
   'outbound_clicks',
@@ -278,6 +301,30 @@ function dmvFacebookAdsInsights_(ctx, available, fixed) {
         return entry[1].some(has);
       })[0] || ['account'])[0];
   var breakdowns = DMV_FACEBOOK_ADS_BREAKDOWNS.filter(has);
+  // Without a period the rows are totals for the range: a ranking. Keep the top rows keeps that
+  // many (by impressions without spend) and stops paging once they are in. A period or the hour
+  // of day makes a trend, whose periods each need every row: it refuses a top before any request.
+  var split = columns.filter(function (field) {
+    return DMV_FACEBOOK_ADS_PERIODS.indexOf(field.key) >= 0;
+  })[0];
+  var rankKey = DMV_FACEBOOK_ADS_RANKS.filter(has)[0];
+  var rank = columns.filter(function (field) {
+    return field.key === rankKey;
+  })[0];
+  var top = fixed
+    ? 0
+    : dmvTopRows_(
+        ctx,
+        split
+          ? 'Keep the top rows ranks totals for the date range, so it cannot be combined with ' +
+              split.label +
+              '. Remove ' +
+              split.label +
+              ' or clear Keep the top rows.'
+          : rank
+            ? ''
+            : 'Keep the top rows ranks by spend or impressions. Select one of them.'
+      );
 
   var requested = fixed
     ? ['date_start', 'date_stop', 'account_id', 'campaign_id', 'account_currency']
@@ -303,7 +350,8 @@ function dmvFacebookAdsInsights_(ctx, available, fixed) {
   var params = {
     fields: requested.join(','),
     level: level,
-    limit: Math.min(500, ctx.maxRows + 1),
+    // A top needs only its own rows; otherwise one past the row limit shows an oversized report.
+    limit: Math.min(500, top || ctx.maxRows + 1),
     use_unified_attribution_setting: 'true',
   };
   if (grain === 'week')
@@ -313,8 +361,10 @@ function dmvFacebookAdsInsights_(ctx, available, fixed) {
     params.time_range = JSON.stringify({ since: ctx.startDate, until: ctx.endDate });
   }
   if (breakdowns.length) params.breakdowns = breakdowns.join(',');
-  // Without a period the rows are a ranking, so the biggest spenders come first.
-  if (!grain && has('spend')) params.sort = 'spend_descending';
+  // Without a period the rows are a ranking, so the biggest spenders come first; a top ranks by
+  // impressions when spend is not selected.
+  if (top) params.sort = rank.key + '_descending';
+  else if (!grain && has('spend')) params.sort = 'spend_descending';
 
   var account = ctx.http({
     url: connection.base + '?fields=currency,timezone_name',
@@ -372,7 +422,9 @@ function dmvFacebookAdsInsights_(ctx, available, fixed) {
       });
       return row;
     });
-    dmvAppendPage_(rows, mapped, ctx.maxRows);
+    dmvAppendPage_(rows, top ? mapped.slice(0, top - rows.length) : mapped, ctx.maxRows);
+    // A top is the head of Meta's ranking: once it is in, the rest of the list is not needed.
+    if (top && rows.length === top) break;
     var paging = payload.paging || {};
     after = '';
     if (paging.next) {
@@ -395,21 +447,28 @@ function dmvFacebookAdsInsights_(ctx, available, fixed) {
           : 'Whole-period ') +
     { account: 'account', campaign: 'campaign', adset: 'ad set', ad: 'ad' }[level] +
     (breakdowns.length ? ' by ' + breakdowns.join(', ').replace(/_/g, ' ') : '');
-  return {
-    columns: columns,
-    rows: rows,
-    metadata: {
-      apiVersion: 'v26.0',
-      accountId: connection.id,
-      currency: account.currency || '',
-      timeZone: account.timezone_name || '',
-      purchaseActionType: actionType,
-      attribution:
-        'Provider ad-set attribution settings (unified attribution requested); provider-selected action report time.',
-      grain: grainLabel,
-      complete: true,
-    },
+  var metadata = {
+    apiVersion: 'v26.0',
+    accountId: connection.id,
+    currency: account.currency || '',
+    timeZone: account.timezone_name || '',
+    purchaseActionType: actionType,
+    attribution:
+      'Provider ad-set attribution settings (unified attribution requested); provider-selected action report time.',
+    grain: grainLabel,
+    complete: true,
   };
+  // A list cut to its top rows says so with topRows (a dashboard labels totals over it) and a
+  // note, only when exactly that many came back: fewer are the whole list.
+  if (top) {
+    var kept = dmvKeepTopRows_(rows, top, rank.key, rank.label.toLowerCase());
+    rows = kept.rows;
+    if (kept.topRows) {
+      metadata.topRows = kept.topRows;
+      metadata.note = kept.note;
+    }
+  }
+  return { columns: columns, rows: rows, metadata: metadata };
 }
 
 function dmvFacebookAdsFetch_(ctx) {
@@ -575,10 +634,10 @@ dmvRegisterConnector_({
       id: 'insights',
       label: 'Insights (any level and breakdown)',
       description:
-        'One row per combination of the dimensions you select. Campaign, Ad set or Ad sets the level; Date, Week or Month sets the period (none gives totals); Age, Gender, Country, Platform or Placement split the rows. Load columns adds every conversion and action your account reports.',
+        'One row per combination of the dimensions you select. Campaign, Ad set or Ad sets the level; Date, Week or Month sets the period (none gives totals ranked by spend, and Keep the top rows keeps only the top of them); Age, Gender, Country, Platform or Placement split the rows. Load columns adds every conversion and action your account reports.',
       fields: dmvFacebookAdsInsightFields_(),
       dateRange: true,
-      configFields: [DMV_FACEBOOK_ADS_PURCHASE],
+      configFields: [DMV_FACEBOOK_ADS_PURCHASE, Object.assign({}, DMV_FACEBOOK_ADS_TOP)],
       fetch: function (ctx) {
         return dmvFacebookAdsInsights_(ctx, dmvFacebookAdsInsightFields_());
       },

@@ -75,7 +75,9 @@ source fetches; multi-account and period comparisons can require several fetches
   (**Schemas for chat**, default `public`; **Datasets for chat** as `project.dataset`), then
   writes one read-only SELECT against those names. The same SQL guard as saved reports
   applies, and the database role should be read-only. Keep the scope small to keep the
-  model to the point.
+  model to the point. A dashboard list from SQL keeps its top rows with the report's **Keep the
+  top rows** and **Rank by column**, never a `LIMIT` (see
+  [Action lists](#action-lists-the-top-rows-labelled)).
 - **Save a report**: "Create a report of daily GA4 sessions in its own tab" saves a refreshable
   report and runs it once; it appears under **Reports > Drafts** (see [Saved reports and
   drafts](#saved-reports-and-drafts)).
@@ -189,18 +191,24 @@ Google's cost and Facebook's spend line up.
 
 ### Action lists: the top rows, labelled
 
-A list of keywords, search terms, ads, assets, placements or landing pages is there to act on,
-not to hold every row an account has. A whole account's ad asset view alone returns one row per
-ad group, ad, asset and field, easily tens of thousands. So Chat builds each list as a ranked
-dataset:
+A list of keywords, search terms, ads, assets, placements, landing pages or products is there to
+act on, not to hold every row an account or table has. A whole account's ad asset view alone
+returns one row per ad group, ad, asset and field, easily tens of thousands. So Chat builds each
+list as a ranked dataset, on every source that can rank one:
 
-- It uses the source's ranked report for the subject (for Google Ads, **Keyword performance**,
-  **Search terms** and **Ad assets**) with **Keep the top rows** set: 300 unless you ask for
-  another number, 1,000 at most. The report ranks by spend, or by impressions when spend is not
-  selected. For other lists (ads, placements, landing pages) it writes a custom query that keeps
-  the top n where the source's custom query labels the rows it keeps: for Google Ads,
-  `ORDER BY metrics.cost_micros DESC LIMIT 300`. A SQL `LIMIT` carries no such label, so a SQL
-  dataset aggregates instead and never has a `LIMIT`.
+- It uses the source's ranked report for the subject with **Keep the top rows** set: 300 unless
+  you ask for another number, 1,000 at most. The ranked reports are Google Ads' **Keyword
+  performance**, **Search terms** and **Ad assets**, every Microsoft Ads report level except
+  account and goals and funnels, Facebook Ads **Insights** and LinkedIn Ads **Analytics**. Each
+  ranks the totals for the period by spend, or by impressions when spend is not selected. For
+  other Google Ads lists (ads, placements, landing pages) Chat writes a custom query that keeps
+  the top n, which Google Ads labels: `ORDER BY metrics.cost_micros DESC LIMIT 300`.
+- From PostgreSQL, BigQuery or Snowflake, Chat aggregates the list in the query to one row per
+  item and sets **Keep the top rows** with **Rank by column**, a column of the query's result
+  such as `revenue`: the report keeps the rows with that column's highest values and labels the
+  cut ("Top 300 by revenue"). Chat never writes a `LIMIT` into a dashboard's SQL, because the
+  rows a `LIMIT` drops would go unmentioned. A SQL dataset that feeds totals aggregates and has
+  neither setting.
 - The condition that makes a row worth acting on goes into the query or a tile filter: spend
   with no conversions, a low CTR over plenty of impressions.
 - The dataset has no date column, so each row covers the whole period.
@@ -217,11 +225,12 @@ custom query's own `LIMIT` is labelled the same way when it returns exactly that
 100 by spend" after `ORDER BY metrics.cost_micros DESC`, "Lowest 100 by CTR" after an ascending
 metric, "First 100 rows (query LIMIT)" without an `ORDER BY`; the totals and cards then read
 "lowest 100" or "first 100", never "top". A list shorter than its top is the whole list and
-carries no label. A cut is never silent: a ranked report left without a top keeps the row
-limit's worth of rows by spend and says so ("Top 10,000 rows by spend"); without spend, or with
-a day, week, month, quarter or year column (a trend, which **Keep the top rows** refuses), it
-fails at the row limit like any other report. A top above the report's row limit is refused
-with both numbers.
+carries no label. A cut is never silent: a Google Ads or Microsoft Ads level left without a top
+keeps the row limit's worth of rows by spend and says so ("Top 10,000 rows by spend"); other
+reports without a top, those levels without spend, and any report split by a period column
+such as Date, Week, Month or Hour of day (a trend, which **Keep the top rows** refuses, naming
+the column) fail at the row limit like any other report. A top above the report's row limit
+is refused with both numbers.
 
 A dataset over the row limit fails with its name and what narrows it: the report's **Keep the
 top rows**, a condition or aggregation in the query, or fewer dimensions; raising **Maximum rows
@@ -332,8 +341,9 @@ Limits and guarantees:
 - Each dataset uses the higher of its saved row limit and your current **Maximum rows per chat
   report**, so raising the setting also fixes dashboards saved earlier. A dataset over its limit
   is named in the error, with the limit it used and what to try first: keep only the rows worth
-  acting on (a ranked report's **Keep the top rows**, or a query that orders by a metric and keeps
-  the top n), put conditions in the query, or use fewer dimensions; the row limit comes after
+  acting on (a ranked report's **Keep the top rows**, with **Rank by column** for SQL, or a
+  Google Ads query that orders by a metric and keeps the top n), put conditions in the query, or
+  use fewer dimensions; the row limit comes after
   that. Chat does the same when it meets the error: it narrows the named dataset and runs the
   dashboard again, and suggests a higher limit only when the narrowed dataset still needs one.
 - Every dataset and every tab must pass validation before anything is written. A failed source
@@ -412,10 +422,12 @@ Values that come back from providers are framed as data, not instructions.
 
 - Every fetch goes through the report runtime: your configured chat row cap (initially 10,000,
   at most 30,000), column caps, deadline and host allowlists. Reports fail instead
-  of truncating. The only cuts are a ranked report's top rows (its **Keep the top rows**, or the
-  row limit's worth by spend when that is blank) and the `LIMIT` of a custom query whose source
-  labels it (Google Ads), each labelled wherever its rows appear. A SQL query has a `LIMIT` only
-  for a top N you asked for, and a dashboard never puts one on a SQL dataset.
+  of truncating. The only cuts are a ranked report's top rows (its **Keep the top rows**, ranked
+  by spend, impressions or a SQL report's **Rank by column**, or a Google Ads or Microsoft Ads
+  level's row limit's worth by spend when that is blank) and the `LIMIT` of a custom query whose
+  source labels it (Google Ads), each labelled wherever its rows appear. A SQL query has a
+  `LIMIT` only for a top N you asked for in a one-off answer; a dashboard's SQL list keeps its
+  top rows through **Keep the top rows** and **Rank by column** instead.
 - Report writes go through the report writer: only empty cells, or cells the chat wrote earlier at
   the same anchor and that were not edited since, are ever replaced. Formulas and manual edits
   stop a rewrite.

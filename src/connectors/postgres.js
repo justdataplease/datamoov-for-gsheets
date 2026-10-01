@@ -160,13 +160,48 @@ function dmvPostgresFields_(metadata) {
   return fields;
 }
 
+// Result columns as Keep the top rows reads them: numbers to rank by, dates that may be periods.
+function dmvPostgresTopColumns_(fields) {
+  return fields.map(function (field) {
+    return {
+      key: field.key,
+      numeric:
+        /^(int2|int4|int8|smallint|integer|bigint|float4|float8|real|double precision|numeric|smallserial|serial|bigserial)$/.test(
+          field.nativeType
+        ),
+      dated: /^(date|timestamp|timestamptz)$/.test(field.nativeType),
+    };
+  });
+}
+
+// PostgreSQL quotes a name in double quotes, doubling any inside it, and matches it exactly.
+function dmvPostgresName_(name) {
+  return '"' + name.replace(/"/g, '""') + '"';
+}
+
 function dmvPostgresQuery_(ctx, discoverOnly) {
-  var sql = dmvPostgresSql_(ctx.config.query);
-  var connection, statement, result;
+  var sql = 'SELECT * FROM (' + dmvPostgresSql_(ctx.config.query) + ') AS datamoov_report';
+  // Keep the top rows ranks in the database; field discovery reads the plain query's columns.
+  var rank = discoverOnly ? null : dmvSqlTop_(ctx, dmvPostgresName_);
+  var connection, statement, result, rankKey;
   try {
     connection = dmvPostgresConnection_(ctx.credentials);
+    if (rank) {
+      // The plain query's columns come first, as BigQuery's dry run: the rank column is matched
+      // to the result's own name (case aside) or refused with the columns, before it ranks.
+      statement = connection.prepareStatement(sql + ' LIMIT 0');
+      statement.setQueryTimeout(30);
+      result = statement.executeQuery();
+      rankKey = dmvSqlTopColumn_(
+        rank,
+        dmvPostgresTopColumns_(dmvPostgresFields_(result.getMetaData()))
+      );
+      dmvPostgresClose_(result, statement);
+      result = statement = null;
+    }
     statement = connection.prepareStatement(
-      'SELECT * FROM (' + sql + ') AS datamoov_report LIMIT ' + (discoverOnly ? 0 : ctx.maxRows + 1)
+      sql +
+        (rank ? dmvSqlTopOrder_(rank, rankKey) : ' LIMIT ' + (discoverOnly ? 0 : ctx.maxRows + 1))
     );
     statement.setQueryTimeout(30);
     statement.setMaxRows(discoverOnly ? 1 : ctx.maxRows + 1);
@@ -177,10 +212,7 @@ function dmvPostgresQuery_(ctx, discoverOnly) {
     var rows = [];
     while (result.next()) {
       ctx.checkDeadline();
-      if (rows.length >= ctx.maxRows)
-        throw new Error(
-          'The SQL result exceeds the row limit. Aggregate the query (GROUP BY) or filter it; a LIMIT would keep only part of the rows.'
-        );
+      if (rows.length >= ctx.maxRows) throw dmvSqlOverLimit_('The SQL result');
       var row = {};
       columns.forEach(function (column) {
         var value = result.getString(column.columnIndex);
@@ -192,19 +224,17 @@ function dmvPostgresQuery_(ctx, discoverOnly) {
       });
       rows.push(row);
     }
-    return {
-      columns: columns,
-      rows: rows,
-      metadata: {
-        complete: true,
-        mode: 'Read-only SQL',
-        note: 'Exact decimal and 64-bit integer columns are exported as text.',
-      },
+    var metadata = {
+      complete: true,
+      mode: 'Read-only SQL',
+      note: 'Exact decimal and 64-bit integer columns are exported as text.',
     };
+    if (rank) rows = dmvSqlTopRows_(rank, rankKey, rows, metadata);
+    return { columns: columns, rows: rows, metadata: metadata };
   } catch (error) {
     var message = String((error && error.message) || '');
     if (
-      /^(The SQL result|Unknown or unavailable|Field selections|Choose between|Give each SQL|Select at most|Could not open)/.test(
+      /^(The SQL result|Unknown or unavailable|Field selections|Choose between|Give each SQL|Select at most|Could not open|Keep the top rows|Rank by column)/.test(
         message
       )
     )
@@ -299,7 +329,8 @@ dmvRegisterConnector_({
     {
       id: 'sql_report',
       label: 'SQL report',
-      description: 'Use a SELECT query for the exact summary or table you need.',
+      description:
+        'Use a SELECT query for the exact summary or table you need. For a long list of items, Keep the top rows and Rank by column keep its highest rows and say so.',
       fields: [],
       dateRange: false,
       configFields: [
@@ -309,6 +340,23 @@ dmvRegisterConnector_({
           type: 'textarea',
           required: true,
           help: 'One SELECT or WITH query. Filter or aggregate large tables before importing.',
+        },
+        {
+          key: 'top',
+          label: 'Keep the top rows',
+          type: 'number',
+          required: false,
+          min: 1,
+          // DMV_LIMITS.maxRows, written out: a connector can register before dmv_core.js has run.
+          max: 30000,
+          help: 'Ranks rows by Rank by column, highest first, and keeps this many. Blank keeps every row up to the row limit.',
+        },
+        {
+          key: 'rankBy',
+          label: 'Rank by column',
+          type: 'text',
+          required: false,
+          help: "A column of the query's result; the top rows have its highest values.",
         },
       ],
       fetch: function (ctx) {

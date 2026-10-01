@@ -60,9 +60,10 @@ var DMV_MICROSOFT_ADS_AUDIENCE_METRICS =
   'Impressions Clicks Spend Conversions Revenue | AllConversions AllRevenue ViewThroughConversions Assists';
 
 // One report request type per level: id, label, request type, dimensions, the metrics where the
-// report type supports fewer than the core list, and the columns Microsoft refuses to go without
-// (found by submitting each report type to the live API).
-function dmvMicrosoftAdsLevel_(id, label, type, dims, metrics, requires) {
+// report type supports fewer than the core list, the columns Microsoft refuses to go without
+// (found by submitting each report type to the live API), and false when its rows are not a list
+// to keep the top of.
+function dmvMicrosoftAdsLevel_(id, label, type, dims, metrics, requires, ranked) {
   var lists = function (text) {
     return text.split('|').map(function (part) {
       return part.trim().split(/\s+/);
@@ -78,6 +79,7 @@ function dmvMicrosoftAdsLevel_(id, label, type, dims, metrics, requires) {
     metrics: m[0].concat(m[1]),
     defaults: d[0].concat(m[0]),
     requires: requires ? requires.split(' ') : [],
+    top: ranked !== false,
   };
 }
 
@@ -87,6 +89,10 @@ var DMV_MICROSOFT_ADS_LEVELS = [
     'Account performance',
     'AccountPerformance',
     'TimePeriod AccountName CurrencyCode | AccountId DeviceType Network AdDistribution',
+    undefined,
+    undefined,
+    // One row per account and split: nothing to keep the top of.
+    false,
   ],
   [
     'campaign',
@@ -213,8 +219,34 @@ var DMV_MICROSOFT_ADS_LEVELS = [
     'PublisherUrl',
   ],
 ].map(function (row) {
-  return dmvMicrosoftAdsLevel_(row[0], row[1], row[2], row[3], row[4], row[5]);
+  return dmvMicrosoftAdsLevel_(row[0], row[1], row[2], row[3], row[4], row[5], row[6]);
 });
+
+// Keep the top rows ranks by spend, or by impressions when spend is not selected. A blank one
+// ranks by spend only: without spend the report fails over the row limit, as it always did.
+var DMV_MICROSOFT_ADS_RANKS = ['Spend', 'Impressions'];
+
+// A ranked level can keep only its top rows: the actionable part of a long list.
+var DMV_MICROSOFT_ADS_TOP = {
+  key: 'top',
+  label: 'Keep the top rows',
+  type: 'number',
+  required: false,
+  min: 1,
+  // DMV_LIMITS.maxRows, written out: a connector can register before dmv_core.js has run.
+  max: 30000,
+  help: 'Ranks rows by spend (impressions without spend) and keeps this many. Blank keeps every row up to the row limit.',
+};
+
+// A level offers Keep the top rows when its rows are a list and it reports spend or impressions.
+function dmvMicrosoftAdsRankable_(level, fields) {
+  return (
+    level.top !== false &&
+    fields.some(function (field) {
+      return DMV_MICROSOFT_ADS_RANKS.indexOf(field.key) >= 0;
+    })
+  );
+}
 
 // A descriptor for any report column, typed by Microsoft's naming.
 function dmvMicrosoftAdsColumn_(name, isDefault) {
@@ -502,7 +534,6 @@ function dmvMicrosoftAdsReport_(ctx, level, available, fixed) {
     )
       columns.push(dmvMicrosoftAdsColumn_(name, false));
   });
-  var connection = dmvMicrosoftAdsConnection_(ctx);
   var periods = columns.filter(function (field) {
     return DMV_MICROSOFT_ADS_PERIODS[field.key];
   });
@@ -513,6 +544,36 @@ function dmvMicrosoftAdsReport_(ctx, level, available, fixed) {
     : periods.length
       ? DMV_MICROSOFT_ADS_PERIODS[periods[0].key]
       : 'Summary';
+  // Without a period the rows are totals for the range: a ranking, the biggest spenders first.
+  // Keep the top rows keeps that many (by impressions without spend); blank, the row limit keeps
+  // the top by spend, as for Google Ads. A period makes a trend, whose periods each need every
+  // row: it refuses a top and fails over the row limit. Both are refused before any request.
+  var ranks = DMV_MICROSOFT_ADS_RANKS.map(function (key) {
+    return columns.filter(function (field) {
+      return field.key === key;
+    })[0];
+  }).filter(Boolean);
+  var split = periods.length ? periods[0].label : '';
+  var top =
+    !fixed && dmvMicrosoftAdsRankable_(level, available)
+      ? dmvTopRows_(
+          ctx,
+          split
+            ? 'Keep the top rows ranks totals for the date range, so it cannot be combined with ' +
+                split +
+                '. Remove ' +
+                split +
+                ' or clear Keep the top rows.'
+            : ranks.length
+              ? ''
+              : 'Keep the top rows ranks by spend or impressions. Select one of them.'
+        )
+      : 0;
+  var rank =
+    aggregation === 'Summary' && ranks.length && (top || ranks[0].key === 'Spend')
+      ? ranks[0]
+      : null;
+  var connection = dmvMicrosoftAdsConnection_(ctx);
   // Every period column is Microsoft's TimePeriod at another aggregation.
   var source = function (field) {
     return DMV_MICROSOFT_ADS_PERIODS[field.key] ? 'TimePeriod' : field.key;
@@ -554,7 +615,8 @@ function dmvMicrosoftAdsReport_(ctx, level, available, fixed) {
   );
   var rows = [],
     currency = '',
-    note = '';
+    note = '',
+    topRows = 0;
   if (lines.length) {
     var index = {};
     lines[0].forEach(function (name, position) {
@@ -581,23 +643,24 @@ function dmvMicrosoftAdsReport_(ctx, level, available, fixed) {
       }
       return row;
     });
-    // Without a period the rows are a ranking: the biggest spenders first, and the row limit
-    // keeps the top of it, as for Google Ads. A trend needs every row and fails over the limit.
-    var ranked =
-      !fixed &&
-      aggregation === 'Summary' &&
-      columns.some(function (field) {
-        return field.key === 'Spend';
-      });
-    if (ranked) {
-      mapped.sort(function (a, b) {
-        return (b.Spend || 0) - (a.Spend || 0);
-      });
-      if (mapped.length > ctx.maxRows) {
-        mapped = mapped.slice(0, ctx.maxRows);
+    // A list cut to its top rows says so with topRows (a dashboard labels totals over it) and
+    // a note; the row limit's note also says how to get more, and only when it cut the list.
+    if (rank) {
+      var by = rank.label.toLowerCase();
+      var kept = dmvKeepTopRows_(mapped, top || ctx.maxRows, rank.key, by);
+      if (top) {
+        topRows = kept.topRows || 0;
+        note = kept.note || '';
+      } else if (mapped.length > ctx.maxRows) {
+        topRows = ctx.maxRows;
         note =
-          'Top ' + ctx.maxRows.toLocaleString() + ' rows by spend; raise the row limit for more.';
+          'Top ' +
+          ctx.maxRows.toLocaleString() +
+          ' rows by ' +
+          by +
+          '; raise the row limit for more.';
       }
+      mapped = kept.rows;
     }
     dmvAppendPage_(rows, mapped, ctx.maxRows);
   }
@@ -616,6 +679,7 @@ function dmvMicrosoftAdsReport_(ctx, level, available, fixed) {
       : level.label + (periods.length ? ' by ' + periods[0].label.toLowerCase() : ', whole period'),
     complete: true,
   };
+  if (topRows) metadata.topRows = topRows;
   if (note) metadata.note = note;
   return { columns: columns, rows: rows, metadata: metadata };
 }
@@ -659,13 +723,16 @@ function dmvMicrosoftAdsDiscover_(ctx, level) {
 
 function dmvMicrosoftAdsLevelReport_(level) {
   var curated = dmvMicrosoftAdsLevelFields_(level);
+  var rankable = dmvMicrosoftAdsRankable_(level, curated);
   return {
     id: level.id,
     label: level.label,
     description:
-      'One row per combination of the dimensions you select. Date, Week or Month sets the period; with none, rows are totals ranked by spend. Load columns lists every column Microsoft offers for this report. Reports generate asynchronously; allow a minute.',
+      'One row per combination of the dimensions you select. Date, Week or Month sets the period; with none, rows are totals ranked by spend' +
+      (rankable ? ', and Keep the top rows keeps only the top of them' : '') +
+      '. Load columns lists every column Microsoft offers for this report. Reports generate asynchronously; allow a minute.',
     fields: curated,
-    configFields: [],
+    configFields: rankable ? [Object.assign({}, DMV_MICROSOFT_ADS_TOP)] : [],
     dateRange: true,
     fetch: function (ctx) {
       return dmvMicrosoftAdsReport_(ctx, level, dmvMicrosoftAdsLevelFields_(level), false);

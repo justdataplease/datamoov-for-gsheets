@@ -219,6 +219,64 @@ function dmvAppendPage_(rows, page, maxRows) {
   });
 }
 
+// A ranked report's "Keep the top rows" (config key top): 0 when blank, so every row up to the
+// row limit is kept. The form sends '' for a blank field and the chat may send "100". A refusal
+// (a period column, nothing to rank by) is thrown when a top is set, before the row-limit check,
+// because it is the setting to change first. A top above this report's row limit is refused
+// naming both, instead of failing later on the limit's own advice (dates, dimensions).
+function dmvTopRows_(ctx, refusal) {
+  var value = (ctx.config || {}).top;
+  if (value === undefined || value === null || String(value).trim() === '') return 0;
+  var top = Number(value);
+  if (!Number.isInteger(top) || top < 1 || top > DMV_LIMITS.maxRows)
+    throw new Error(
+      'Keep the top rows must be a whole number from 1 to ' +
+        DMV_LIMITS.maxRows.toLocaleString() +
+        ', or blank for every row.'
+    );
+  if (refusal) throw new Error(refusal);
+  if (top > ctx.maxRows)
+    throw new Error(
+      'Keep the top rows (' +
+        top.toLocaleString() +
+        ") is above this report's row limit (" +
+        ctx.maxRows.toLocaleString() +
+        '). Lower it or raise the row limit.'
+    );
+  return top;
+}
+
+// Ranks rows by one numeric column, highest first (blanks last, ties in their order), and keeps
+// the top ones; a top of 0 only ranks. topRows and the note ("Top 300 by spend", rankLabel as it
+// reads in a sentence) are set only when exactly top rows remain: a shorter list is the whole
+// list. A dashboard labels totals over a list cut this way.
+function dmvKeepTopRows_(rows, top, rankKey, rankLabel) {
+  var ranked = rows.map(function (row, index) {
+    var value = row[rankKey];
+    if (value === undefined || value === null || String(value).trim() === '') value = null;
+    else {
+      value = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
+      if (!isFinite(value))
+        throw new Error('Keep the top rows ranks by ' + rankLabel + ', which must hold numbers.');
+    }
+    return { row: row, value: value, index: index };
+  });
+  ranked.sort(function (a, b) {
+    var blank = (a.value === null) - (b.value === null);
+    return blank || (a.value === null ? 0 : b.value - a.value) || a.index - b.index;
+  });
+  var kept = {
+    rows: ranked.slice(0, top || ranked.length).map(function (item) {
+      return item.row;
+    }),
+  };
+  if (top && kept.rows.length === top) {
+    kept.topRows = top;
+    kept.note = 'Top ' + top.toLocaleString() + ' by ' + rankLabel;
+  }
+  return kept;
+}
+
 // Inclusive YYYY-MM-DD range to UTC epoch milliseconds [start, end).
 function dmvUtcWindow_(ctx) {
   var start = Date.parse(String(ctx.startDate) + 'T00:00:00Z');

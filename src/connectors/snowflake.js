@@ -70,6 +70,13 @@ function dmvSnowflakeError_(status, body) {
     );
   if (status === 408)
     return 'Snowflake exceeded the 45-second statement timeout. Narrow or aggregate the query.';
+  // An invalid identifier: often a quoted lowercase name for an unquoted, uppercase alias.
+  if (body && String(body.code) === '000904')
+    return (
+      'Snowflake does not know a name in the query' +
+      code +
+      '. Check its column names: Snowflake names unquoted aliases in uppercase.'
+    );
   if (status === 422 || status === 400)
     return (
       'Snowflake could not execute the query' +
@@ -168,6 +175,22 @@ function dmvSnowflakeFields_(rowType) {
   });
 }
 
+// Result columns as Keep the top rows reads them: numbers to rank by, dates that may be periods.
+function dmvSnowflakeTopColumns_(fields) {
+  return fields.map(function (field) {
+    return {
+      key: field.key,
+      numeric: /^(fixed|real|float|double)$/.test(field.nativeType),
+      dated: /^(date|timestamp_ntz|timestamp_ltz|timestamp_tz)$/.test(field.nativeType),
+    };
+  });
+}
+
+// Snowflake quotes a name in double quotes, doubling any inside it, and matches it exactly.
+function dmvSnowflakeName_(name) {
+  return '"' + name.replace(/"/g, '""') + '"';
+}
+
 function dmvSnowflakeValue_(column, value) {
   if (value === null) return null;
   // The SQL API's JSON format represents non-null scalar values as strings.
@@ -191,12 +214,19 @@ function dmvSnowflakeQuery_(ctx, discoverOnly) {
   var config = dmvSnowflakeConfig_(ctx.credentials);
   var sql = dmvReadOnlySql_(ctx.config.query, { hashComments: false });
   var maximum = dmvInteger_(ctx.maxRows, 1, DMV_LIMITS.maxRows, 'Row limit');
+  // Keep the top rows ranks in the database; field discovery reads the plain query's columns.
+  var rank = discoverOnly ? null : dmvSqlTop_(ctx, dmvSnowflakeName_);
+  // The plain query's columns come first, as BigQuery's dry run: the rank column is matched to
+  // the result's own name (case aside) or refused with the columns, before it ranks.
+  var rankKey = rank
+    ? dmvSqlTopColumn_(rank, dmvSnowflakeTopColumns_(dmvSnowflakeQuery_(ctx, true)))
+    : '';
   var body = Object.assign({}, config.context, {
     statement:
       'SELECT * FROM (\n' +
       sql +
-      '\n) AS datamoov_report LIMIT ' +
-      (discoverOnly ? 0 : maximum + 1),
+      '\n) AS datamoov_report' +
+      (rank ? dmvSqlTopOrder_(rank, rankKey) : ' LIMIT ' + (discoverOnly ? 0 : maximum + 1)),
     timeout: DMV_SNOWFLAKE.timeoutSeconds,
     parameters: {
       multi_statement_count: '1',
@@ -254,10 +284,7 @@ function dmvSnowflakeQuery_(ctx, discoverOnly) {
     metadata.numRows < 0
   )
     throw new Error('Snowflake did not return a complete single-statement result.');
-  if (metadata.numRows > (discoverOnly ? 0 : maximum))
-    throw new Error(
-      'The SQL result exceeds the row limit. Aggregate the query (GROUP BY) or filter it; a LIMIT would keep only part of the rows.'
-    );
+  if (metadata.numRows > (discoverOnly ? 0 : maximum)) throw dmvSqlOverLimit_('The SQL result');
   var available = dmvSnowflakeFields_(metadata.rowType);
   var columns = discoverOnly ? available : dmvSelectFields_(ctx.fields, available);
   var partitions = metadata.partitionInfo;
@@ -337,7 +364,7 @@ function dmvSnowflakeQuery_(ctx, discoverOnly) {
   if (rows.length !== metadata.numRows)
     throw new Error('Snowflake returned an incomplete query result.');
   if (discoverOnly) return available;
-  return {
+  var result = {
     columns: columns,
     rows: rows,
     metadata: {
@@ -346,6 +373,8 @@ function dmvSnowflakeQuery_(ctx, discoverOnly) {
       note: 'Exact decimals and integer columns wider than 15 digits are exported as text. Timestamps retain up to 9 fractional digits.',
     },
   };
+  if (rank) result.rows = dmvSqlTopRows_(rank, rankKey, rows, result.metadata);
+  return result;
 }
 
 function dmvSnowflakeTables_(ctx, options) {
@@ -522,7 +551,7 @@ dmvRegisterConnector_({
       id: 'sql_report',
       label: 'SQL report',
       description:
-        'One SELECT or WITH query, with complete result partitions and a 45-second statement limit.',
+        'One SELECT or WITH query, with complete result partitions and a 45-second statement limit. For a long list of items, Keep the top rows and Rank by column keep its highest rows and say so.',
       dateRange: false,
       fields: [],
       configFields: [
@@ -532,6 +561,23 @@ dmvRegisterConnector_({
           type: 'textarea',
           required: true,
           help: 'One SELECT or WITH query. Filter or aggregate before importing. Exact decimals and large integers remain text.',
+        },
+        {
+          key: 'top',
+          label: 'Keep the top rows',
+          type: 'number',
+          required: false,
+          min: 1,
+          // DMV_LIMITS.maxRows, written out: a connector can register before dmv_core.js has run.
+          max: 30000,
+          help: 'Ranks rows by Rank by column, highest first, and keeps this many. Blank keeps every row up to the row limit.',
+        },
+        {
+          key: 'rankBy',
+          label: 'Rank by column',
+          type: 'text',
+          required: false,
+          help: "A column of the query's result; the top rows have its highest values.",
         },
       ],
       fetch: function (ctx) {

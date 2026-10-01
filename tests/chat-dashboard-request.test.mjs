@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDatamoovSandbox, plain } from './helpers/datamoov-sandbox.mjs';
+import vm from 'node:vm';
+import { readFileSync } from 'node:fs';
 
 // A whole dashboard request as a model builds it when it follows the prompt and the tool schema
 // word for word: two accounts, the previous period, a campaign matrix with flags, keyword waste
@@ -367,7 +369,7 @@ test('config keys and the catalog cover only the selected sources and say each t
   const [a, b] = f.connections.map((connection) => connection.id);
   const config = (ids) => plain(f.api.dmvChatTools_(f.api.dmvChatSession_(f.book, ids))[0].input_schema.properties.config.properties);
   assert.deepEqual(config([a, b, shop.id]), {
-    top: { type: 'number', description: 'Google Ads · Keyword performance, Ad assets: Keep the top rows | Shop · Order lines: Keep the top rows' },
+    top: { type: 'number', description: 'Google Ads · Keyword performance, Ad assets; Shop · Order lines: Keep the top rows' },
   });
   assert.deepEqual(config([shop.id]), { top: { type: 'number', description: 'Shop · Order lines: Keep the top rows' } });
   assert.deepEqual(config([]), {});
@@ -386,4 +388,26 @@ test('config keys and the catalog cover only the selected sources and say each t
   );
   assert.equal(two.catalog.match(/reportType "keyword"/g).length, 1);
   assert.doesNotMatch(sizes([a, shop.id]).catalog, /reportType "orders"/);
+});
+
+// The real ranked sources share Keep the top rows' wording: with every one selected, each
+// wording is described once and names the sources and reports that offer it.
+test('Keep the top rows is described once per wording across the real ranked sources', () => {
+  const f = createDatamoovSandbox();
+  const ids = ['google_ads', 'microsoft_ads', 'facebook_ads', 'linkedin_ads', 'bigquery', 'postgres', 'snowflake'];
+  // Connectors register into the sandbox from their own context, with the shared files they use.
+  const context = vm.createContext({});
+  for (const file of ['dmv_core.js', 'dmv_connector_helpers.js', 'dmv_sql.js', ...ids.map((id) => 'connectors/' + id + '.js')]) {
+    if (file.startsWith('connectors/')) context.dmvRegisterConnector_ = (definition) => f.api.dmvRegisterConnector_(definition);
+    new vm.Script(readFileSync(new URL('../src/' + file, import.meta.url), 'utf8'), { filename: file }).runInContext(context);
+  }
+  const catalog = {};
+  f.api.dmvCatalog_().forEach((connector) => (catalog[connector.id] = connector));
+  const config = plain(f.api.dmvChatConfigSchema_({ connections: ids.map((connectorId) => ({ connectorId })), catalog })).properties;
+  const segments = config.top.description.split(' | ');
+  assert.equal(segments.length, 2, config.top.description);
+  assert.match(segments[0], /^Google Ads · [^;]+; Microsoft Ads \(Bing\) · [^;]+; Facebook Ads · [^;]+; LinkedIn Ads · [^;]+: Keep the top rows\. Ranks rows by spend /);
+  assert.match(segments[1], /^BigQuery · SQL query; PostgreSQL · SQL report; Snowflake · SQL report: Keep the top rows\. Ranks rows by Rank by column/);
+  assert.equal(config.top.description.match(/Blank keeps every row up to the row limit/g).length, 2);
+  assert.equal(config.rankBy.description, "BigQuery · SQL query; PostgreSQL · SQL report; Snowflake · SQL report: Rank by column. A column of the query's result; the top rows have its highest values.");
 });

@@ -15,6 +15,12 @@ function load() {
 
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const account = { currency: 'EUR', timezone_name: 'Europe/Athens' };
+// The row ceiling that Keep the top rows writes out as its literal max.
+const ceiling = (() => {
+  const scope = vm.createContext({});
+  vm.runInContext(fs.readFileSync(new URL('../src/dmv_core.js', import.meta.url), 'utf8'), scope, { filename: 'dmv_core.js' });
+  return scope.DMV_LIMITS.maxRows;
+})();
 
 function run(fields, responses, overrides = {}) {
   const calls = [];
@@ -63,6 +69,70 @@ test('no date column gives account totals for the period, and an ad column reach
   assert.equal(ads.params.get('time_increment'), 'monthly');
   assert.equal(ads.params.get('sort'), null);
   assert.deepEqual(ads.output.rows, [{ month: '2026-09-01', ad_name: 'Video A', campaign_name: 'Brand', spend: 3 }]);
+});
+
+test('Keep the top rows asks Meta for its ranking, stops paging once the top is in and says when the list was cut', () => {
+  const connector = load();
+  const report = connector.reports.find((item) => item.id === 'insights');
+  assert.deepEqual(plain(report.configFields).map((field) => field.key), ['purchaseActionType', 'top']);
+  const top = plain(report.configFields).find((field) => field.key === 'top');
+  assert.deepEqual([top.label, top.type, top.required, top.min, top.max], ['Keep the top rows', 'number', false, 1, ceiling]);
+  assert.equal(top.help, 'Ranks rows by spend (impressions without spend) and keeps this many. Blank keeps every row up to the row limit.');
+  assert.match(report.description, /none gives totals ranked by spend, and Keep the top rows keeps only the top of them/);
+  // The original campaign report is always daily: nothing to keep the top of.
+  assert.deepEqual(plain(connector.reports.find((item) => item.id === 'campaign_daily').configFields).map((field) => field.key), ['purchaseActionType']);
+
+  const campaigns = (from, count) => Array.from({ length: count }, (_, index) => ({ campaign_name: `C${from + index}`, spend: String(5000 - from - index), impressions: String(from + index) }));
+  const next = (after) => ({ cursors: { after }, next: `https://graph.facebook.com/v26.0/act_123/insights?after=${after}` });
+  const cursors = (calls) => calls.filter((call) => /\/insights\?/.test(call.url)).map((call) => new URL(call.url).searchParams.get('after'));
+
+  // One page holds the top: Meta ranks, the page asks for no more and the next cursor is not followed.
+  const cut = run(['campaign_name', 'spend'], [{ data: campaigns(0, 2), paging: next('p2') }], { config: { top: 2 } });
+  assert.deepEqual(['sort', 'limit', 'level', 'time_increment'].map((key) => cut.params.get(key)), ['spend_descending', '2', 'campaign', 'all_days']);
+  assert.deepEqual(cursors(cut.calls), [null]);
+  assert.deepEqual(cut.output.rows, [{ campaign_name: 'C0', spend: 5000 }, { campaign_name: 'C1', spend: 4999 }]);
+  assert.deepEqual([cut.output.metadata.topRows, cut.output.metadata.note], [2, 'Top 2 by spend']);
+  assert.equal(cut.output.metadata.grain, 'Whole-period campaign');
+
+  // A top over several pages keeps full pages, takes what it still needs from the last one and stops.
+  const paged = run(['campaign_name', 'spend'], [{ data: campaigns(0, 500), paging: next('p2') }, { data: campaigns(500, 500), paging: next('p3') }], { config: { top: '700' }, maxRows: 1000 });
+  assert.equal(paged.params.get('limit'), '500');
+  assert.deepEqual(cursors(paged.calls), [null, 'p2'], 'the third page is never asked for');
+  assert.equal(paged.output.rows.length, 700);
+  assert.deepEqual(paged.output.rows[699], { campaign_name: 'C699', spend: 4301 });
+  assert.deepEqual([paged.output.metadata.topRows, paged.output.metadata.note], [700, 'Top 700 by spend']);
+
+  // Without spend a top ranks by impressions, across breakdowns too.
+  const reach = run(['ad_name', 'country', 'impressions'], [{ data: [{ ad_name: 'A', country: 'GR', impressions: '900' }, { ad_name: 'B', country: 'DE', impressions: '40' }] }], { config: { top: 2 } });
+  assert.deepEqual(['sort', 'level', 'breakdowns'].map((key) => reach.params.get(key)), ['impressions_descending', 'ad', 'country']);
+  assert.deepEqual([reach.output.metadata.topRows, reach.output.metadata.note], [2, 'Top 2 by impressions']);
+
+  // Fewer rows than asked for are the whole list: never labelled.
+  const whole = run(['campaign_name', 'spend', 'impressions'], [{ data: campaigns(0, 3) }], { config: { top: 5 } });
+  assert.deepEqual(['sort', 'limit'].map((key) => whole.params.get(key)), ['spend_descending', '5']);
+  assert.equal(whole.output.rows.length, 3);
+  assert.deepEqual([whole.output.metadata.topRows, whole.output.metadata.note], [undefined, undefined]);
+
+  // Blank keeps every row as before: ranked by spend when selected, failing over the row limit.
+  const blank = run(['campaign_name', 'spend'], [{ data: campaigns(0, 3) }], { config: { top: '' } });
+  assert.deepEqual(['sort', 'limit'].map((key) => blank.params.get(key)), ['spend_descending', '101']);
+  assert.deepEqual([blank.output.rows.length, blank.output.metadata.topRows, blank.output.metadata.note], [3, undefined, undefined]);
+  assert.equal(run(['campaign_name', 'impressions'], [{ data: [] }]).params.get('sort'), null);
+  assert.throws(() => run(['campaign_name', 'spend'], [{ data: campaigns(0, 101) }]), /exceeds the row limit/);
+
+  // Refusals come before any request: a malformed top, a period column (a trend needs every row),
+  // nothing to rank by, then a top above the row limit, naming both settings.
+  let requests = 0;
+  const refuse = (fields, value, pattern) =>
+    assert.throws(() => run(fields, [], { config: { top: value }, http() { requests++; return account; } }), pattern, `${fields} ${value}`);
+  for (const value of [0, 1.5, 'many', 30001]) refuse(['campaign_name', 'spend'], value, /^Error: Keep the top rows must be a whole number from 1 to 30,000, or blank for every row\.$/);
+  for (const [key, label] of [['date_start', 'Date'], ['week', 'Week'], ['month', 'Month'], ['hourly_stats_aggregated_by_advertiser_time_zone', 'Hour of day']])
+    refuse(['campaign_name', key, 'spend'], 5, new RegExp(`^Error: Keep the top rows ranks totals for the date range, so it cannot be combined with ${label}\\. Remove ${label} or clear Keep the top rows\\.$`));
+  refuse(['campaign_name', 'clicks'], 5, /^Error: Keep the top rows ranks by spend or impressions\. Select one of them\.$/);
+  refuse(['campaign_name', 'spend'], 101, /^Error: Keep the top rows \(101\) is above this report's row limit \(100\)\. Lower it or raise the row limit\.$/);
+  assert.equal(requests, 0, 'nothing was requested');
+  // The hour of day without a top still ranks by spend, as before.
+  assert.equal(run(['hourly_stats_aggregated_by_advertiser_time_zone', 'spend'], [{ data: [] }]).params.get('sort'), 'spend_descending');
 });
 
 test('Week asks for calendar weeks from Monday, cut to the requested dates, and labels each row with its Monday', () => {

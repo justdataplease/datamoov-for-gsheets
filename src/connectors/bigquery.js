@@ -1,5 +1,6 @@
 /** BigQuery read-only reports, validated with a dry-run Job before execution. */
-function dmvBigQueryConfig_(ctx) {
+// order is Keep the top rows' ORDER BY and LIMIT, which replaces the row limit's LIMIT.
+function dmvBigQueryConfig_(ctx, order) {
   var project = String(ctx.config.projectId || '').trim();
   if (!/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/.test(project))
     throw new Error('Enter a valid Google Cloud project ID.');
@@ -7,7 +8,10 @@ function dmvBigQueryConfig_(ctx) {
   // A subquery cannot contain DDL, DML, or scripting statements. Validate and
   // execute this identical wrapper; never execute the original SQL separately.
   sql =
-    'SELECT * FROM (\n' + sql + '\n) AS datamoov_report LIMIT ' + (Number(ctx.maxRows || 1000) + 1);
+    'SELECT * FROM (\n' +
+    sql +
+    '\n) AS datamoov_report' +
+    (order || ' LIMIT ' + (Number(ctx.maxRows || 1000) + 1));
   var bytes = String(ctx.config.maximumBytesBilled || '1073741824');
   if (!/^\d+$/.test(bytes) || Number(bytes) < 1 || Number(bytes) > 10737418240)
     throw new Error('Maximum bytes billed must be between 1 and 10 GiB (10737418240 bytes).');
@@ -45,8 +49,8 @@ function dmvBigQueryRequest_(ctx, url, body) {
   return response;
 }
 
-function dmvBigQueryDryRun_(ctx) {
-  var config = dmvBigQueryConfig_(ctx);
+function dmvBigQueryDryRun_(ctx, order) {
+  var config = dmvBigQueryConfig_(ctx, order);
   var request = {
     dryRun: true,
     query: config.sql,
@@ -100,6 +104,28 @@ function dmvBigQueryField_(field) {
 
 function dmvBigQueryDiscover_(ctx) {
   return dmvBigQueryDryRun_(ctx).fields.map(dmvBigQueryField_);
+}
+
+// A result column as Keep the top rows reads it: numbers to rank by, dates that may be periods.
+function dmvBigQueryTopColumn_(field) {
+  var single = field.mode !== 'REPEATED';
+  return {
+    key: field.name,
+    numeric:
+      single &&
+      ['INTEGER', 'INT64', 'FLOAT', 'FLOAT64', 'NUMERIC', 'BIGNUMERIC'].indexOf(field.type) >= 0,
+    dated: single && ['DATE', 'DATETIME', 'TIMESTAMP'].indexOf(field.type) >= 0,
+  };
+}
+
+// BigQuery quotes a name in backticks, where a backslash starts an escape sequence: a name
+// holding either is refused rather than escaped. Names match without case.
+function dmvBigQueryName_(name) {
+  if (/[`\\]/.test(name))
+    throw new Error(
+      'Rank by column cannot hold a backtick or backslash. Give the column a plain alias in the query.'
+    );
+  return '`' + name + '`';
 }
 
 // Up to 10 project.dataset names the chat may explore.
@@ -212,8 +238,17 @@ function dmvBigQuerySchemaShape_(fields) {
 }
 
 function dmvBigQueryFetch_(ctx) {
-  var prepared = dmvBigQueryDryRun_(ctx),
-    config = prepared.config,
+  // Keep the top rows is checked before any request. The plain query's dry run names its
+  // columns, so a rank column it lacks, one without numbers or one beside a period column is
+  // refused before anything runs; the ranked query is then dry-run as it will execute.
+  var rank = dmvSqlTop_(ctx, dmvBigQueryName_),
+    rankKey = '';
+  var prepared = dmvBigQueryDryRun_(ctx);
+  if (rank) {
+    rankKey = dmvSqlTopColumn_(rank, prepared.fields.map(dmvBigQueryTopColumn_));
+    prepared = dmvBigQueryDryRun_(ctx, rank.order);
+  }
+  var config = prepared.config,
     fields = prepared.fields;
   var columns;
   try {
@@ -271,9 +306,7 @@ function dmvBigQueryFetch_(ctx) {
     if (response.totalRows != null) {
       total = Number(response.totalRows);
       if (!Number.isSafeInteger(total) || total < 0 || total > maximum)
-        throw new Error(
-          'BigQuery result exceeds the row limit. Aggregate the query (GROUP BY) or filter it; a LIMIT would keep only part of the rows.'
-        );
+        throw dmvSqlOverLimit_('BigQuery result');
     }
     if (
       response.schema &&
@@ -294,32 +327,24 @@ function dmvBigQueryFetch_(ctx) {
       });
       rows.push(row);
     });
-    if (rows.length > maximum)
-      throw new Error(
-        'BigQuery result exceeds the row limit. Aggregate the query (GROUP BY) or filter it; a LIMIT would keep only part of the rows.'
-      );
+    if (rows.length > maximum) throw dmvSqlOverLimit_('BigQuery result');
     if (!response.pageToken) break;
-    if (rows.length >= maximum)
-      throw new Error(
-        'BigQuery result exceeds the row limit. Aggregate the query (GROUP BY) or filter it; a LIMIT would keep only part of the rows.'
-      );
+    if (rows.length >= maximum) throw dmvSqlOverLimit_('BigQuery result');
     if (seen[response.pageToken]) throw new Error('BigQuery returned a repeated result page.');
     seen[response.pageToken] = true;
     response = dmvBigQueryRequest_(ctx, resultUrl(response.pageToken));
   }
   if (total != null && total !== rows.length)
     throw new Error('BigQuery returned an incomplete result. Retry the report.');
-  return {
-    columns: columns,
-    rows: rows,
-    metadata: {
-      complete: true,
-      rowCount: rows.length,
-      projectId: config.project,
-      jobId: (job && job.jobId) || '',
-      maximumBytesBilled: config.bytes,
-    },
+  var metadata = {
+    complete: true,
+    rowCount: rows.length,
+    projectId: config.project,
+    jobId: (job && job.jobId) || '',
+    maximumBytesBilled: config.bytes,
   };
+  if (rank) rows = dmvSqlTopRows_(rank, rankKey, rows, metadata);
+  return { columns: columns, rows: rows, metadata: metadata };
 }
 
 dmvRegisterConnector_({
@@ -385,7 +410,8 @@ dmvRegisterConnector_({
     {
       id: 'query',
       label: 'SQL query',
-      description: 'One SELECT or WITH query. Dry-run validation happens before execution.',
+      description:
+        'One SELECT or WITH query. Dry-run validation happens before execution. For a long list of items, Keep the top rows and Rank by column keep its highest rows and say so.',
       fields: [],
       dateRange: false,
       configFields: [
@@ -409,6 +435,23 @@ dmvRegisterConnector_({
           type: 'number',
           default: 1073741824,
           help: 'Default 1 GiB; maximum 10 GiB. A dry run checks this before execution.',
+        },
+        {
+          key: 'top',
+          label: 'Keep the top rows',
+          type: 'number',
+          required: false,
+          min: 1,
+          // DMV_LIMITS.maxRows, written out: a connector can register before dmv_core.js has run.
+          max: 30000,
+          help: 'Ranks rows by Rank by column, highest first, and keeps this many. Blank keeps every row up to the row limit.',
+        },
+        {
+          key: 'rankBy',
+          label: 'Rank by column',
+          type: 'text',
+          required: false,
+          help: "A column of the query's result; the top rows have its highest values.",
         },
       ],
       fetch: dmvBigQueryFetch_,

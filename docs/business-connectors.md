@@ -71,7 +71,8 @@ scheduled refreshes; pasted expiring access tokens need manual replacement.
 The connector accepts one SELECT or WITH query. A shared conservative scanner
 rejects write keywords, scripts, wrapper escapes, and incomplete syntax. Raw,
 bytes, triple-quoted, backslash-escaped, and dollar-quoted literals are currently
-unsupported. The query is wrapped as a SELECT subquery with `LIMIT maxRows + 1`;
+unsupported. The query is wrapped as a SELECT subquery with `LIMIT maxRows + 1`
+(or the ranked wrapper of [Keep the top rows](#sql-lists-keep-the-top-rows));
 the identical wrapped statement is dry-run validated and then executed.
 Field discovery reads the dry-run schema. There is no write job, dataset
 mutation, or destination-table parameter.
@@ -109,7 +110,8 @@ PATs and pasted OAuth tokens are not renewed by the add-on; replace them before 
 
 **Save connection** runs SELECT 1. The SQL report accepts one SELECT or WITH query,
 wraps it as a subquery and requests one extra row beyond the chosen limit to detect
-overflow. **Load columns** executes the same wrapper with LIMIT 0. Each execution
+overflow (or ranks and keeps its top rows, see
+[Keep the top rows](#sql-lists-keep-the-top-rows)). **Load columns** executes the same wrapper with LIMIT 0. Each execution
 requests a 45-second statement timeout, polls within the shared deadline, and retrieves
 all result partitions. Missing rows, changed schemas, oversized responses and row-limit
 overflow stop the report before output is written. Snowflake compute charges still apply,
@@ -121,6 +123,44 @@ values remain text. Cast a metric to DOUBLE explicitly in SQL when floating-poin
 aggregation is appropriate. Chat explores only the configured database/schema and runs
 its SQL through the same report adapter. Changing the account, database, schema, role
 or warehouse behind saved reports requires a new connection.
+
+## SQL lists: Keep the top rows
+
+The PostgreSQL, BigQuery and Snowflake reports take two optional settings for a ranked list,
+such as the 300 products with the most revenue:
+
+- **Keep the top rows**: how many rows to keep, from 1 to the report's row limit. Blank keeps
+  every row up to the row limit, as before.
+- **Rank by column**: a numeric column of the query's result; the top rows have its highest
+  values. Each setting needs the other: a top without a rank column, or a rank column without a
+  top, is refused before anything runs, so neither is guessed or silently ignored.
+
+With both set, the report wraps the query as `SELECT * FROM (<query>) AS datamoov_report ORDER
+BY <column> DESC NULLS LAST LIMIT <n>` instead of failing over the row limit, and the read-only
+guard still checks the query itself. The column name is quoted, never pasted in as SQL:
+`"revenue"` in PostgreSQL and Snowflake (a double quote inside is doubled), `` `revenue` `` in
+BigQuery (a name holding a backtick or backslash is refused; give it a plain alias). The plain
+query's columns are read first (a BigQuery dry run, a `LIMIT 0` run in PostgreSQL and Snowflake)
+and the name is matched to the result's own, so `revenue` finds Snowflake's `REVENUE` and
+PostgreSQL's `revenue` whatever its case; the ranked query quotes the result's name. A name the
+result lacks is refused with the result's columns, and a column that is not numeric is refused
+too.
+
+When exactly that many rows come back, the result carries `metadata.topRows` and a note led by
+"Top 300 by revenue", so a dashboard labels its totals "Total (top 300)" and its cards "top 300
+by revenue"; fewer rows are the whole result and carry no label. A list ranks one row per item,
+so a top is refused beside a period column, naming it: one named date, day, week, month, quarter
+or year whatever its type, or a date or timestamp column whose name holds one of those words
+(`order_date`, `week_start`). Any other date column, such as `MAX(order_date) AS last_ordered`,
+describes each item and is kept.
+
+That label is why a list is cut here rather than by a `LIMIT` in the SQL: a `LIMIT` inside the
+query looks exactly like a complete result, so the rows it drops would go unmentioned and totals
+over them would read as totals of everything. Aggregate a list to one row per item in the query
+and let **Keep the top rows** keep its head; a query that feeds totals aggregates and needs
+neither setting. A top above the row limit is refused with both numbers, and a query over the
+row limit without a top still fails, naming **Keep the top rows** (not a `LIMIT`) as the way to
+keep a list. That message is kept short so a dashboard's advice around it fits whole.
 
 ## Verification
 
