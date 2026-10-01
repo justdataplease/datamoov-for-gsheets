@@ -27,6 +27,8 @@ var DMV_AI = {
   maxOutputTokens: 4000,
   maxKeyLength: 400,
   maxModelLength: 80,
+  modelPattern: /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/,
+  maxModelSuggestions: 6,
   maxInstructionsLength: 100000,
   instructionPartBytes: 7500,
   maxInstructionEncodedBytes: 400000,
@@ -330,25 +332,32 @@ function dmvAiSettings() {
   return dmvAiSummary_(dmvAiRead_());
 }
 
+// One model rule for Save and Test: blank means the provider default.
+function dmvAiModel_(value, provider) {
+  var model = dmvText_(value || provider.defaultModel, 'Model', DMV_AI.maxModelLength, true);
+  if (!DMV_AI.modelPattern.test(model))
+    throw new Error('Enter a model name using letters, digits, dots, dashes or colons.');
+  return model;
+}
+
+// A blank key keeps the saved one, but only for the provider it was saved for.
+function dmvAiKey_(value, providerId, previous) {
+  var apiKey = typeof value === 'string' ? value.trim() : '';
+  if (!apiKey && previous && previous.provider === providerId) apiKey = previous.apiKey;
+  if (!apiKey) throw new Error('Paste the API key for ' + DMV_AI_PROVIDERS[providerId].label + '.');
+  if (apiKey.length > DMV_AI.maxKeyLength || /[\s\u0000-\u001f\u007f]/.test(apiKey))
+    throw new Error('The API key contains unsupported characters.');
+  return apiKey;
+}
+
 function dmvSaveAiSettings(input) {
   return dmvLocked_(function () {
     input = input || {};
     var provider = DMV_AI_PROVIDERS[input.provider];
     if (!provider) throw new Error('Choose a supported AI provider.');
     var previous = dmvAiRead_();
-    var model = dmvText_(
-      input.model || provider.defaultModel,
-      'Model',
-      DMV_AI.maxModelLength,
-      true
-    );
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/.test(model))
-      throw new Error('Enter a model name using letters, digits, dots, dashes or colons.');
-    var apiKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : '';
-    if (!apiKey && previous && previous.provider === input.provider) apiKey = previous.apiKey;
-    if (!apiKey) throw new Error('Paste the API key for ' + provider.label + '.');
-    if (apiKey.length > DMV_AI.maxKeyLength || /[\s\u0000-\u001f\u007f]/.test(apiKey))
-      throw new Error('The API key contains unsupported characters.');
+    var model = dmvAiModel_(input.model, provider);
+    var apiKey = dmvAiKey_(input.apiKey, input.provider, previous);
     var instructionInput = dmvAiInstructionInput_(
       input.instructions === undefined
         ? (previous && previous.instructions) || ''
@@ -473,32 +482,201 @@ function dmvDeleteAiSettings() {
   });
 }
 
-function dmvTestAi() {
-  var settings = dmvAiRead_();
-  if (!settings) throw new Error('Save an AI provider and API key first.');
+// Test checks the form's provider, model and key without saving them, or the saved settings
+// when called without input. It first asks the provider whether the model exists, then sends a
+// tiny request to prove it answers. Contract: an unknown model is an answer, not a failure, so
+// it returns { ok: false, exists: false, model, message, suggestions } (google.script.run keeps
+// only the message of an error). Success returns { ok: true, exists: true, model, message,
+// displayName? }. A rejected key, an unreachable provider or a failed request throws a
+// message with the key redacted.
+function dmvTestAi(input) {
+  var settings = dmvAiTestSettings_(input);
+  var label = DMV_AI_PROVIDERS[settings.provider].label;
+  var adapter = dmvAiAdapter_(settings.provider);
+  var deadline = Date.now() + 60000;
   try {
-    var reply = dmvAiComplete_(
-      settings,
-      {
-        system: 'You are a connectivity check. Reply with the single word OK.',
-        messages: [{ role: 'user', content: [{ type: 'text', text: 'Reply with OK.' }] }],
-        tools: [],
-        maxTokens: 64,
-      },
-      Date.now() + 60000
-    );
-    return {
+    var info,
+      denied = null;
+    try {
+      info = dmvAiModelGet_(settings, adapter.models.item(settings.model), deadline);
+    } catch (error) {
+      if (error.status === 404) return dmvAiMissingModel_(settings, deadline);
+      // A key may run chat without reading model details (an OpenAI key restricted to model
+      // capabilities): the test request below decides whether the key works.
+      if (error.status !== 401 && error.status !== 403) throw error;
+      denied = error;
+    }
+    var reply;
+    try {
+      reply = dmvAiComplete_(
+        settings,
+        {
+          system: 'You are a connectivity check. Reply with the single word OK.',
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'Reply with OK.' }] }],
+          tools: [],
+          maxTokens: 64,
+        },
+        deadline
+      );
+    } catch (error) {
+      if (denied && /\(HTTP 40[13]\)/.test(String(error.message)))
+        throw new Error(
+          label +
+            ' rejected the API key (HTTP ' +
+            denied.status +
+            ')' +
+            (denied.detail ? ': ' + denied.detail : '. Check the key and its permissions.')
+        );
+      throw new Error(
+        label +
+          ' · ' +
+          settings.model +
+          (denied ? ': the test request failed: ' : ' exists, but the test request failed: ') +
+          error.message
+      );
+    }
+    var result = {
       ok: true,
+      exists: true,
+      model: settings.model,
       message:
-        DMV_AI_PROVIDERS[settings.provider].label +
+        label +
         ' · ' +
         settings.model +
-        ' replied: ' +
+        ' is available and replied: ' +
         String(reply.text || '(no text)').slice(0, 80),
     };
+    var displayName = info && adapter.models.displayName(info);
+    displayName =
+      typeof displayName === 'string'
+        ? displayName
+            .replace(/[\u0000-\u001f\u007f]/g, '')
+            .trim()
+            .slice(0, DMV_AI.maxModelLength)
+        : '';
+    if (displayName) result.displayName = displayName;
+    return result;
   } catch (error) {
     throw new Error(dmvSafeError_(error, { apiKey: settings.apiKey }));
   }
+}
+
+function dmvAiTestSettings_(input) {
+  if (input === undefined || input === null) {
+    var saved = dmvAiRead_();
+    if (!saved) throw new Error('Save an AI provider and API key first.');
+    return saved;
+  }
+  var provider = DMV_AI_PROVIDERS[input.provider];
+  if (!provider) throw new Error('Choose a supported AI provider.');
+  var typed = typeof input.apiKey === 'string' && input.apiKey.trim();
+  return {
+    provider: input.provider,
+    model: dmvAiModel_(input.model, provider),
+    apiKey: dmvAiKey_(input.apiKey, input.provider, typed ? null : dmvAiRead_()),
+  };
+}
+
+// dmvHttp_ reports a failure as a message only. The error callback also keeps the status and
+// the provider's own text, so a missing model (404) reads differently from a rejected key.
+function dmvAiModelGet_(settings, url, deadline) {
+  var adapter = dmvAiAdapter_(settings.provider);
+  var failure = { status: 0, detail: '' };
+  try {
+    return dmvHttp_(
+      { url: url, headers: adapter.headers(settings.apiKey) },
+      [DMV_AI_PROVIDERS[settings.provider].host],
+      deadline,
+      function (code, body) {
+        failure.status = code;
+        failure.detail = dmvAiErrorText_(body).slice(0, 300);
+        return adapter.errorMessage(code, body);
+      }
+    );
+  } catch (error) {
+    // A body that is not JSON skips the callback; the transport's message still names the status.
+    var named = /\(HTTP (\d{3})\)/.exec(String((error && error.message) || ''));
+    var wrapped = new Error((error && error.message) || 'The AI provider request failed.');
+    wrapped.status = failure.status || (named ? Number(named[1]) : 0);
+    wrapped.detail = failure.detail;
+    throw wrapped;
+  }
+}
+
+function dmvAiMissingModel_(settings, deadline) {
+  var provider = DMV_AI_PROVIDERS[settings.provider];
+  var adapter = dmvAiAdapter_(settings.provider);
+  var names = [];
+  try {
+    names = adapter.models.names(dmvAiModelGet_(settings, adapter.models.list, deadline));
+  } catch (ignored) {
+    /* Suggestions are optional; the missing model is still reported. */
+  }
+  var suggestions = dmvAiSimilarModels_(settings.model, names, provider.defaultModel);
+  return {
+    ok: false,
+    exists: false,
+    model: settings.model,
+    suggestions: suggestions,
+    message:
+      'Model "' +
+      settings.model +
+      '" was not found for ' +
+      provider.label +
+      '.' +
+      (suggestions.length ? ' Similar models: ' + suggestions.join(', ') + '.' : ''),
+  };
+}
+
+// The listed models closest to what was typed: the longest shared prefix (the family) first,
+// then the most shared name parts, then the shortest name. With nothing similar, the default.
+function dmvAiSimilarModels_(model, names, defaultModel) {
+  var typed = model.toLowerCase();
+  var typedParts = typed.split(/[-._:]+/);
+  var seen = Object.create(null);
+  var candidates = (Array.isArray(names) ? names : []).filter(function (name) {
+    if (
+      typeof name !== 'string' ||
+      name === model ||
+      seen[name] ||
+      name.length > DMV_AI.maxModelLength ||
+      !DMV_AI.modelPattern.test(name)
+    )
+      return false;
+    seen[name] = true;
+    return true;
+  });
+  var ranked = candidates
+    .map(function (name) {
+      var lower = name.toLowerCase(),
+        prefix = 0;
+      while (prefix < lower.length && lower.charAt(prefix) === typed.charAt(prefix)) prefix++;
+      var shared = lower.split(/[-._:]+/).filter(function (part) {
+        return typedParts.indexOf(part) !== -1;
+      }).length;
+      return { name: name, prefix: prefix, shared: shared };
+    })
+    .filter(function (item) {
+      return item.prefix >= 3 || item.shared > 0;
+    })
+    .sort(function (a, b) {
+      return (
+        b.prefix - a.prefix ||
+        b.shared - a.shared ||
+        a.name.length - b.name.length ||
+        (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+      );
+    })
+    .slice(0, DMV_AI.maxModelSuggestions)
+    .map(function (item) {
+      return item.name;
+    });
+  if (!ranked.length && candidates.indexOf(defaultModel) !== -1) ranked.push(defaultModel);
+  return ranked;
+}
+
+function dmvAiAdapter_(id) {
+  return { anthropic: dmvAiAnthropic_, openai: dmvAiOpenAi_, gemini: dmvAiGemini_ }[id];
 }
 
 // One request to the configured provider. `request` is provider-neutral:
@@ -508,9 +686,7 @@ function dmvTestAi() {
 function dmvAiComplete_(settings, request, deadline) {
   var provider = DMV_AI_PROVIDERS[settings.provider];
   if (!provider) throw new Error('Choose a supported AI provider.');
-  var adapter = { anthropic: dmvAiAnthropic_, openai: dmvAiOpenAi_, gemini: dmvAiGemini_ }[
-    settings.provider
-  ];
+  var adapter = dmvAiAdapter_(settings.provider);
   var built = adapter.build(settings, request);
   var response = dmvHttp_(
     {
@@ -537,14 +713,17 @@ function dmvAiToolCall_(id, name, input) {
   };
 }
 
+function dmvAiErrorText_(body) {
+  return body && body.error && typeof body.error.message === 'string'
+    ? body.error.message
+    : body && typeof body.message === 'string'
+      ? body.message
+      : '';
+}
+
 function dmvAiProviderError_(label) {
   return function (code, body) {
-    var message =
-      body && body.error && typeof body.error.message === 'string'
-        ? body.error.message
-        : body && typeof body.message === 'string'
-          ? body.message
-          : '';
+    var message = dmvAiErrorText_(body);
     if (!message) return '';
     return label + ' rejected the request (HTTP ' + code + '): ' + message.slice(0, 300);
   };
@@ -579,9 +758,27 @@ var dmvAiAnthropic_ = {
       });
     return {
       url: 'https://api.anthropic.com/v1/messages',
-      headers: { 'x-api-key': settings.apiKey, 'anthropic-version': '2023-06-01' },
+      headers: dmvAiAnthropic_.headers(settings.apiKey),
       body: body,
     };
+  },
+  headers: function (apiKey) {
+    return { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
+  },
+  // Model metadata and the model list, read by the settings test.
+  models: {
+    item: function (model) {
+      return 'https://api.anthropic.com/v1/models/' + encodeURIComponent(model);
+    },
+    list: 'https://api.anthropic.com/v1/models?limit=100',
+    names: function (list) {
+      return (list && Array.isArray(list.data) ? list.data : []).map(function (item) {
+        return item && item.id;
+      });
+    },
+    displayName: function (info) {
+      return info.display_name;
+    },
   },
   parse: function (response) {
     if (!response || !Array.isArray(response.content))
@@ -657,9 +854,36 @@ var dmvAiOpenAi_ = {
       });
     return {
       url: 'https://api.openai.com/v1/chat/completions',
-      headers: { Authorization: 'Bearer ' + settings.apiKey },
+      headers: dmvAiOpenAi_.headers(settings.apiKey),
       body: body,
     };
+  },
+  headers: function (apiKey) {
+    return { Authorization: 'Bearer ' + apiKey };
+  },
+  models: {
+    item: function (model) {
+      return 'https://api.openai.com/v1/models/' + encodeURIComponent(model);
+    },
+    list: 'https://api.openai.com/v1/models',
+    // The list also holds embedding, audio and image models, which cannot answer a chat.
+    names: function (list) {
+      return (list && Array.isArray(list.data) ? list.data : [])
+        .map(function (item) {
+          return item && item.id;
+        })
+        .filter(function (id) {
+          return (
+            typeof id === 'string' &&
+            !/embedding|tts|whisper|dall-e|transcribe|moderation|image|audio|realtime|davinci|babbage/.test(
+              id
+            )
+          );
+        });
+    },
+    displayName: function () {
+      return '';
+    },
   },
   parse: function (response) {
     var choice = response && Array.isArray(response.choices) ? response.choices[0] : null;
@@ -730,9 +954,36 @@ var dmvAiGemini_ = {
         'https://generativelanguage.googleapis.com/v1beta/models/' +
         encodeURIComponent(settings.model) +
         ':generateContent',
-      headers: { 'x-goog-api-key': settings.apiKey },
+      headers: dmvAiGemini_.headers(settings.apiKey),
       body: body,
     };
+  },
+  headers: function (apiKey) {
+    return { 'x-goog-api-key': apiKey };
+  },
+  models: {
+    item: function (model) {
+      return 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model);
+    },
+    list: 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000',
+    // Only models that can generate content can answer a chat.
+    names: function (list) {
+      return (list && Array.isArray(list.models) ? list.models : [])
+        .filter(function (item) {
+          return (
+            item &&
+            typeof item.name === 'string' &&
+            Array.isArray(item.supportedGenerationMethods) &&
+            item.supportedGenerationMethods.indexOf('generateContent') !== -1
+          );
+        })
+        .map(function (item) {
+          return item.name.replace(/^models\//, '');
+        });
+    },
+    displayName: function (info) {
+      return info.displayName;
+    },
   },
   parse: function (response) {
     var candidate = response && Array.isArray(response.candidates) ? response.candidates[0] : null;

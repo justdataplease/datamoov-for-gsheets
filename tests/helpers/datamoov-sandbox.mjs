@@ -81,6 +81,11 @@ export function createDatamoovSandbox() {
     static now() { return now; }
   }
   const address = (row, column) => `${row}:${column}`;
+  const columnLabel = (column) => {
+    let label = '';
+    while (column) { column--; label = String.fromCharCode(65 + column % 26) + label; column = Math.floor(column / 26); }
+    return label;
+  };
   function cell(sheet, row, column) {
     return sheet.cells.get(address(row, column)) || { value: '', formula: '' };
   }
@@ -93,11 +98,7 @@ export function createDatamoovSandbox() {
       getNumRows: () => rows,
       getNumColumns: () => columns,
       getCell: (r, c) => range(sheet, row + r - 1, column + c - 1),
-      getA1Notation() {
-        let number = column, label = '';
-        while (number) { number--; label = String.fromCharCode(65 + number % 26) + label; number = Math.floor(number / 26); }
-        return `${label}${row}`;
-      },
+      getA1Notation: () => `${columnLabel(column)}${row}`,
       setValues(values) {
         state.legacyWrites.push({ sheetId: sheet.id, row, column, values: plain(values) });
         values.forEach((line, r) => line.forEach((value, c) => sheet.cells.set(address(row + r, column + c),
@@ -117,6 +118,8 @@ export function createDatamoovSandbox() {
     const sheet = {
       id, name, maxRows, maxColumns, hidden: false, frozenRows: 0, cells: new Map(),
       columnWidths: new Map(), hiddenGridlines: false, tabColor: null,
+      // Advanced Sheets state: userEnteredFormat per cell, merged GridRanges and 0-based pixel sizes.
+      formats: new Map(), merges: [], pixelSizes: { ROWS: new Map(), COLUMNS: new Map() },
       getName: () => sheet.name, getSheetId: () => sheet.id,
       isSheetHidden: () => sheet.hidden,
       showSheet() { sheet.hidden = false; return sheet; },
@@ -203,9 +206,52 @@ export function createDatamoovSandbox() {
     if (!book) throw new Error('Unknown spreadsheet');
     // Sheet additions, cells, metadata and charts are published together only after every request succeeds.
     const originals = new Map(book.sheets.map((sheet) => [sheet.id, sheet]));
-    const staged = new Map(book.sheets.map((sheet) => [sheet.id, { ...sheet, cells: new Map(sheet.cells) }]));
+    const staged = new Map(book.sheets.map((sheet) => [sheet.id, { ...sheet, cells: new Map(sheet.cells), formats: new Map(sheet.formats), merges: sheet.merges.slice(),
+      pixelSizes: { ROWS: new Map(sheet.pixelSizes.ROWS), COLUMNS: new Map(sheet.pixelSizes.COLUMNS) } }]));
+    const order = book.sheets.map((sheet) => sheet.id);
     const stagedCharts = [];
-    const updatedCharts = new Map(), removedCharts = new Set(), deletedSheets = new Set();
+    const updatedCharts = new Map(), removedCharts = new Set(), deletedSheets = new Set(), chartEdits = [];
+    // Position and border edits reach a chart added earlier in this batch at once, a published one on commit.
+    const editChart = (chartId, edit) => {
+      const added = stagedCharts.find((chart) => chart.chartId === chartId);
+      if (added) edit(added);
+      else if (state.charts.some((chart) => chart.spreadsheetId === spreadsheetId && chart.chartId === chartId && !removedCharts.has(chartId))) chartEdits.push([chartId, edit]);
+      else throw new Error(`No embedded object with id ${chartId}`);
+    };
+    // Formats follow the field mask: 'userEnteredFormat' replaces the whole format, a deeper path
+    // such as 'userEnteredFormat.backgroundColor' sets or clears that key alone. Copies along the
+    // path keep published formats untouched until commit; inputs are plain copies of the request.
+    const formatPaths = (fields) => (fields === '*' ? ['userEnteredFormat'] : String(fields || '').split(',').map((field) => field.trim())
+      .filter((field) => field === 'userEnteredFormat' || field.startsWith('userEnteredFormat.'))).map((field) => field.split('.'));
+    const setPath = (object, [head, ...rest], value) => {
+      const copy = { ...object };
+      const next = rest.length ? setPath(copy[head], rest, value) : value;
+      if (next === undefined) delete copy[head]; else copy[head] = next;
+      return Object.keys(copy).length ? copy : undefined;
+    };
+    const setFormat = (sheet, row, column, paths, input) => {
+      const key = address(row + 1, column + 1);
+      let format = sheet.formats.get(key);
+      for (const path of paths) {
+        const value = path.reduce((node, part) => node?.[part], input);
+        if (value === undefined && !format) continue;
+        format = path.length > 1 ? setPath(format, path.slice(1), value) : value;
+      }
+      if (format && Object.keys(format).length) sheet.formats.set(key, format);
+      else sheet.formats.delete(key);
+    };
+    const MERGE_ERROR = 'You must select all cells in a merged range to merge or unmerge them.';
+    const gridOf = (target) => ({ startRowIndex: target.startRow, endRowIndex: target.endRow, startColumnIndex: target.startColumn, endColumnIndex: target.endColumn });
+    const intersects = (a, b) => a.startRowIndex < b.endRowIndex && b.startRowIndex < a.endRowIndex && a.startColumnIndex < b.endColumnIndex && b.startColumnIndex < a.endColumnIndex;
+    const contains = (outer, inner) => outer.startRowIndex <= inner.startRowIndex && inner.endRowIndex <= outer.endRowIndex &&
+      outer.startColumnIndex <= inner.startColumnIndex && inner.endColumnIndex <= outer.endColumnIndex;
+    // Sheets refuses a merge or unmerge range that cuts through an existing merge; merges it covers
+    // completely are replaced or removed.
+    const releaseMerges = (sheet, grid) => {
+      if (sheet.merges.some((merge) => intersects(grid, merge) && !contains(grid, merge))) throw new Error(MERGE_ERROR);
+      sheet.merges = sheet.merges.filter((merge) => !intersects(grid, merge));
+    };
+    const BORDER_STYLES = ['DOTTED', 'DASHED', 'SOLID', 'SOLID_MEDIUM', 'SOLID_THICK', 'NONE', 'DOUBLE'];
     const checkChartSpec = (spec) => {
       const basic = spec?.basicChart;
       if (basic?.chartType === 'BAR' && (basic.series || []).some((series) => series.targetAxis !== 'BOTTOM_AXIS'))
@@ -255,6 +301,7 @@ export function createDatamoovSandbox() {
         sheet.hidden = Boolean(props.hidden);
         sheet.frozenRows = frozenRows;
         staged.set(id, sheet);
+        order.push(id);
         nextSheetId = Math.max(nextSheetId, id);
         reply = { addSheet: { properties: { ...plain(props), sheetId: id } } };
       } else if (request.updateCells) {
@@ -267,11 +314,69 @@ export function createDatamoovSandbox() {
           for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++)
             put(target.cells, r, c, update.rows?.[r - target.startRow]?.values?.[c - target.startColumn]);
         }
+        const paths = formatPaths(update.fields), rows = paths.length ? plain(update.rows || []) : [];
+        if (paths.length)
+          for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++)
+            setFormat(target.sheet, r, c, paths, rows[r - target.startRow]?.values?.[c - target.startColumn]);
       } else if (request.repeatCell) {
         const repeat = request.repeatCell;
         const target = readGrid(repeat.range);
         if (String(repeat.fields).includes('userEnteredValue') || repeat.fields === '*')
           for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++) put(target.cells, r, c, repeat.cell);
+        const paths = formatPaths(repeat.fields), input = plain(repeat.cell || {});
+        if (paths.length)
+          for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++) setFormat(target.sheet, r, c, paths, input);
+      } else if (request.mergeCells) {
+        const { mergeType } = request.mergeCells, target = readGrid(request.mergeCells.range), grid = gridOf(target);
+        if (!['MERGE_ALL', 'MERGE_ROWS', 'MERGE_COLUMNS'].includes(mergeType)) throw new Error(`Invalid merge type ${mergeType}`);
+        const pieces = mergeType === 'MERGE_ROWS'
+          ? Array.from({ length: grid.endRowIndex - grid.startRowIndex }, (_, r) => ({ ...grid, startRowIndex: grid.startRowIndex + r, endRowIndex: grid.startRowIndex + r + 1 }))
+          : mergeType === 'MERGE_COLUMNS'
+            ? Array.from({ length: grid.endColumnIndex - grid.startColumnIndex }, (_, c) => ({ ...grid, startColumnIndex: grid.startColumnIndex + c, endColumnIndex: grid.startColumnIndex + c + 1 }))
+            : [grid];
+        for (const piece of pieces) {
+          if (piece.endRowIndex - piece.startRowIndex < 2 && piece.endColumnIndex - piece.startColumnIndex < 2) continue;
+          if (piece.startRowIndex < target.sheet.frozenRows && piece.endRowIndex > target.sheet.frozenRows)
+            throw new Error("You can't merge frozen and non-frozen rows.");
+          releaseMerges(target.sheet, piece);
+          target.sheet.merges.push(piece);
+          // Only the top-left value of a merge survives.
+          for (let r = piece.startRowIndex; r < piece.endRowIndex; r++) for (let c = piece.startColumnIndex; c < piece.endColumnIndex; c++)
+            if (r !== piece.startRowIndex || c !== piece.startColumnIndex) target.cells.delete(address(r + 1, c + 1));
+        }
+      } else if (request.unmergeCells) {
+        const target = readGrid(request.unmergeCells.range);
+        releaseMerges(target.sheet, gridOf(target));
+      } else if (request.updateBorders) {
+        const borders = request.updateBorders, target = readGrid(borders.range);
+        const sides = ['top', 'bottom', 'left', 'right', 'innerHorizontal', 'innerVertical'].filter((side) => borders[side] !== undefined);
+        for (const side of sides) if (!BORDER_STYLES.includes(borders[side].style)) throw new Error(`Invalid border style ${borders[side].style}`);
+        const border = (side) => borders[side].style === 'NONE' ? undefined : plain(borders[side]);
+        // Each cell keeps the sides it shows: outer edges from top/bottom/left/right, the rest from the inner borders.
+        for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++) {
+          const edges = {
+            top: r === target.startRow ? 'top' : 'innerHorizontal', bottom: r === target.endRow - 1 ? 'bottom' : 'innerHorizontal',
+            left: c === target.startColumn ? 'left' : 'innerVertical', right: c === target.endColumn - 1 ? 'right' : 'innerVertical',
+          };
+          for (const [edge, side] of Object.entries(edges)) if (sides.includes(side))
+            setFormat(target.sheet, r, c, [['userEnteredFormat', 'borders', edge]], { userEnteredFormat: { borders: { [edge]: border(side) } } });
+        }
+      } else if (request.updateEmbeddedObjectPosition) {
+        const { objectId, newPosition, fields } = request.updateEmbeddedObjectPosition;
+        const overlay = newPosition?.overlayPosition;
+        if (!overlay) throw new Error('Only overlay positions are supported');
+        if (!fields) throw new Error('updateEmbeddedObjectPosition needs fields');
+        if (overlay.anchorCell) findSheet(overlay.anchorCell.sheetId);
+        const keys = fields === '*' ? null : String(fields).split(',').map((field) => field.trim());
+        editChart(objectId, (chart) => {
+          const position = keys ? { ...chart.position.overlayPosition } : {};
+          for (const key of keys || Object.keys(overlay)) if (overlay[key] === undefined) delete position[key]; else position[key] = plain(overlay[key]);
+          chart.position = { overlayPosition: position };
+        });
+      } else if (request.updateEmbeddedObjectBorder) {
+        const { objectId, border, fields } = request.updateEmbeddedObjectBorder;
+        if (!border || !fields) throw new Error('updateEmbeddedObjectBorder needs a border and fields');
+        editChart(objectId, (chart) => { chart.border = plain(border); });
       } else if (request.appendDimension) {
         const append = request.appendDimension, sheet = findSheet(append.sheetId);
         if (!Number.isInteger(append.length) || append.length < 1) throw new Error('Invalid appended dimension length');
@@ -284,6 +389,15 @@ export function createDatamoovSandbox() {
         if (props.gridProperties?.columnCount !== undefined) sheet.maxColumns = props.gridProperties.columnCount;
         if (props.gridProperties?.frozenRowCount !== undefined) sheet.frozenRows = props.gridProperties.frozenRowCount;
         if (props.hidden !== undefined) sheet.hidden = Boolean(props.hidden);
+        if (props.gridProperties?.hideGridlines !== undefined) sheet.hiddenGridlines = Boolean(props.gridProperties.hideGridlines);
+        if (props.tabColorStyle !== undefined) sheet.tabColor = plain(props.tabColorStyle);
+        if (props.index !== undefined) {
+          // Like the API, an index counts positions before the move: moving right lands one place left of it.
+          if (!Number.isInteger(props.index) || props.index < 0 || props.index > order.length) throw new Error('Invalid sheet index');
+          const from = order.indexOf(sheet.id);
+          order.splice(from, 1);
+          order.splice(props.index > from ? props.index - 1 : props.index, 0, sheet.id);
+        }
         if (!Number.isInteger(sheet.maxRows) || sheet.maxRows < 1 || !Number.isInteger(sheet.maxColumns) ||
             sheet.maxColumns < 1 || !Number.isInteger(sheet.frozenRows) || sheet.frozenRows < 0 || sheet.frozenRows > sheet.maxRows)
           throw new Error('Invalid sheet grid properties');
@@ -312,9 +426,18 @@ export function createDatamoovSandbox() {
       } else if (request.deleteSheet) {
         findSheet(request.deleteSheet.sheetId);
         staged.delete(request.deleteSheet.sheetId);
+        order.splice(order.indexOf(request.deleteSheet.sheetId), 1);
         deletedSheets.add(request.deleteSheet.sheetId);
       } else if (request.updateDimensionProperties) {
-        findSheet(request.updateDimensionProperties.range.sheetId);
+        const { range: dimension, properties: props, fields } = request.updateDimensionProperties, sheet = findSheet(dimension.sheetId);
+        const limit = { ROWS: sheet.maxRows, COLUMNS: sheet.maxColumns }[dimension.dimension];
+        const start = dimension.startIndex ?? 0, end = dimension.endIndex ?? limit;
+        if (limit === undefined || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > limit)
+          throw new Error('Dimension range exceeds sheet grid');
+        if (String(fields).split(',').includes('pixelSize')) {
+          if (!Number.isInteger(props?.pixelSize) || props.pixelSize < 0) throw new Error('Invalid pixel size');
+          for (let index = start; index < end; index++) sheet.pixelSizes[dimension.dimension].set(index, props.pixelSize);
+        }
       } else throw new Error(`Unsupported batch request: ${Object.keys(request)}`);
       replies.push(reply);
     }
@@ -324,7 +447,8 @@ export function createDatamoovSandbox() {
       else book.sheets.push(sheet);
     }
     if (!staged.size) throw new Error('A spreadsheet must keep at least one sheet');
-    book.sheets = book.sheets.filter((sheet) => !deletedSheets.has(sheet.id));
+    book.sheets = order.filter((id) => !deletedSheets.has(id)).map((id) => book.sheets.find((sheet) => sheet.id === id));
+    for (const [chartId, edit] of chartEdits) edit(state.charts.find((chart) => chart.spreadsheetId === spreadsheetId && chart.chartId === chartId));
     state.charts = state.charts.filter((chart) => chart.spreadsheetId !== spreadsheetId || !deletedSheets.has(chart.position.overlayPosition.anchorCell.sheetId));
     sheetSerial = nextSheetId;
     for (const chart of state.charts) if (updatedCharts.has(chart.chartId) && chart.spreadsheetId === spreadsheetId) chart.spec = updatedCharts.get(chart.chartId);
@@ -353,7 +477,9 @@ export function createDatamoovSandbox() {
       // The Java pattern tokens the app uses: yyyy, MM, dd, HH, H and mm, in the given timezone.
       formatDate(date, timezone, pattern = 'yyyy-MM-dd') {
         const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(date).map((part) => [part.type, part.value]));
-        return pattern.replace(/yyyy|MM|dd|HH|H|mm/g, (token) => ({ yyyy: parts.year, MM: parts.month, dd: parts.day, HH: parts.hour, H: String(Number(parts.hour)), mm: parts.minute })[token]);
+        // z is the zone's short name, as Java's SimpleDateFormat prints it (PDT, or GMT+3 where Intl has no abbreviation).
+        const zone = () => new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'short' }).formatToParts(date).find((part) => part.type === 'timeZoneName').value;
+        return pattern.replace(/yyyy|MM|dd|HH|H|mm|z/g, (token) => token === 'z' ? zone() : ({ yyyy: parts.year, MM: parts.month, dd: parts.day, HH: parts.hour, H: String(Number(parts.hour)), mm: parts.minute })[token]);
       },
       parseCsv: (text) => parseCsv(text),
       unzip: (blob) => unzip(Buffer.from(blob.getBytes())),
@@ -373,8 +499,11 @@ export function createDatamoovSandbox() {
         state.gets.push({ spreadsheetId, options: plain(options || {}) });
         const book = state.books.get(spreadsheetId);
         if (!book) throw new Error('Unknown spreadsheet');
-        return { sheets: book.sheets.map((sheet) => ({ properties: { sheetId: sheet.id, title: sheet.name, hidden: sheet.hidden, gridProperties: { rowCount: sheet.maxRows, columnCount: sheet.maxColumns, frozenRowCount: sheet.frozenRows } },
-          charts: state.charts.filter((chart) => chart.spreadsheetId === spreadsheetId && chart.position.overlayPosition.anchorCell.sheetId === sheet.id).map((chart) => ({ chartId: chart.chartId, position: chart.position })) })) };
+        // Merges only when the field mask asks for them, and like the API without zero-valued indexes.
+        const merges = !options?.fields || /\bmerges\b/.test(options.fields);
+        return { sheets: book.sheets.map((sheet, index) => ({ properties: { sheetId: sheet.id, title: sheet.name, index, hidden: sheet.hidden, gridProperties: { rowCount: sheet.maxRows, columnCount: sheet.maxColumns, frozenRowCount: sheet.frozenRows } },
+          charts: state.charts.filter((chart) => chart.spreadsheetId === spreadsheetId && chart.position.overlayPosition.anchorCell.sheetId === sheet.id).map((chart) => ({ chartId: chart.chartId, position: chart.position })),
+          ...(merges && sheet.merges.length ? { merges: sheet.merges.map((merge) => Object.fromEntries(Object.entries({ sheetId: sheet.id, ...merge }).filter(([, value]) => value !== 0))) } : {}) })) };
       },
     } },
     ScriptApp: {
@@ -415,6 +544,13 @@ export function createDatamoovSandbox() {
     setCell(sheet, row, column, value, formula = '') { sheet.cells.set(address(row, column), { value, formula }); },
     value: (sheet, row, column) => cell(sheet, row, column).value,
     formula: (sheet, row, column) => cell(sheet, row, column).formula,
+    // Rows and columns are 1-based, like value(): the cell's userEnteredFormat ({} when unset),
+    // the tab's merges in A1 notation, and a row height or column width (Sheets defaults when unset).
+    format: (sheet, row, column) => plain(sheet.formats.get(address(row, column)) || {}),
+    merges: (sheet) => sheet.merges
+      .slice().sort((a, b) => a.startRowIndex - b.startRowIndex || a.startColumnIndex - b.startColumnIndex)
+      .map((merge) => `${columnLabel(merge.startColumnIndex + 1)}${merge.startRowIndex + 1}:${columnLabel(merge.endColumnIndex)}${merge.endRowIndex}`),
+    pixelSize: (sheet, dimension, index) => sheet.pixelSizes[dimension].get(index - 1) ?? (dimension === 'ROWS' ? 21 : 100),
     readReport: (id) => JSON.parse(user.getProperty(`dmv:v1:report:${id}`)),
     readOutput: (id, spreadsheetId = book.id) => JSON.parse(user.getProperty(`dmv:v1:output:${spreadsheetId}:${id}`) || 'null'),
   };

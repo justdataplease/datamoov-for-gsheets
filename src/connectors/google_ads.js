@@ -275,6 +275,22 @@ function dmvGoogleAdsParseQuery_(text) {
   };
 }
 
+// Short headers for the keyword and asset columns the custom query description names or asset
+// discovery lists; the generated ones ("Ad group ad asset view performance label") would fill a
+// dashboard header.
+var DMV_GOOGLE_ADS_QUERY_LABELS = {
+  'ad_group_criterion.keyword.text': 'Keyword',
+  'ad_group_criterion.keyword.match_type': 'Match type',
+  'ad_group_criterion.quality_info.quality_score': 'Quality score',
+  'ad_group_ad_asset_view.field_type': 'Asset field',
+  'ad_group_ad_asset_view.performance_label': 'Performance label',
+  'asset.text_asset.text': 'Asset text',
+  'asset.name': 'Asset name',
+  'asset.image_asset.full_size.url': 'Image URL',
+  'asset.youtube_video_asset.youtube_video_id': 'Video ID',
+  'asset.youtube_video_asset.youtube_video_title': 'Video title',
+};
+
 // GAQL names carry their own typing conventions: *_micros and average costs are money in
 // micros, rates and shares are fractions, every other metric is a count or value.
 function dmvGoogleAdsQueryColumn_(name) {
@@ -298,7 +314,7 @@ function dmvGoogleAdsQueryColumn_(name) {
     .replace(/[._]/g, ' ');
   var column = {
     key: name,
-    label: label.charAt(0).toUpperCase() + label.slice(1),
+    label: DMV_GOOGLE_ADS_QUERY_LABELS[name] || label.charAt(0).toUpperCase() + label.slice(1),
     type: micros
       ? 'currency'
       : rate
@@ -402,6 +418,20 @@ function dmvGoogleAdsQueryFetch_(ctx) {
   };
 }
 
+// Parents whose attributes a resource lists after its own: the account hierarchy reports group
+// by. Other parents span every type of their kind (ad_group_criterion holds each criterion
+// type's fields, asset each asset type's), which would bury the few a report needs. An ad asset
+// view is about its asset, so it also lists the asset's own fields and its text, image or video:
+// what tells a row's asset apart, without the dozens of extension and feed types.
+var DMV_GOOGLE_ADS_PARENTS = ['campaign', 'ad_group', 'customer', 'campaign_budget'];
+var DMV_GOOGLE_ADS_SUBJECTS = {
+  ad_group_ad_asset_view: {
+    parent: 'asset',
+    fields:
+      /^asset\.([a-z_]+|text_asset\.text|image_asset\.full_size\.url|youtube_video_asset\.youtube_video_(id|title))$/,
+  },
+};
+
 // discover_fields for a custom query: "resources" lists what can follow FROM; "FROM x" (or a
 // whole query) lists that resource's attributes plus the metrics and segments it supports.
 function dmvGoogleAdsQueryDiscover_(ctx) {
@@ -428,23 +458,26 @@ function dmvGoogleAdsQueryDiscover_(ctx) {
     throw new Error(
       'Google Ads has no resource named ' + resource + '. Discover "resources" to list them.'
     );
-  // The resource's own attributes, then those of the parents whose fields it may also select.
+  // The resource's own attributes, then those of the asset a view is about, then those of the
+  // parents whose fields it may also select.
+  var parents = related.attributeResources || [],
+    subject = DMV_GOOGLE_ADS_SUBJECTS[resource],
+    lists = [{ name: resource }];
+  if (subject && parents.indexOf(subject.parent) >= 0)
+    lists.push({ name: subject.parent, fields: subject.fields });
+  parents.forEach(function (name) {
+    if (DMV_GOOGLE_ADS_PARENTS.indexOf(name) >= 0) lists.push({ name: name });
+  });
   var attributes = [];
-  [resource]
-    .concat(
-      (related.attributeResources || []).filter(function (name) {
-        return ['campaign', 'ad_group', 'customer', 'campaign_budget'].indexOf(name) >= 0;
-      })
-    )
-    .forEach(function (name) {
-      attributes = attributes.concat(
-        search("SELECT name, selectable, is_repeated WHERE name LIKE '" + name + ".%'").filter(
-          function (row) {
-            return row.selectable === true;
-          }
-        )
-      );
-    });
+  lists.forEach(function (list) {
+    attributes = attributes.concat(
+      search("SELECT name, selectable, is_repeated WHERE name LIKE '" + list.name + ".%'").filter(
+        function (row) {
+          return row.selectable === true && (!list.fields || list.fields.test(String(row.name)));
+        }
+      )
+    );
+  });
   return attributes
     .map(function (row) {
       return String(row.name);
@@ -1075,7 +1108,7 @@ dmvRegisterConnector_({
       id: 'custom_query',
       label: 'Custom query (GAQL)',
       description:
-        'Any Google Ads resource in one GAQL query: customer (account totals), campaign, ad_group, ad_group_ad (ads), keyword_view, search_term_view, campaign_criterion or ad_group_criterion (negative keywords: WHERE campaign_criterion.negative = TRUE), asset_group, geographic_view, age_range_view, gender_view, landing_page_view. Select segments.date only for a daily trend; without it rows are totals for the date range, which keeps reports small. Money fields (*_micros, average costs) arrive in account currency.',
+        'Any Google Ads resource in one GAQL query: customer (account totals), campaign, ad_group, ad_group_ad (ads), keyword_view (keywords: ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type, ad_group_criterion.quality_info.quality_score), search_term_view, campaign_criterion or ad_group_criterion (negative keywords: WHERE campaign_criterion.negative = TRUE), ad_group_ad_asset_view (ad asset performance: ad_group_ad_asset_view.field_type such as HEADLINE or DESCRIPTION, ad_group_ad_asset_view.performance_label such as LOW, GOOD or BEST, asset.text_asset.text or asset.name, with metrics), asset_group, geographic_view, age_range_view, gender_view, landing_page_view. Select segments.date only for a daily trend; without it rows are totals for the date range, which keeps reports small. Money fields (*_micros, average costs) arrive in account currency.',
       fields: [],
       configFields: [
         {

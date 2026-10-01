@@ -20,6 +20,7 @@
     "check": "node tools/check-source.mjs",
     "test": "node --test tests/*.test.mjs",
     "preview": "node tools/preview.mjs",
+    "preview:dashboard": "node tools/dashboard-preview.mjs",
     "test:browser": "playwright test",
     "walkthrough": "node tools/walkthrough.mjs",
     "push:dev": "node tools/publish.mjs data/development-project.json",

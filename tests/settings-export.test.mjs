@@ -31,6 +31,7 @@ function fixture() {
           { key: 'date', label: 'Date', type: 'date', role: 'dimension' },
           { key: 'campaign', label: 'Campaign', type: 'text', role: 'dimension' },
           { key: 'cost', label: 'Cost', type: 'currency', role: 'metric' },
+          { key: 'clicks', label: 'Clicks', type: 'number', role: 'metric' },
         ],
         fetch() {
           return { columns: [], rows: [], metadata: { complete: true } };
@@ -167,6 +168,133 @@ test('a bundle imported into another account recreates everything; importing it 
   });
   assert.equal(target.api.dmvListReports().length, 1);
   assert.equal(target.api.dmvListDashboards().length, 1);
+});
+
+// The packed plan of the dashboard an import result names.
+const planOf = (f, item) => plain(f.api.dmvDashboardPlan_(f.api.dmvRead_('dashboard', item.id)));
+
+test('a dashboard keeps the colours of its changes through export and import; an older file keeps them grey', () => {
+  const source = fixture();
+  const { connection } = seed(source);
+  source.api.dmvSaveDashboard({
+    name: 'Cost per click',
+    target: { sheetName: 'CPC Dashboard' },
+    datasets: [
+      {
+        id: 'gads',
+        label: 'Google Ads campaigns',
+        sheetName: 'CPC Data',
+        connectionId: connection.id,
+        reportType: 'campaign_daily',
+        fields: ['campaign', 'cost', 'clicks'],
+        dateRange: { preset: 'last30' },
+      },
+    ],
+    tiles: [
+      {
+        title: 'Totals',
+        type: 'kpi',
+        metrics: [{ field: 'cost', agg: 'sum' }, { field: 'clicks', agg: 'sum' }],
+        ratios: [{ key: 'cpc', label: 'CPC', numerator: 'cost', denominator: 'clicks' }],
+      },
+      { title: 'Cost by campaign', type: 'column', groupBy: ['campaign'], metrics: [{ field: 'cost', agg: 'sum' }] },
+    ],
+    lowerIsBetter: ['cpc'],
+    neutral: ['cost'],
+  });
+  const bundle = JSON.parse(source.api.dmvExportSettings().json);
+  const [plainDashboard, polar] = bundle.dashboards;
+  assert.equal(polar.name, 'Cost per click');
+  assert.equal(polar.toned, true);
+  assert.deepEqual([polar.lowerIsBetter, polar.neutral], [['cpc'], ['cost']]);
+  assert.equal(plainDashboard.toned, true, 'a plan saved now colours its changes, lists or not');
+  assert.equal('lowerIsBetter' in plainDashboard || 'neutral' in plainDashboard, false);
+
+  const target = fixture();
+  const result = plain(target.api.dmvImportCredentials(bundle));
+  assert.deepEqual(result.summary.dashboards, { saved: 2, existing: 0, failed: 0 });
+  const imported = planOf(target, result.dashboards[1]);
+  assert.deepEqual([imported.toned, imported.lowerIsBetter, imported.neutral], [true, ['cpc'], ['cost']]);
+  // The refresh colours a falling CPC green and leaves cost grey, as the source dashboard did.
+  assert.equal(target.api.dmvDashboardTone_(imported, 'cpc', -0.2), 'good');
+  assert.equal(target.api.dmvDashboardTone_(imported, 'cost', 0.2), 'neutral');
+  assert.equal(target.api.dmvDashboardTone_(planOf(target, result.dashboards[0]), 'spend', 0.2), 'good');
+
+  // A file written before changes carried colour has none of the three: its plans had none, so
+  // their changes stay grey instead of calling a rising cost good.
+  const older = JSON.parse(JSON.stringify(bundle));
+  for (const item of older.dashboards) for (const key of ['toned', 'lowerIsBetter', 'neutral']) delete item[key];
+  const fresh = fixture();
+  const again = plain(fresh.api.dmvImportCredentials(older));
+  assert.deepEqual(again.summary.dashboards, { saved: 2, existing: 0, failed: 0 });
+  for (const item of again.dashboards) {
+    const plan = planOf(fresh, item);
+    assert.equal('toned' in plan || 'lowerIsBetter' in plan || 'neutral' in plan, false);
+    assert.equal(fresh.api.dmvDashboardTone_(plan, 'cost', 0.2), 'neutral');
+  }
+  assert.equal(fresh.api.dmvListDashboards()[0].revision, 1, "keeping the file's colours is part of the one save");
+
+  // The lists keep the names the tiles use, and toned is true or false.
+  const unknown = JSON.parse(JSON.stringify(bundle));
+  unknown.dashboards[1].lowerIsBetter = ['cpa', 'cpc'];
+  const listed = fixture();
+  const kept = plain(listed.api.dmvImportCredentials(unknown));
+  assert.deepEqual(kept.summary.dashboards, { saved: 2, existing: 0, failed: 0 });
+  assert.deepEqual(planOf(listed, kept.dashboards[1]).lowerIsBetter, ['cpc']);
+  for (const [key, value] of [['toned', 'yes'], ['neutral', 'cost'], ['lowerIsBetter', [7]]]) {
+    const bad = JSON.parse(JSON.stringify(bundle));
+    bad.dashboards[1][key] = value;
+    const other = fixture();
+    assert.throws(() => other.api.dmvImportCredentials(bad), /Imported dashboard (toned|neutral|lowerIsBetter)/, key);
+    assert.equal(other.api.dmvListDashboards().length, 0);
+  }
+});
+
+test('a dashboard from before changes carried colour imports wherever it refreshed', () => {
+  const source = fixture();
+  const { connection } = seed(source);
+  const columns = ['campaign', 'cost', 'clicks'];
+  const dataset = (id, label, preset) => ({
+    id,
+    label,
+    sheetName: label + ' Data',
+    connectionId: connection.id,
+    reportType: 'campaign_daily',
+    fields: columns,
+    dateRange: { preset },
+    mapping: columns.map((key) => ({ field: key, key })),
+  });
+  source.api.dmvSaveDashboard({
+    name: 'Cost per click',
+    target: { sheetName: 'CPC Dashboard' },
+    datasets: [dataset('gads', 'Last 30 days', 'last30'), dataset('gads_prev', 'Month before', 'lastMonth')],
+    tiles: [
+      { title: 'Totals', type: 'kpi', datasets: ['gads'], metrics: [{ field: 'cost', agg: 'sum' }] },
+      { title: 'Cost by campaign', type: 'column', datasets: ['gads'], groupBy: ['campaign'], metrics: [{ field: 'cost', agg: 'sum' }] },
+    ],
+  });
+  // An older file: no toned flag, a kpi comparing last30 with lastMonth (an older version took
+  // any two periods) and a chart over both periods, as a tile without datasets was stored then.
+  const bundle = JSON.parse(source.api.dmvExportSettings().json);
+  const item = bundle.dashboards.find((dashboard) => dashboard.name === 'Cost per click');
+  delete item.toned;
+  item.tiles[0].datasets = ['gads', 'gads_prev'];
+  item.tiles[0].compare = { current: 'gads', previous: 'gads_prev' };
+  item.tiles[1].datasets = ['gads', 'gads_prev'];
+  const target = fixture();
+  const result = plain(target.api.dmvImportCredentials(bundle));
+  const imported = result.dashboards.find((dashboard) => dashboard.label === 'Cost per click');
+  assert.equal(imported.status, 'saved', imported.message);
+  // Repaired as a refresh repairs it: the chart reads the current period only.
+  const plan = planOf(target, imported);
+  assert.deepEqual(plan.tiles[1].datasets, ['gads']);
+  assert.equal('toned' in plan, false);
+  // A file written now checks its periods like any save.
+  item.toned = true;
+  const strict = plain(fixture().api.dmvImportCredentials(bundle));
+  const refused = strict.dashboards.find((dashboard) => dashboard.label === 'Cost per click');
+  assert.equal(refused.status, 'failed');
+  assert.match(refused.message, /hold the previous period of a comparison/);
 });
 
 test('report and dashboard items fail one by one with a plain reason and never block the rest', () => {

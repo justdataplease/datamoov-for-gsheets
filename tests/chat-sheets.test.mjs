@@ -297,6 +297,22 @@ test('formatting uses color styles and narrow masks without replacing unrelated 
   assert.equal(request.cell.userEnteredFormat.numberFormat.type, 'PERCENT');
 });
 
+test('the number format never leaves a trailing dot on whole numbers', () => {
+  const f = fixture();
+  f.setCell(f.sheet, 1, 1, 2494);
+  f.edit('format', { format: { numberFormat: 'number' } });
+  // '#,##0.###' showed 2494 as "2,494."; Sheets has no optional-decimals pattern without the dot.
+  assert.deepEqual(f.state.batches[0].body.requests[0].repeatCell.cell.userEnteredFormat.numberFormat, {
+    type: 'NUMBER',
+    pattern: '#,##0.00',
+  });
+  f.edit('format', { format: { numberFormat: 'currency' } });
+  assert.equal(
+    f.state.batches[1].body.requests[0].repeatCell.cell.userEnteredFormat.numberFormat.pattern,
+    '#,##0.00'
+  );
+});
+
 test('filters reject formula-bearing criteria, normalize numbers and preserve other criteria', () => {
   const f = fixture();
   for (const value of [

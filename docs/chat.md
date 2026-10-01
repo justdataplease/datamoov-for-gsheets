@@ -10,7 +10,13 @@ network destination is the AI provider you configure.
 1. Open **Extensions → DataMoov → Open**, choose **Settings** (the Chat tab points
    there until a key is saved).
 2. Under **AI provider** pick Anthropic, OpenAI or Google Gemini, paste an API key from your
-   own account, keep or change the model name, then **Save** and **Test**. The card collapses
+   own account, keep or change the model name, then **Test** and **Save**. The model field starts
+   at the provider's default, shown under the field; **Use default** puts it back, and switching
+   provider swaps a default model for the new provider's but keeps a name you typed. **Test**
+   checks what the form holds without saving it: it asks the provider whether the model exists,
+   then sends a one-word request to prove it answers. An unknown model shows **Model not found**
+   with up to six similar models from your provider's list; click one to use it. Test sends a
+   saved key only to the provider it was saved for. The card collapses
    once configured; the gear in the Chat tab reopens it. The key is stored in
    your private script properties and is never shown again; leave the field blank when
    editing to keep it. The **Create a key** link opens the provider's key page.
@@ -56,8 +62,9 @@ source fetches; multi-account and period comparisons can require several fetches
   weekly or monthly reach, and splits by age, gender, country, platform or placement; the
   selected fields decide the level, the period and the breakdowns.
 - **Any Google Ads resource**: beyond daily campaign performance, the **Custom query (GAQL)**
-  report lets chat read ad groups, ads, keywords, search terms, negative keywords, asset groups,
-  geography or account totals with one GAQL query. `discover_fields` lists the resources and the
+  report lets chat read ad groups, ads, keywords and their quality scores, search terms, negative
+  keywords, ad asset performance (Low, Good and Best labels), asset groups, geography or account
+  totals with one GAQL query. `discover_fields` lists the resources and the
   fields each one supports. The report date range is applied whenever the query selects metrics.
 - **SQL sources**: for PostgreSQL, BigQuery and Snowflake the model first calls `describe_database`,
   which lists the tables and columns of the schemas or datasets you chose on the connection
@@ -126,10 +133,9 @@ passed as native date groups. An already prepared month column can be an ordinar
 ## Dashboards
 
 A report imports one source into a table. A **dashboard** is what you ask Chat for when you want
-to *see* performance: it fetches 1 to 6 datasets, writes each to its own tab, and builds one
-**Dashboard** tab with scorecards on top, native Sheets charts below them, then the data sources
-and any tables. The numbers behind the charts go to a hidden **(chart data)** tab. You do not
-create reports first; the dashboard carries its own queries.
+to *see* performance: it fetches 1 to 8 datasets, writes each to its own tab, and builds one
+**Dashboard** tab laid out as a page of cards. The numbers behind the charts go to a hidden
+**(chart data)** tab. You do not create reports first; the dashboard carries its own queries.
 
 For example: **"Create a performance dashboard for Google Ads and Facebook Ads for the last 3
 months, every week."** Chat saves the plan and runs it once. You get:
@@ -137,48 +143,125 @@ months, every week."** Chat saves the plan and runs it once. You get:
 - **Google Ads Data**, **Facebook Ads Data** (one tab per dataset). The first rows say where the
   data came from: dataset, source, connection, report, date range, row count and refresh time.
   The table starts on row 4.
-- **Performance Dashboard**: the title and refresh time, scorecards (spend, clicks, conversions),
-  charts such as weekly spend by platform and top campaigns, and a **Data sources** table that
-  lists every dataset with its date range, rows and tab.
+- **Performance Dashboard**, placed before its data tabs, from top to bottom:
+  - a navy title band with the dashboard name, the period it covers ("1 Sep – 30 Sep 2026") and
+    the refresh time, plus the previous period ("vs 1 Aug – 31 Aug 2026") when the dashboard
+    compares periods;
+  - a row of links that jump to each section below. The band and the links stay in view as you
+    scroll;
+  - **KPI cards** such as spend, conversions, CPA and ROAS: one large number each and, when there
+    is a previous period, its change against the previous value, for example "▲ 12.4% vs 1,234"
+    in green, red or grey;
+  - **Highlights**: up to six sentences written from the numbers on the page, such as the
+    largest changes, the rows a highlight rule flagged, the segment holding most of the spend or
+    the top row of a table. They are worked out again on every refresh, without AI;
+  - **chart cards**, two per row or one full row for a long trend, with a dashed line for the
+    previous period when a trend compares periods. A share by category (spend by channel) is
+    drawn as bars, largest first: a Sheets pie takes the workbook theme's colors, and its second
+    slice would be the red this page keeps for a bad change;
+  - **table cards** with an in-cell bar beside the main amount, blue shading on rate and average
+    columns (darker is better, so the lowest CPA is the darkest), a **Δ %** column after each
+    metric when the table compares periods, a total row, and whole rows tinted by highlight
+    rules, with a **Row tints** line under the table saying what each tint means;
+  - a **Data sources** card listing every dataset with its source, connection, report, date
+    range, rows and tab;
+  - a footer saying how to refresh the dashboard.
 - **Performance Dashboard (chart data)**, hidden: the small table each chart reads. Every refresh
   rewrites these tables and points each chart at the new range, so a period that grows ("this
   month", "until today") adds points to the chart instead of being cut off. Unhide the tab from
   the Sheets tab menu to check a chart's numbers.
 
 Datasets can be different subjects, not only the same report from several accounts. With the
-Google Ads **Custom query (GAQL)** report one dashboard can hold campaigns, ad groups, keywords,
-search terms and negative keywords, each on its own tab, with charts drawn from any of them.
-Charts that compare platforms read several datasets together; Chat gives their columns shared
-names (date, spend, clicks) so Google's cost and Facebook's spend line up.
+Google Ads **Custom query (GAQL)** report one dashboard can hold campaigns, ad groups, keywords
+with their quality scores, search terms, negative keywords and ad asset performance (the Low,
+Good and Best labels), each on its own tab, with charts and tables drawn from any of them. Chat
+builds every section you ask for this way instead of describing how it could be built; when a
+request needs more than eight datasets, it says which section it left out. Charts that compare
+platforms read several datasets together; Chat gives their columns shared names (date, spend,
+clicks) so Google's cost and Facebook's spend line up.
 
-The answer in Chat lists what was fetched, links to every tab, and repeats the scorecard values.
+### Comparing with the previous period
+
+A performance dashboard compares with the previous period unless you ask otherwise. For each
+account Chat adds a small dataset holding only the totals the KPI cards need, for the period just
+before the current one: `previous7`, `previous14`, `previous30` or `previous90` before `last7`,
+`last14`, `last30` or `last90`; `previousWeek` before `lastWeek`; `previousMonth` before
+`lastMonth`; and a custom range of the same length before a custom range. Both periods move
+together on every refresh. One group of KPI cards reads the current and previous datasets of every
+account, so each card shows the total and its change. Trend charts and tables can compare too
+when their previous dataset has the same date or grouping columns. The previous-period datasets
+(the side of a comparison marked previous, and any dataset with a `previous` preset) feed only
+the tiles that compare; every other tile reads the current period alone, so the two periods are
+never added together. A compared tile without its own dataset list reads its two compare lists.
+`yesterday`, `thisMonth`, `thisYear` and `lastYear` have no previous preset, so a dashboard
+over one of them is not compared.
+
+So **"Create a marketing performance week vs previous period"** for three accounts saves six
+datasets, `lastWeek` and `previousWeek` for each (the last completed Monday-to-Sunday week and the
+one before, in the spreadsheet timezone), and every card shows the week's value and its change
+against the week before. A trend request saves one dataset per account for the whole period
+(`last90` for the last 3 months) and the charts group it by week or month. A simple question about
+spend remains an analysis unless you ask for a dashboard.
+
+Each previous dataset must cover the period just before its current one, with as many days, or
+as many whole calendar months when both are whole months (a month to date is not). Relative
+periods move with the refresh day, so the save checks every refresh day of the coming year before
+anything is fetched: `last7` against `previousWeek` lines up on Mondays only and is refused, with
+the first day it would fail.
+A compared trend lines up the two periods by their own days, the first week of this period over
+the first week of the last. When the previous period is longer (31 days before 30), its extra
+days are left out and the card says so: "vs 1 Aug – 30 Aug 2026 (same days)". A compared table
+groups by names such as campaigns or channels, not by dates, and matches each row with the same
+names in the previous period.
+
+Whether a rise is good depends on the metric. Chat marks cost-per metrics such as CPA, CPC and CPM
+as lower-is-better, so their rise shows as a red ▲, and spend, cost and budget as neutral, shown
+in grey; names the tiles do not show are dropped. Every other rise is green. A dashboard saved before changes had colors keeps them grey
+until Chat saves it again.
+
+### Highlight rules
+
+Ask for rows to be flagged, for example **"highlight campaigns whose CPA is more than 150% of the
+overall CPA in light red and campaigns with more than 50 conversions in light green"**. Chat turns
+this into up to four rules per table, each a column, a comparison and either a fixed value or a
+multiple of the table's total (1.5 × the overall CPA), with the color red, green or amber. A rule
+can also match the text of a column the table is grouped by: equal to, not equal to, containing,
+or one of several values, so **"flag low-rated assets"** tints the rows whose performance label is
+Low. The first matching rule tints the whole row. A rule against the total stays meaningful as the
+numbers change. The **Row tints** line under the table names each rule with the threshold it
+used on this refresh ("CPA > 1.5× overall (AED 1,734)"), and the Highlights card says how many rows
+each rule matched.
+
+### What a spreadsheet dashboard cannot do
+
+Date range pickers and dropdown filters do not exist in Sheets. The period is the dataset's date
+preset; ask Chat to change it ("make it the last 90 days"). A segment such as one campaign type
+becomes its own chart or table, or a filter on a tile. When a request asks for such a control,
+Chat builds the closest equivalent and says so in one sentence.
+
+The answer in Chat quotes the Highlights, adds a few findings with their numbers and the action
+each suggests, and links to every tab.
 The saved card appears under **Reports > Dashboards > Drafts** with a link per tab and the rows of
 the last refresh; a schedule asked for in the request ("refresh it daily at 8") saves it under
-**Saved** instead. See [Saved reports and drafts](#saved-reports-and-drafts). **Refresh dashboard** fetches every dataset again and rebuilds every tab, scorecard
-and chart from the saved plan: no AI call, no AI key needed. Charts the dashboard created are
-updated in place, so a chart you moved or resized stays where you put it; one you deleted comes
-back. **Create in chat** opens a draft request you can edit. **Remove** deletes the saved plan
-together with the tabs the dashboard created (the dataset tabs, the Dashboard tab and the hidden
-chart data tab) after listing them for confirmation. Tabs you made yourself are never touched.
-
-A request such as **"Create a marketing performance week vs previous period"** follows the same
-workflow, including after you answer a source-selection question. It saves two datasets per
-account, `lastWeek` and `previousWeek` (the last completed Monday-to-Sunday week and the one
-before, in the spreadsheet timezone), so three accounts use six datasets and both weeks advance
-on refresh. Each account's scorecards compare its two datasets, so every card shows the current
-value and its change against the previous week. A trend request saves one dataset per account for the whole period (`last90` for the
-last 3 months) and the charts group it by week or month. A simple question about spend remains an
-analysis unless you ask for a dashboard.
+**Saved** instead. See [Saved reports and drafts](#saved-reports-and-drafts). **Refresh dashboard**
+fetches every dataset again and rebuilds every tab, card and chart from the saved plan: no AI
+call, no AI key needed. Charts the dashboard created are updated in place and set back on their
+card, so a chart you moved or resized returns to its place; one you deleted comes back. **Create
+in chat** opens a draft request you can edit. **Remove** deletes the saved plan together with the
+tabs the dashboard created (the dataset tabs, the Dashboard tab and the hidden chart data tab)
+after listing them for confirmation. Tabs you made yourself are never touched.
 
 Limits and guarantees:
 
-- 1 to 6 datasets and up to 12 tiles (scorecard groups, charts, tables), at least one chart.
+- 1 to 8 datasets and up to 12 tiles (KPI groups, charts, tables), at least one chart.
   A tile can restrict its rows with filters (Brand campaigns only, one country) and show
   ratios such as CPC, CTR, CPA or ROAS, computed from the summed counts of each group rather
   than by averaging a rate column. A chart can stack its series, draw a rate on a right axis
-  (as a line on a column chart) and take a whole row.
+  (as a line on a column chart) and take a whole row. Chat draws one measure per chart, or a
+  volume with a rate on the right axis; a chart whose values differ twentyfold or more moves the
+  smaller ones to the right axis, so conversions never lie flat under spend.
   Charts keep up to 12 series; by default 400 dates or 15 categories, tables 50 rows (1,000 at
-  most). A shortened tile says so in its title, for example "top 15 of 129".
+  most). A shortened tile says so beside its title, for example "top 15 of 129".
 - Datasets together hold at most 30,000 rows, and the whole refresh is one roughly 200-second run
   written in one Sheets request; there is no continuation for dashboards. Keep datasets lean: a
   custom query without `segments.date` returns totals for the period instead of one row per day.
@@ -195,11 +278,13 @@ Limits and guarantees:
 - A dashboard writes to tabs of its own. A tab name that already holds content is refused when
   the plan is saved, before anything is fetched, and the message names the tab and suggests a
   free name.
-- Money in different currencies is never added: scorecards and chart series split by currency.
-  Rates and averages cannot be summed.
-- The tabs belong to the dashboard. Editing values inside its tables, or typing into the blank
-  rows reserved under the charts, stops the next refresh until the edit is undone; put your own
-  notes on another tab. Formatting you add is reset on refresh.
+- Money in different currencies is never added: KPI cards, totals and chart series split by
+  currency. Rates and averages cannot be summed.
+- The tabs belong to the dashboard. Editing values inside its cards and tables, or typing into
+  the rows the charts sit on, stops the next refresh until the edit is undone; put your own notes
+  on another tab. Cells hold plain values, never formulas. Formatting and layout changes on the
+  Dashboard tab (colors, column widths, row heights, merged cells, chart positions) are reset on
+  every refresh.
 - Relative date presets resolve again on every refresh, all at one local date; fixed dates stay
   fixed.
 
@@ -248,9 +333,10 @@ the card. Chat-created cards say "from Chat" in their subtitle.
   Summaries follow the same sampling rule. The requested summary limit controls the complete
   aggregate stored privately and available for writing; it does not send large tables to the model.
 - Data you read with **read_sheet** is sampled the same way.
-- After a dashboard refresh: the scorecard values and a preview of each chart and table (its
-  first five rows, or the latest five points of a trend, eight columns at most, within a fixed
-  size per tile), so the answer can state findings from what the dashboard shows.
+- After a dashboard refresh: the scorecard values, the Highlights sentences and a preview of each
+  chart and table (its first five rows, or the latest five points of a trend, eight columns at
+  most, within a fixed size per tile), so the answer can quote the Highlights and state findings
+  from what the dashboard shows.
 
 Provider credentials and AI keys are not included in model messages. Large results are
 sampled; results of 20 rows or fewer may be sent whole. Your prompts, conversation context,
@@ -311,8 +397,8 @@ Values that come back from providers are framed as data, not instructions.
 | `edit_sheet` | Apply validated values, scalar formulas, formatting, sorting, filters, freeze panes, or tab creation/rename |
 | `create_pivot` | Create a native pivot on a new tab from a validated source range |
 | `list_dashboards` | List private saved dashboards for this spreadsheet |
-| `save_dashboard` | Save a plan: datasets (a query, a tab and optional shared column names each) and tiles (kpi, chart or table over one or more datasets) plus the dashboard tab |
-| `run_dashboard` | Fetch every dataset and atomically rebuild all tabs, scorecards, charts and tables; return scorecard values, a short preview of each tile and tab links |
+| `save_dashboard` | Save a plan: up to 8 datasets (a query, a tab and optional shared column names each), tiles (kpi, chart or table over one or more datasets; `compare` names the current and previous dataset ids, one id or a list each; tables take `highlight` rules with a numeric `value` or an `ofTotal` multiple on a metric, or a text `value` on a groupBy column), the dashboard-level `lowerIsBetter` and `neutral` metric lists, and the dashboard tab |
+| `run_dashboard` | Fetch every dataset and atomically rebuild all tabs, cards, charts and tables; return scorecard values, the `highlights` sentences, a short preview of each tile and tab links |
 | `list_reports` | List private saved reports (drafts included) with their revisions |
 | `save_report` | Save one report query with a name, tab and optional schedule through `dmvSaveReport`, run it once through the report runtime, and report where the card is listed |
 

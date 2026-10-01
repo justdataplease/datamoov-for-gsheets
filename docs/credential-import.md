@@ -50,7 +50,12 @@ A placeholder example (replace the token locally); **Download sample** produces 
 A version 2 file adds `reports` and `dashboards` arrays. Each report carries a `connectionRef`
 plus the fields of a saved report (`reportType`, `fields`, `config`, `dateRange`, `maxRows`,
 `target`, `schedule`, `at`); each dashboard carries its `target`, `datasets` (each with a
-`connectionRef`) and `tiles`. They are validated by the ordinary report and dashboard validators
+`connectionRef`), `tiles` and the colors of its changes: `toned`, plus the `lowerIsBetter` and
+`neutral` lists when it has them. A file without `toned` was written before changes had colors,
+so its dashboards import with grey changes, as they were, and the way their refresh reads them:
+what a save now refuses but an older version accepted (a tile over both periods, a comparison of
+two unmatched periods) is repaired or left as it refreshed, so a dashboard that refreshes where it
+was exported also imports. Reports and dashboards are validated by the ordinary report and dashboard validators
 once their connections are saved; nothing is fetched during import. A report that reads the same
 query into the same tab, or a dashboard with the same name and dashboard tab, is reported as
 existing and left untouched. A dashboard whose tab already holds content fails by name, like a

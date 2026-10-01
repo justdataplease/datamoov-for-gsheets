@@ -54,11 +54,12 @@ test('explicit Gemini limits, including the small connectivity check, remain aut
     assert.deepEqual(plain(built.body.generationConfig.thinkingConfig), { thinkingLevel: 'LOW' });
   }
   f.api.dmvSaveAiSettings(settings());
-  f.state.responses.push({
-    body: { candidates: [{ content: { parts: [{ text: 'OK' }] }, finishReason: 'STOP' }] },
-  });
-  assert.match(f.api.dmvTestAi().message, /gemini-3.8-flash replied: OK/);
-  const body = JSON.parse(f.state.http[0].options.payload);
+  f.state.responses.push(
+    { body: { name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent'] } },
+    { body: { candidates: [{ content: { parts: [{ text: 'OK' }] }, finishReason: 'STOP' }] } }
+  );
+  assert.match(f.api.dmvTestAi().message, /gemini-3.8-flash is available and replied: OK/);
+  const body = JSON.parse(f.state.http[1].options.payload);
   assert.equal(body.generationConfig.maxOutputTokens, 64);
   assert.equal(body.generationConfig.thinkingConfig.thinkingLevel, 'LOW');
   assert.equal(body.tools, undefined);

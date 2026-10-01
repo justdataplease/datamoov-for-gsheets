@@ -91,16 +91,48 @@ function fixture() {
   return f;
 }
 
-// The rows of a tab under the row whose first cell is `heading`, up to the next blank row.
-function rowsUnder(f, sheetName, heading, width) {
-  const sheet = f.tab(sheetName);
-  let row = 1;
-  while (row <= sheet.getLastRow() && f.value(sheet, row, 1) !== heading) row++;
-  assert.ok(row <= sheet.getLastRow(), heading + ' is on ' + sheetName);
+// A tab as it reads: each row's non-empty cells in column order. Dashboard cards sit on a grid
+// behind a margin column, and a merged cell holds its text in its first cell only.
+function pageOf(f, name) {
+  const sheet = f.tab(name);
+  const out = [];
+  for (let r = 1; r <= sheet.getLastRow(); r++) {
+    const row = [];
+    for (let c = 1; c <= sheet.maxColumns; c++) if (f.value(sheet, r, c) !== '') row.push(f.value(sheet, r, c));
+    out.push(row);
+  }
+  return out;
+}
+
+// The rows under a title row (a card's header, rows and total, or a chart table) up to the next
+// blank row, without the in-cell bars of a table.
+function cardOf(page, title) {
+  const at = page.findIndex((row) => row[0] === title);
+  assert.ok(at >= 0, title + ' is on the page');
   const rows = [];
-  for (row++; row <= sheet.getLastRow() && f.value(sheet, row, 1) !== ''; row++)
-    rows.push(Array.from({ length: width }, (_, column) => f.value(sheet, row, column + 1)));
+  for (let r = at + 1; r < page.length && page[r].length; r++)
+    rows.push(page[r].filter((value) => !(typeof value === 'string' && /^[█▏▎▍▌▋▊▉]+$/.test(value))));
   return rows;
+}
+
+// Gemini reads parametersJsonSchema as a subset of JSON Schema: every value has one type, or an
+// anyOf of typed alternatives (a threshold that is a number or a text). Type lists, oneOf, allOf,
+// not and $ref stay out of every tool.
+function assertGeminiSubset(schema, path) {
+  assert.equal(typeof schema, 'object', path);
+  for (const key of ['oneOf', 'allOf', 'not', '$ref'])
+    assert.equal(Object.hasOwn(schema, key), false, path + ' uses ' + key);
+  if (schema.anyOf) {
+    assert.equal(Object.hasOwn(schema, 'type'), false, path + ' has a type beside anyOf');
+    schema.anyOf.forEach((branch, index) => assertGeminiSubset(branch, path + '.anyOf[' + index + ']'));
+    return;
+  }
+  assert.equal(typeof schema.type, 'string', path + ' has one type');
+  for (const [name, value] of Object.entries(schema.properties || {}))
+    assertGeminiSubset(value, path + '.' + name);
+  if (schema.items) assertGeminiSubset(schema.items, path + '[]');
+  for (const name of schema.required || [])
+    assert.ok(Object.hasOwn(schema.properties || {}, name), path + ' requires an unknown ' + name);
 }
 
 function declarations(body) {
@@ -141,6 +173,7 @@ test('the complete Gemini toolset uses JSON Schema and retains nested constraint
   ]);
   assert.equal(schemas.run_report.properties.maxRows.maximum, 1256);
   assert.equal(schemas.run_report.properties.maxRows.default, 1256);
+  for (const [name, schema] of Object.entries(schemas)) assertGeminiSubset(schema, name);
   // save_dashboard nests arrays of objects three deep (datasets > mapping, tiles > metrics);
   // their bounds, enums, patterns and required lists must reach Gemini untouched.
   const dashboard = schemas.save_dashboard;
@@ -148,12 +181,19 @@ test('the complete Gemini toolset uses JSON Schema and retains nested constraint
     'at',
     'datasets',
     'id',
+    'lowerIsBetter',
     'name',
+    'neutral',
     'revision',
     'schedule',
     'target',
     'tiles',
   ]);
+  // Polarity lists name metric fields or ratio keys of the tiles.
+  for (const name of ['lowerIsBetter', 'neutral']) {
+    const { description: _description, ...list } = dashboard.properties[name];
+    assert.deepEqual(list, { type: 'array', items: { type: 'string' }, maxItems: 20 }, name);
+  }
   assert.equal(dashboard.properties.at.properties.weekday.maximum, 7);
   assert.deepEqual(dashboard.properties.schedule.enum, ['manual', 'hourly', 'daily', 'weekly']);
   assert.deepEqual(dashboard.required, ['name', 'datasets', 'tiles', 'target']);
@@ -161,7 +201,7 @@ test('the complete Gemini toolset uses JSON Schema and retains nested constraint
   const { datasets, tiles, target } = dashboard.properties;
   assert.equal(datasets.type, 'array');
   assert.equal(datasets.minItems, 1);
-  assert.equal(datasets.maxItems, 6);
+  assert.equal(datasets.maxItems, 8);
   const dataset = datasets.items;
   assert.equal(dataset.type, 'object');
   assert.deepEqual(dataset.required, ['connectionId', 'reportType', 'id', 'label', 'sheetName']);
@@ -171,7 +211,7 @@ test('the complete Gemini toolset uses JSON Schema and retains nested constraint
   assert.deepEqual(dataset.properties.fields, schemas.run_report.properties.fields);
   assert.deepEqual(dataset.properties.dateRange, schemas.run_report.properties.dateRange);
   assert.deepEqual(dataset.properties.dateRange.required, ['preset']);
-  for (const preset of ['last90', 'lastWeek', 'previousWeek', 'custom'])
+  for (const preset of ['last90', 'previous7', 'previous14', 'previous30', 'previous90', 'lastWeek', 'previousWeek', 'previousMonth', 'custom'])
     assert.ok(dataset.properties.dateRange.properties.preset.enum.includes(preset), preset);
   const datasetId = dataset.properties.id;
   assert.equal(datasetId.maxLength, 40);
@@ -187,7 +227,30 @@ test('the complete Gemini toolset uses JSON Schema and retains nested constraint
   const tile = tiles.items;
   assert.deepEqual(tile.required, ['title', 'type']);
   assert.deepEqual(tile.properties.ratios.items.required, ['key', 'numerator', 'denominator']);
-  assert.deepEqual(tile.properties.filters, schemas.summarize.properties.filters);
+  // Tile filters are summarize's, with a note on when they apply.
+  const { description: _filterNote, ...filters } = tile.properties.filters;
+  const { description: _summaryNote, ...summaryFilters } = schemas.summarize.properties.filters;
+  assert.deepEqual(filters, summaryFilters);
+  // A compare lists every account of each period.
+  const { compare, highlight } = tile.properties;
+  assert.equal(compare.type, 'object');
+  assert.deepEqual(compare.required, ['current', 'previous']);
+  for (const side of ['current', 'previous']) {
+    const { description: _description, ...ids } = compare.properties[side];
+    assert.deepEqual(ids, { type: 'array', items: { type: 'string' }, minItems: 1 }, side);
+  }
+  // Up to four rules per table: a number or a multiple of the total for a metric or ratio, a text
+  // for a groupBy column. Value is an anyOf of the two scalar types, which Gemini accepts.
+  assert.equal(highlight.type, 'array');
+  assert.equal(highlight.maxItems, 4);
+  const rule = highlight.items;
+  assert.equal(rule.type, 'object');
+  assert.deepEqual(rule.required, ['field', 'op', 'color']);
+  assert.deepEqual(Object.keys(rule.properties), ['field', 'op', 'value', 'ofTotal', 'color']);
+  assert.deepEqual(rule.properties.op.enum, ['gt', 'gte', 'lt', 'lte', 'eq', 'ne', 'contains', 'in']);
+  assert.deepEqual(rule.properties.value.anyOf, [{ type: 'number' }, { type: 'string' }]);
+  assert.equal(rule.properties.ofTotal.type, 'number');
+  assert.deepEqual(rule.properties.color.enum, ['red', 'green', 'amber']);
   assert.deepEqual(tile.properties.type.enum, [
     'kpi',
     'table',
@@ -374,19 +437,22 @@ test('a Gemini tool round saves and runs a two-dataset dashboard with underscore
     1,
     'both data tabs, the dashboard tab and its chart are committed in one atomic batch'
   );
-  assert.deepEqual(rowsUnder(f, 'Gemini Dashboard', 'Campaigns', 3), [
-    ['Source', 'Campaign', 'Spend'],
+  // The table card reads both datasets, ranked, with its total.
+  assert.deepEqual(cardOf(pageOf(f, 'Gemini Dashboard'), 'Campaigns'), [
+    ['Source', 'Campaign', 'Spend (EUR)'],
     ['Account 2', 'meadow', 7],
     ['Account 1', 'canopy', 3],
+    ['Total', 10],
   ]);
   // The numbers behind the chart live on the hidden chart data tab.
-  assert.deepEqual(rowsUnder(f, 'Gemini Dashboard (chart data)', 'Spend by campaign', 2), [
+  assert.deepEqual(cardOf(pageOf(f, 'Gemini Dashboard (chart data)'), 'Spend by campaign'), [
     ['Campaign', 'Spend'],
     ['meadow', 7],
     ['canopy', 3],
   ]);
   assert.deepEqual(
-    f.state.charts.map((chart) => [chart.spec.title, chart.spec.basicChart.chartType]),
+    // The card above the chart carries its title; the chart keeps it as alt text.
+    f.state.charts.map((chart) => [chart.spec.altText, chart.spec.basicChart.chartType]),
     [['Spend by campaign', 'BAR']]
   );
   assert.equal(f.value(f.tab('Account 2 Data'), 5, 1), 'meadow');

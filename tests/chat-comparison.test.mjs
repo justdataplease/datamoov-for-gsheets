@@ -85,16 +85,51 @@ test('the real chat request carries artifact intent, reusable periods and bounde
   );
   assert.match(request.system, /never finish such a request with chat numbers alone/);
   assert.match(request.system, /A question such as "how much did we spend" is analysis/);
-  // Reusable periods: relative presets, two datasets per account only for week versus previous
-  // week, and one query per account for a trend.
+  // Reusable periods: relative presets, a lean previous-period twin per account by default (week
+  // versus previous week included), and one query per account for a trend.
   assert.match(
     request.system,
-    /- Dashboard datasets: one query per requested account or subject/
+    /- Dashboard datasets \(at most 8\): one query per requested account or subject/
+  );
+  assert.doesNotMatch(request.system, /Only an explicit week-versus-previous-week request/);
+  assert.match(
+    request.system,
+    /Performance dashboards compare with the previous period by default, and always when asked: per account add one lean totals dataset for the previous period \(previous7\/14\/30\/90 for last7\/14\/30\/90, previousWeek for lastWeek, previousMonth for lastMonth; for a custom range the custom range of equal length just before it; yesterday, thisMonth, thisYear and lastYear have none, so those dashboards are not compared\) with only the kpi fields, no date or campaign fields, mapped to the same keys as its current dataset and labeled with account and period/
   );
   assert.match(
     request.system,
-    /Only an explicit week-versus-previous-week request uses two datasets per account, with dateRange presets lastWeek and previousWeek and labels naming account and period/
+    /ONE kpi tile of headline totals and rates[^.]*; with previous-period datasets it reads every current and previous dataset with compare: \{current: \[current ids\], previous: \[previous ids\]\}/
   );
+  assert.match(request.system, /Trends and tables may compare too when the previous datasets hold their date or group fields/);
+  assert.match(request.system, /a mapped dataset offers tiles only its mapped keys/);
+  // Every requested section is built, from the custom query report when the standard ones lack
+  // the subject, and an honest note replaces controls a Sheets dashboard cannot have.
+  assert.match(
+    request.system,
+    /Build every section the user asks for as tiles over real datasets, never as a description of how it could be built; subjects the standard reports lack \(keywords, search terms, assets, audiences, geography\) come from the source's custom query report\. If the dataset limit forces a section out, say which\./
+  );
+  assert.match(request.system, /Requested insights are the Highlights block the runtime writes on every refresh/);
+  assert.match(
+    request.system,
+    /Sheets dashboards have no interactive controls: the period is the dataset preset \(changed by asking chat\) and a dropdown filter becomes tiles or tile filters; say so in one sentence/
+  );
+  // Readable charts and decision cues the runtime renders on every refresh.
+  assert.match(
+    request.system,
+    /One measure per chart, or a volume with a rate on secondaryAxis \(spend with cpa\); never three measures of different scale on one chart/
+  );
+  assert.match(
+    request.system,
+    /Flag, highlight, alert or red\/green requests are table highlight rules, with ofTotal for relative thresholds \(CPA above 1\.5x overall: \{field: "cpa", op: "gt", ofTotal: 1\.5, color: "red"\}; on a summed metric ofTotal is a share of the table total, so top converters are \{field: "conversions", op: "gte", ofTotal: 0\.1, color: "green"\}\) or a text value on a groupBy column \(low-rated assets: \{field: "performance_label", op: "eq", value: "LOW", color: "red"\}\); percent thresholds are fractions \(CTR below 2% is value 0\.02\)/
+  );
+  // A share is a bar chart, since the runtime draws pies as bars.
+  assert.match(request.system, /bar to rank segments and for a share by category, as pies are drawn as bars\)/);
+  assert.doesNotMatch(request.system, /pie for share/);
+  assert.match(
+    request.system,
+    /Set lowerIsBetter to the cost-per and cost-rate keys the tiles use \(cpa, cpc, cpm, cost per conversion\) and neutral to their spend, cost and budget/
+  );
+  assert.match(request.system, /1 to 8 datasets, each on its own tab/);
   assert.match(
     request.system,
     /Cover a trend with ONE query per account over the whole period \(last 3 months is \{preset: "last90"\}\) and let tiles bucket it with dateBucket week or month; never split a trend into several date ranges/
@@ -110,12 +145,13 @@ test('the real chat request carries artifact intent, reusable periods and bounde
   );
   // An honest finish: what exists, where, how to refresh it, and no claim after a failure.
   assert.match(request.system, /- Dashboard tiles: design for decisions/);
-  assert.match(request.system, /Then one action table: the items or segments that need attention/);
+  assert.match(request.system, /Then the action tables: the items or segments that need attention/);
   assert.match(request.system, /never averages of per-row rates/);
-  // Findings first, read from what run_dashboard returned, then what exists and how to refresh it.
+  // The runtime's highlights first, then findings read from what run_dashboard returned, then
+  // what exists and how to refresh it.
   assert.match(
     request.system,
-    /After run_dashboard succeeds, lead with 3 to 5 findings read from its scorecards and tile previews, each with its number and the action it suggests; state no finding the returned values do not show\. The first and last week or month of a trend can be partial, so do not read a rise or drop into them\. Then say what was created, which tab holds what, and that Reports > Dashboards > Refresh dashboard rebuilds all of it without AI/
+    /After run_dashboard succeeds, quote the highlights it returns, then add 3 to 5 findings read from its scorecards and tile previews, each with its number and the action it suggests; state no finding the returned values do not show\. The first and last week or month of a trend can be partial, so do not read a rise or drop into them\. Then say what was created, which tab holds what, and that Reports > Dashboards > Refresh dashboard rebuilds all of it without AI/
   );
   // Tile filters act on rows, so the prompt never asks for a condition on totals through them.
   assert.match(request.system, /Tile filters select dataset rows before aggregation/);
@@ -151,9 +187,11 @@ test('the real chat request carries artifact intent, reusable periods and bounde
     /For one-off all-platform comparisons.*include date, campaign/
   );
   const reportTool = request.tools.find((tool) => tool.name === 'run_report');
-  assert.ok(
-    reportTool.input_schema.properties.dateRange.properties.preset.enum.includes('previousWeek')
-  );
+  // Every previous-period preset the dashboard rule names is a real preset the model can pass.
+  for (const preset of ['previous7', 'previous14', 'previous30', 'previous90', 'previousWeek', 'previousMonth']) {
+    assert.ok(reportTool.input_schema.properties.dateRange.properties.preset.enum.includes(preset), preset);
+    assert.match(request.system, new RegExp('dateRange presets: [^\\n]*\\b' + preset + '\\b'));
+  }
   // The saved plan itself can hold both relative weeks of three accounts.
   const datasets = request.tools.find((tool) => tool.name === 'save_dashboard').input_schema
     .properties.datasets;
@@ -211,11 +249,13 @@ function dashboardFixture() {
     })
   );
   const metrics = ['spend', 'clicks', 'impressions'].map((field) => ({ field, agg: 'sum' }));
+  const ids = (preset) => connections.map((_, index) => 'account' + index + '_' + preset);
+  const weeks = { current: ids('lastWeek'), previous: ids('previousWeek') };
   f.input = {
     name: 'Weekly performance comparison',
     target: { sheetName: 'Weekly comparison Dashboard' },
-    // Three accounts in two periods are six datasets, the most one dashboard holds. Tiles read
-    // them together, so every dataset maps its columns to the shared names.
+    // Three accounts in two periods are six datasets. Tiles read them together, so every
+    // dataset maps its columns to the shared names.
     datasets: connections.flatMap((connection, index) =>
       ['lastWeek', 'previousWeek'].map((preset) => {
         const period = preset === 'lastWeek' ? 'current week' : 'previous week';
@@ -233,37 +273,47 @@ function dashboardFixture() {
         };
       })
     ),
+    // The previous weeks feed only the tiles that compare; the others read the current weeks.
     tiles: [
-      { title: 'Totals', type: 'kpi', metrics },
+      { title: 'Totals', type: 'kpi', metrics, compare: weeks },
       {
-        title: 'Spend by account and period',
+        title: 'Spend by account',
         type: 'column',
         groupBy: ['source'],
         metrics: [{ field: 'spend', agg: 'sum' }],
       },
-      {
-        title: 'Weekly totals',
-        type: 'table',
-        groupBy: ['date', 'source'],
-        dateBucket: 'week',
-        metrics,
-      },
+      { title: 'Weekly totals', type: 'table', groupBy: ['source'], metrics, compare: weeks },
     ],
   };
   return f;
 }
 
-// The rows of a tab under the row whose first cell is `heading`, up to the next blank row.
-function rowsUnder(f, sheetName, heading, width) {
-  const sheet = f.tab(sheetName);
-  let row = 1;
-  while (row <= sheet.getLastRow() && f.value(sheet, row, 1) !== heading) row++;
-  assert.ok(row <= sheet.getLastRow(), heading + ' is on ' + sheetName);
+// The dashboard tab as it reads: each row's non-empty cells in column order. Cards sit on a grid
+// behind a margin column, and a merged cell holds its text in its first cell only.
+function pageOf(f, name) {
+  const sheet = f.tab(name);
+  const out = [];
+  for (let r = 1; r <= sheet.getLastRow(); r++) {
+    const row = [];
+    for (let c = 1; c <= sheet.maxColumns; c++) if (f.value(sheet, r, c) !== '') row.push(f.value(sheet, r, c));
+    out.push(row);
+  }
+  return out;
+}
+
+// A card on the page: the rows under its title row (header, rows, total) up to the card's end,
+// without the in-cell bars of a table.
+function cardOf(page, title) {
+  const at = page.findIndex((row) => row[0] === title);
+  assert.ok(at >= 0, title + ' is on the page');
   const rows = [];
-  for (row++; row <= sheet.getLastRow() && f.value(sheet, row, 1) !== ''; row++)
-    rows.push(Array.from({ length: width }, (_, column) => f.value(sheet, row, column + 1)));
+  for (let r = at + 1; r < page.length && page[r].length; r++)
+    rows.push(page[r].filter((value) => !(typeof value === 'string' && /^[█▏▎▍▌▋▊▉]+$/.test(value))));
   return rows;
 }
+
+// One column of a card, by its header, without the header.
+const columnOf = (card, header) => card.slice(1).map((row) => row[card[0].indexOf(header)]);
 
 test('a saved three-account comparison fetches six relative queries and advances both weeks on refresh', () => {
   const f = dashboardFixture();
@@ -306,22 +356,28 @@ test('a saved three-account comparison fetches six relative queries and advances
     f.fetched.map(({ startDate, endDate }) => [startDate, endDate]),
     weeks(['2026-09-07', '2026-09-13'], ['2026-08-31', '2026-09-06'])
   );
-  // Each period stays its own series, and the dashboard names the dates each dataset covered.
+  // The two weeks are compared, never added together: each total is one week of three
+  // accounts beside the week before, and each account's row meets its own previous week.
   assert.deepEqual(
-    rowsUnder(f, 'Weekly comparison Dashboard', 'Weekly totals', 5).slice(1),
-    f.input.datasets.map((dataset, index) => [
-      index % 2 ? '2026-08-31' : '2026-09-07',
-      dataset.label,
-      10,
-      2,
-      20,
-    ])
+    first.scorecards.map((card) => [card.label, card.value, card.previous, card.change]),
+    [
+      ['Spend (AED)', 30, 30, '0.0% vs 30.00'],
+      ['Clicks', 6, 6, '0.0% vs 6'],
+      ['Impressions', 60, 60, '0.0% vs 60'],
+    ]
   );
+  let page = pageOf(f, 'Weekly comparison Dashboard');
+  const totals = cardOf(page, 'Weekly totals');
+  assert.deepEqual(totals[0], ['Source', 'Spend (AED)', 'Δ %', 'Clicks', 'Δ %', 'Impressions', 'Δ %']);
   assert.deepEqual(
-    rowsUnder(f, 'Weekly comparison Dashboard', 'Data sources', 7)
-      .slice(1)
-      .map((row) => row[4]),
-    weeks('2026-09-07 to 2026-09-13', '2026-08-31 to 2026-09-06')
+    totals.slice(1, -1),
+    ['A', 'B', 'C'].map((account) => ['Account ' + account + ' - current week', 10, 0, 2, 0, 20, 0])
+  );
+  assert.deepEqual(totals.at(-1), ['Total', 30, 0, 6, 0, 60, 0]);
+  assert.equal(first.tiles[0].rows, 3, 'the chart reads the current weeks');
+  assert.deepEqual(
+    columnOf(cardOf(page, 'Data sources'), 'Date range'),
+    weeks('7 Sep – 13 Sep 2026', '31 Aug – 6 Sep 2026')
   );
   assert.equal(f.state.charts.length, 1);
   const sheetIds = tabs.map((name) => f.tab(name).id);
@@ -335,17 +391,11 @@ test('a saved three-account comparison fetches six relative queries and advances
     f.fetched.slice(6).map(({ startDate, endDate }) => [startDate, endDate]),
     weeks(['2026-09-14', '2026-09-20'], ['2026-09-07', '2026-09-13'])
   );
+  page = pageOf(f, 'Weekly comparison Dashboard');
+  assert.ok(page[2].includes('vs 7 Sep – 13 Sep 2026'), 'the band names the compared week');
   assert.deepEqual(
-    rowsUnder(f, 'Weekly comparison Dashboard', 'Weekly totals', 5)
-      .slice(1)
-      .map((row) => row[0]),
-    weeks('2026-09-14', '2026-09-07')
-  );
-  assert.deepEqual(
-    rowsUnder(f, 'Weekly comparison Dashboard', 'Data sources', 7)
-      .slice(1)
-      .map((row) => row[4]),
-    weeks('2026-09-14 to 2026-09-20', '2026-09-07 to 2026-09-13')
+    columnOf(cardOf(page, 'Data sources'), 'Date range'),
+    weeks('14 Sep – 20 Sep 2026', '7 Sep – 13 Sep 2026')
   );
   assert.match(
     f.value(f.tab('Account A previous week Data'), 2, 1),

@@ -33,6 +33,8 @@
       active: null,
       selectedSourceIds: null,
       availableSourceIds: [],
+      // The latest Test run and the provider and model its inline outcome describes.
+      modelTest: { run: 0, tested: null },
     };
     function selectedSourceIds() {
       return state.connections
@@ -122,7 +124,8 @@
       $('ai-debug').checked = chat.ai?.debug !== false;
       updateInstructionCount();
       $('ai-remove').hidden = !configured;
-      $('ai-test').hidden = !configured;
+      // Test checks the form's values, so it works before the first save.
+      $('ai-test').hidden = !select.value;
     }
     function updateInstructionCount() {
       const stored = Number.isFinite(chat.ai?.instructionCharacters)
@@ -161,6 +164,58 @@
       const isDefault = (chat.ai?.providers || []).some((item) => item.defaultModel === current);
       if (model !== undefined && model !== '') $('ai-model').value = model;
       else if (!current || isDefault) $('ai-model').value = info?.defaultModel || '';
+      updateModelDefault();
+    }
+    // A blank model means the provider default, shown as the placeholder and the help line.
+    function updateModelDefault() {
+      const fallback = providerInfo($('ai-provider').value)?.defaultModel || '';
+      const model = $('ai-model').value.trim();
+      $('ai-model').placeholder = fallback;
+      $('ai-model-default').textContent = fallback ? 'Default: ' + fallback + '.' : '';
+      $('ai-model-use-default').hidden = !fallback || model === fallback;
+      const tested = chat.modelTest.tested;
+      if (tested && (tested.provider !== $('ai-provider').value || tested.model !== model))
+        forgetModelTest();
+    }
+    function setModel(value) {
+      $('ai-model').value = value;
+      chat.settingsDirty = true;
+      updateModelDefault();
+      $('ai-model').focus();
+    }
+    // Drops the shown outcome and ignores the reply of a test still running.
+    function forgetModelTest() {
+      chat.modelTest.run++;
+      chat.modelTest.tested = null;
+      $('ai-model-result').replaceChildren();
+    }
+    // Provider-supplied names are rendered as text only.
+    function showModelResult(result) {
+      const box = $('ai-model-result');
+      box.replaceChildren();
+      if (result.ok) {
+        const line = el('p', 'model-result-line ok', '✓ ' + result.model + ' is available');
+        if (result.displayName && result.displayName !== result.model)
+          line.append(' (' + result.displayName + ')');
+        box.append(line);
+        return;
+      }
+      if (result.exists !== false) {
+        box.append(el('p', 'model-result-line error', '✗ ' + result.message));
+        return;
+      }
+      box.append(el('p', 'model-result-line error', '✗ Model not found'));
+      const suggestions = (Array.isArray(result.suggestions) ? result.suggestions : []).filter(
+        (name) => typeof name === 'string' && name
+      );
+      if (!suggestions.length) {
+        box.append(el('p', 'field-help', 'Check the name in your provider’s model list.'));
+        return;
+      }
+      box.append(el('p', 'field-help', 'Similar models:'));
+      const row = el('div', 'chip-row');
+      for (const name of suggestions) row.append(button(name, 'chip', () => setModel(name)));
+      box.append(row);
     }
     function render() {
       const configured = Boolean(chat.ai?.configured);
@@ -758,7 +813,15 @@
     $('ai-form').addEventListener('change', () => {
       chat.settingsDirty = true;
     });
-    $('ai-provider').addEventListener('change', () => updateProviderFields());
+    $('ai-provider').addEventListener('change', () => {
+      updateProviderFields();
+      $('ai-test').hidden = !$('ai-provider').value;
+    });
+    $('ai-model').addEventListener('input', updateModelDefault);
+    $('ai-key').addEventListener('input', forgetModelTest);
+    $('ai-model-use-default').addEventListener('click', () =>
+      setModel(providerInfo($('ai-provider').value)?.defaultModel || '')
+    );
     $('ai-instructions').addEventListener('input', updateInstructionCount);
     $('ai-form').addEventListener('submit', (event) => {
       event.preventDefault();
@@ -789,13 +852,33 @@
           fieldset.disabled = false;
         });
     });
+    // Test sends the form's current values and saves nothing; a blank key reuses the saved one
+    // only for the saved provider. Editing the provider, key or model drops the outcome.
     $('ai-test').addEventListener('click', (event) => {
       const node = event.currentTarget;
+      if (!$('ai-key').reportValidity()) return;
+      const input = {
+        provider: $('ai-provider').value,
+        apiKey: $('ai-key').value,
+        model: $('ai-model').value.trim(),
+      };
+      forgetModelTest();
+      const run = chat.modelTest.run;
+      chat.modelTest.tested = { provider: input.provider, model: input.model };
       node.disabled = true;
       node.textContent = 'Testing…';
-      api('dmvTestAi')
-        .then((result) => notice(result.message || 'The AI provider replied.'))
-        .catch((error) => notice(error.message, 'error'))
+      api('dmvTestAi', input)
+        .then((result) => {
+          if (run === chat.modelTest.run) showModelResult(result);
+          notice(
+            result.message || 'The AI provider replied.',
+            result.ok === false ? 'error' : 'success'
+          );
+        })
+        .catch((error) => {
+          if (run === chat.modelTest.run) showModelResult({ ok: false, message: error.message });
+          notice(error.message, 'error');
+        })
         .finally(() => {
           node.disabled = false;
           node.textContent = 'Test';
@@ -808,6 +891,7 @@
         .then((summary) => {
           chat.ai = summary;
           chat.settingsDirty = false;
+          forgetModelTest();
           resetConversation();
           renderSettings();
           render();

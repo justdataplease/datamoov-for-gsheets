@@ -235,10 +235,15 @@
                     <option value="last14">Last 14 days</option>
                     <option value="last30" selected>Last 30 days</option>
                     <option value="last90">Last 90 days</option>
+                    <option value="previous7">Previous 7 days (before the last 7)</option>
+                    <option value="previous14">Previous 14 days (before the last 14)</option>
+                    <option value="previous30">Previous 30 days (before the last 30)</option>
+                    <option value="previous90">Previous 90 days (before the last 90)</option>
                     <option value="lastWeek">Last week (Mon–Sun)</option>
                     <option value="previousWeek">Week before last (Mon-Sun)</option>
                     <option value="thisMonth">This month</option>
                     <option value="lastMonth">Last month</option>
+                    <option value="previousMonth">Month before last</option>
                     <option value="thisYear">This year</option>
                     <option value="lastYear">Last year</option>
                     <option value="custom">Custom dates</option>
@@ -603,10 +608,24 @@
                 />
                 <p id="ai-key-help" class="field-help"></p>
                 <label for="ai-model">Model</label
-                ><input id="ai-model" type="text" maxlength="80" spellcheck="false" />
-                <p class="field-help">
-                  Any model this provider serves. Faster models answer sooner; the default is a
-                  strong one.
+                ><input
+                  id="ai-model"
+                  type="text"
+                  maxlength="80"
+                  spellcheck="false"
+                  autocomplete="off"
+                  aria-describedby="ai-model-result ai-model-help"
+                />
+                <div id="ai-model-result" class="model-result" aria-live="polite"></div>
+                <p id="ai-model-help" class="field-help model-help">
+                  <span id="ai-model-default"></span>
+                  <button type="button" id="ai-model-use-default" class="text-button" hidden>
+                    Use default
+                  </button>
+                  <span class="model-help-text"
+                    >Any model this provider serves. Faster models answer sooner; the default is a
+                    strong one. Test checks that the model exists before you save.</span
+                  >
                 </p>
                 <label for="ai-max-rows">Maximum rows per chat report</label>
                 <input

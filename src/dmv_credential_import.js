@@ -309,7 +309,18 @@ function dmvImportPlan_(bundle) {
   var dashboards = dashboardItems.map(function (item, index) {
     dmvImportObject_(
       item,
-      ['ref', 'name', 'target', 'datasets', 'tiles', 'schedule', 'at'],
+      [
+        'ref',
+        'name',
+        'target',
+        'datasets',
+        'tiles',
+        'lowerIsBetter',
+        'neutral',
+        'toned',
+        'schedule',
+        'at',
+      ],
       'Imported dashboard'
     );
     var ref = dmvImportRef_(item.ref === undefined ? 'dashboard-' + (index + 1) : item.ref);
@@ -341,7 +352,9 @@ function dmvImportPlan_(bundle) {
       planned.connectionRef = connectionRef;
       return planned;
     });
-    return {
+    if (item.toned !== undefined && typeof item.toned !== 'boolean')
+      throw new Error('Imported dashboard toned must be true or false.');
+    var dashboard = {
       ref: ref,
       name: dmvText_(item.name, 'Imported dashboard name', 80, true),
       target: {
@@ -351,9 +364,17 @@ function dmvImportPlan_(bundle) {
       },
       datasets: datasets,
       tiles: dmvImportPlain_(item.tiles, 'Imported dashboard tiles'),
+      // Files written before changes carried colour have no toned flag: their plans had none.
+      toned: item.toned === true,
       schedule: dmvSchedule_(item.schedule),
       at: item.at === undefined ? null : dmvImportPlain_(item.at, 'Imported schedule time'),
     };
+    // The names are checked against the tiles by the dashboard validator at save time.
+    ['lowerIsBetter', 'neutral'].forEach(function (name) {
+      if (item[name] !== undefined)
+        dashboard[name] = dmvImportStrings_(item[name], 'Imported dashboard ' + name);
+    });
+    return dashboard;
   });
   return {
     credentials: credentials,
@@ -651,20 +672,29 @@ function dmvImportCredentials(bundle) {
           dashboard.target.sheetName === item.target.sheetName
         );
       })[0];
-      var result =
-        existing ||
-        dmvSaveDashboard({
-          name: item.name,
-          target: item.target,
-          datasets: datasets,
-          tiles: item.tiles,
-          schedule: item.schedule,
-          at: item.at,
-        });
+      var result = existing || dmvImportSaveDashboard_(item, datasets);
       return { id: result.id, label: result.name, status: existing ? 'existing' : 'saved' };
     });
   });
   return response;
+}
+
+// A dashboard is saved through the ordinary validator, its polarity lists included, so it keeps
+// the colours of its changes. A plan saved before changes carried colour (no toned flag) is
+// saved the way a refresh reads it: what a save now refuses is repaired, its periods are not
+// checked again and no rise of a cost is called good, so it imports wherever it refreshed.
+function dmvImportSaveDashboard_(item, datasets) {
+  var input = {
+    name: item.name,
+    target: item.target,
+    datasets: datasets,
+    tiles: item.tiles,
+    schedule: item.schedule,
+    at: item.at,
+  };
+  if (item.lowerIsBetter) input.lowerIsBetter = item.lowerIsBetter;
+  if (item.neutral) input.neutral = item.neutral;
+  return dmvDashboardSave_(input, !item.toned);
 }
 
 function dmvImportUnresolved_(kind) {
@@ -830,7 +860,7 @@ function dmvExportSettings() {
       });
       return;
     }
-    dashboards.push({
+    var exported = {
       ref: ref(dashboard.name, 'dashboard-' + (index + 1)),
       name: dashboard.name,
       target: { sheetName: dashboard.target.sheetName },
@@ -850,9 +880,15 @@ function dmvExportSettings() {
         return item;
       }),
       tiles: plan.tiles,
+      // The colours of its changes: whether they are coloured at all (plans saved before were
+      // not), and which values are better low or neither good nor bad.
+      toned: plan.toned === true,
       schedule: dashboard.schedule || 'manual',
       at: dashboard.at || null,
-    });
+    };
+    if (plan.lowerIsBetter) exported.lowerIsBetter = plan.lowerIsBetter;
+    if (plan.neutral) exported.neutral = plan.neutral;
+    dashboards.push(exported);
   });
   if (!credentials.length && !connections.length && !reports.length && !dashboards.length)
     throw new Error(

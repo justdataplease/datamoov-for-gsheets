@@ -75,16 +75,18 @@ test('AI settings keep the key private, retain it on blank edits and validate pr
 
 test('connectivity test sends a minimal request and redacts the key from provider errors', () => {
   const f = fixture();
-  f.state.responses.push(anthropic([{ type: 'text', text: 'OK' }]));
+  f.state.responses.push({ body: { id: 'claude-opus-5', type: 'model' } }, anthropic([{ type: 'text', text: 'OK' }]));
   const result = f.api.dmvTestAi();
-  assert.match(result.message, /Anthropic .* claude-opus-5 replied: OK/);
-  const call = f.state.http[0];
+  assert.match(result.message, /Anthropic .* claude-opus-5 is available and replied: OK/);
+  const call = f.state.http[1];
   assert.equal(call.url, 'https://api.anthropic.com/v1/messages');
   assert.equal(call.options.headers['x-api-key'], AI_KEY);
   assert.equal(payload(call).max_tokens, 64);
   assert.equal(payload(call).tools, undefined);
-  f.state.responses.push({ code: 401, body: { error: { type: 'authentication_error', message: 'invalid x-api-key ' + AI_KEY } } });
-  assert.throws(() => f.api.dmvTestAi(), (error) => /Anthropic rejected the request \(HTTP 401\)/.test(error.message) && !error.message.includes(AI_KEY));
+  // A bad key fails the model lookup and the test request alike.
+  const rejected = { code: 401, body: { error: { type: 'authentication_error', message: 'invalid x-api-key ' + AI_KEY } } };
+  f.state.responses.push(rejected, rejected);
+  assert.throws(() => f.api.dmvTestAi(), (error) => /Anthropic \(Claude\) rejected the API key \(HTTP 401\)/.test(error.message) && !error.message.includes(AI_KEY));
 });
 
 test('a full Anthropic turn runs a report, summarizes, writes the table, charts it and never leaks secrets', () => {

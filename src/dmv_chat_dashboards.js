@@ -52,18 +52,23 @@ function dmvChatDashboardTools_(session, baseTools) {
         type: 'string',
         enum: ['kpi', 'table'].concat(DMV_DASHBOARD.chartTypes),
         description:
-          'kpi: scorecards of its metrics, no groupBy. Charts: groupBy[0] is the axis, an optional second groupBy column (for example source) splits one metric into series. table: any groupBy and metrics.',
+          'kpi: scorecards of its metrics, no groupBy. Charts: groupBy[0] is the axis, an optional second groupBy column (for example source) splits one metric into series. For a share or a breakdown by category (spend by channel) use bar: categories largest first, labelled with their values; pie is drawn as bars too. table: any groupBy and metrics.',
       },
       datasets: {
         type: 'array',
         items: { type: 'string' },
-        description: 'Dataset ids this tile reads. Several ids need a mapping on each dataset.',
+        description:
+          'Dataset ids this tile reads. Several ids need a mapping on each dataset. Previous-period datasets belong only to tiles with compare; left out, a compared tile reads its compare lists and any other tile every current-period dataset.',
       },
       groupBy: summary.groupBy,
       dateBucket: summary.dateBucket,
       metrics: summary.metrics,
       ratios: summary.ratios,
-      filters: summary.filters,
+      filters: Object.assign({}, summary.filters, {
+        description:
+          (summary.filters.description ? summary.filters.description + ' ' : '') +
+          'Filters apply to dataset rows before grouping, so "without conversions" needs a dataset without a date column, where each row covers the whole period.',
+      }),
       orderBy: summary.orderBy,
       limit: {
         type: 'integer',
@@ -89,12 +94,58 @@ function dmvChatDashboardTools_(session, baseTools) {
       compare: {
         type: 'object',
         properties: {
-          current: { type: 'string', description: 'Dataset id of the current period.' },
-          previous: { type: 'string', description: 'Dataset id of the previous period.' },
+          current: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 1,
+            description:
+              'Dataset ids of the current period, every account of it, for example ["gads1", "gads2"].',
+          },
+          previous: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 1,
+            description:
+              'Dataset ids of the previous period, one per current dataset of the same account and report, for example ["gads1_prev", "gads2_prev"].',
+          },
         },
         required: ['current', 'previous'],
         description:
-          'kpi only, for a period comparison: each scorecard shows the current dataset value and its change against the previous dataset.',
+          'Change against the previous period, which must end the day before the current one starts (previous30 before last30, previousMonth before lastMonth); both lists are datasets of this tile and each side is added up across its datasets. kpi: each scorecard shows its change. table grouped by names (not dates): a Δ % column after each metric and ratio, rows matched by their groupBy values. line, area or column over one date groupBy column: a dashed previous-period line (lighter column) per value over the same days, aligned by position in the period (first week under first week).',
+      },
+      highlight: {
+        type: 'array',
+        maxItems: DMV_DASHBOARD.maxRules,
+        items: {
+          type: 'object',
+          properties: {
+            field: {
+              type: 'string',
+              description:
+                'A metric field or ratio key of this tile, or one of its groupBy columns.',
+            },
+            op: {
+              type: 'string',
+              enum: ['gt', 'gte', 'lt', 'lte', 'eq', 'ne', 'contains', 'in'],
+              description:
+                'gt, gte, lt, lte or eq for a metric or ratio; eq, ne, contains or in for a groupBy column.',
+            },
+            value: {
+              anyOf: [{ type: 'number' }, { type: 'string' }],
+              description:
+                'A number for a metric or ratio (a fixed threshold; a percent ratio or field is a fraction, so 2% is 0.02); text for a groupBy column, matched without regard to case (comma-separated for in).',
+            },
+            ofTotal: {
+              type: 'number',
+              description:
+                'Metrics and ratios only, instead of value: a multiple of the overall value of this tile, 1.5 means 150% of the overall CPA. The overall value of a summed metric is the table total, so there it is a share below 1: 0.1 flags the rows holding at least a tenth of all conversions.',
+            },
+            color: { type: 'string', enum: ['red', 'green', 'amber'] },
+          },
+          required: ['field', 'op', 'color'],
+        },
+        description:
+          'table only, for flag, highlight or alert requests: tint the rows whose value meets a rule (the first rule that matches wins). A metric or ratio takes value or ofTotal, not both; ofTotal keeps a rule meaningful on every refresh, for example {field: "cpa", op: "gt", ofTotal: 1.5, color: "red"}, or top converters {field: "conversions", op: "gte", ofTotal: 0.1, color: "green"}. A groupBy column takes a text value, for example {field: "performance_label", op: "eq", value: "LOW", color: "red"}. Highlights name the rows each rule flags; a rule that flags none appears only in the table legend.',
       },
     },
     required: ['title', 'type'],
@@ -121,7 +172,7 @@ function dmvChatDashboardTools_(session, baseTools) {
     {
       name: 'save_dashboard',
       description:
-        'Save a refreshable dashboard: 1 to 6 datasets (each a report query written to its own tab) and up to 12 tiles laid out on the dashboard tab (target): kpi scorecards on top, then native charts, then the tables behind them. At least one tile must be a chart. The runtime fetches, aggregates, writes and charts; it appears under Reports > Dashboards as a draft (or saved outright with a schedule the user asked for), where Refresh dashboard rebuilds every tab and chart without AI. Saving does not fetch; call run_dashboard next. Updates need id and revision from list_dashboards. Plans stay private to this account.',
+        'Save a refreshable dashboard: 1 to 8 datasets (each a report query written to its own tab) and up to 12 tiles laid out on the dashboard tab (target): kpi scorecards on top, then native charts, then the tables behind them. At least one tile must be a chart. The runtime fetches, aggregates, writes and charts; it appears under Reports > Dashboards as a draft (or saved outright with a schedule the user asked for), where Refresh dashboard rebuilds every tab and chart without AI. Saving does not fetch; call run_dashboard next. Updates need id and revision from list_dashboards. Plans stay private to this account.',
       input_schema: {
         type: 'object',
         properties: {
@@ -135,6 +186,20 @@ function dmvChatDashboardTools_(session, baseTools) {
             maxItems: DMV_DASHBOARD.maxDatasets,
           },
           tiles: { type: 'array', items: tile, minItems: 1, maxItems: DMV_DASHBOARD.maxTiles },
+          lowerIsBetter: {
+            type: 'array',
+            items: { type: 'string' },
+            maxItems: DMV_DASHBOARD.maxPolarity,
+            description:
+              'Metric fields or ratio keys where a rise is bad, such as cpa, cpc and other costs: their changes show red when they rise and their table shading darkens as they fall.',
+          },
+          neutral: {
+            type: 'array',
+            items: { type: 'string' },
+            maxItems: DMV_DASHBOARD.maxPolarity,
+            description:
+              'Metric fields or ratio keys whose change is neither good nor bad, such as spend or budget: shown grey. Every other value is good when it rises.',
+          },
           schedule: {
             type: 'string',
             enum: ['manual', 'hourly', 'daily', 'weekly'],
@@ -177,7 +242,7 @@ function dmvChatDashboardTools_(session, baseTools) {
     {
       name: 'run_dashboard',
       description:
-        'Fetch every dataset of a saved dashboard and rebuild its data tabs, scorecards, charts and tables in one atomic write; earlier output stays unchanged if anything fails. Returns scorecard values, the first rows of each chart and table (the latest points of a trend) and tab links. It is all a dashboard request needs: do not also call run_report, write_to_sheet or create_chart for the same data.',
+        'Fetch every dataset of a saved dashboard and rebuild its data tabs, scorecards, charts and tables in one atomic write; earlier output stays unchanged if anything fails. Returns scorecard values with their change, highlights (findings computed from the numbers on the page: the largest scorecard changes, rows flagged by highlight rules, the largest share of a chart, the leader of a ranked table) to quote, the first rows of each chart and table (the latest points of a trend) and tab links. It is all a dashboard request needs: do not also call run_report, write_to_sheet or create_chart for the same data.',
       input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       run: dmvChatRunDashboard_,
     },
@@ -194,6 +259,8 @@ function dmvChatSaveDashboard_(session, input) {
     'target',
     'schedule',
     'at',
+    'lowerIsBetter',
+    'neutral',
   ]);
   dmvChatSheetDeadline_(session);
   var plan = Object.assign({}, input);
@@ -300,10 +367,15 @@ function dmvChatRunDashboard_(session, input) {
       result.scorecards.length +
       (result.scorecards.length === 1 ? ' scorecard.' : ' scorecards.'),
     details: dmvChatDetails_(
-      result.scorecards
-        .map(function (card) {
-          return [card.label, card.value];
+      (result.highlights || [])
+        .map(function (text) {
+          return ['Highlight', text];
         })
+        .concat(
+          result.scorecards.map(function (card) {
+            return [card.label, card.value];
+          })
+        )
         .concat(
           result.tiles.map(function (tile) {
             return [

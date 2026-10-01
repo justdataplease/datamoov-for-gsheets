@@ -917,16 +917,58 @@ function installPreview(initial) {
       data.ai = { configured: false, debug: true, maxRows: 10000, providers: data.ai.providers };
       return copy(data.ai);
     },
-    dmvTestAi() {
-      if (!data.ai.configured) throw new Error('Save an AI provider and API key first.');
-      return {
+    // Mirrors the add-on's contract: the form's values without saving them (the saved ones
+    // without input), success for the listed preview models, and an unknown model such as
+    // 'gpt-unknown' returned as not found with suggestions from the same provider.
+    dmvTestAi(input) {
+      if (!input && !data.ai.configured) throw new Error('Save an AI provider and API key first.');
+      const provider = data.ai.providers.find(
+        (item) => item.id === (input ? input.provider : data.ai.provider)
+      );
+      if (!provider) throw new Error('Choose a supported AI provider.');
+      if (
+        input &&
+        !String(input.apiKey || '').trim() &&
+        !(data.ai.configured && data.ai.provider === provider.id)
+      )
+        throw new Error('Paste the API key for ' + provider.label + '.');
+      const model = (input ? input.model : data.ai.model) || provider.defaultModel;
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/.test(model) || model.length > 80)
+        throw new Error('Enter a model name using letters, digits, dots, dashes or colons.');
+      const names = {
+        anthropic: { 'claude-opus-5': 'Claude Opus 5', 'claude-sonnet-5': 'Claude Sonnet 5' },
+        openai: { 'gpt-5.5': '', 'gpt-5.5-mini': '', 'gpt-5.5-pro': '' },
+        gemini: { 'gemini-3.8-flash': 'Gemini 3.8 Flash', 'gemini-3.8-pro': 'Gemini 3.8 Pro' },
+      }[provider.id] || { [provider.defaultModel]: '' };
+      if (!Object.hasOwn(names, model)) {
+        const suggestions = Object.keys(names);
+        return {
+          ok: false,
+          exists: false,
+          model,
+          suggestions,
+          message:
+            'Model "' +
+            model +
+            '" was not found for ' +
+            provider.label +
+            '. Similar models: ' +
+            suggestions.join(', ') +
+            '.',
+        };
+      }
+      const result = {
         ok: true,
+        exists: true,
+        model,
         message:
-          data.ai.providerLabel +
+          provider.label +
           ' · ' +
-          data.ai.model +
-          ' replied: OK (preview, no provider was contacted)',
+          model +
+          ' is available and replied: OK (preview, no provider was contacted)',
       };
+      if (names[model]) result.displayName = names[model];
+      return result;
     },
     dmvChatProgress(input) {
       return copy(

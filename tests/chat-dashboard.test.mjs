@@ -77,7 +77,9 @@ function fixture({ maxRows = 100 } = {}) {
         configFields: [],
         fetch(ctx) {
           f.fetched.push({ source: id, report: reportId, maxRows: ctx.maxRows, startDate: ctx.startDate, endDate: ctx.endDate });
-          const rows = f.rows[id + '.' + reportId] || report.rows;
+          const given = f.rows[id + '.' + reportId] || report.rows;
+          // Rows may depend on the period asked for, so one report can hold two periods.
+          const rows = typeof given === 'function' ? given(ctx) : given;
           if (rows instanceof Error) throw rows;
           const columns = report.columns.filter((column) => ctx.fields.includes(column.key));
           return { columns, rows, metadata: { complete: true, currency: source.currency } };
@@ -201,6 +203,39 @@ function rowsOf(f, name) {
 
 const find = (rows, first) => rows.findIndex((row) => row[0] === first);
 
+// The dashboard tab as it reads: each row's non-empty cells in column order.
+function pageOf(f, name) {
+  const sheet = f.tab(name);
+  const out = [];
+  for (let r = 1; r <= sheet.getLastRow(); r++) {
+    const row = [];
+    for (let c = 1; c <= sheet.maxColumns; c++) if (f.value(sheet, r, c) !== '') row.push(f.value(sheet, r, c));
+    out.push(row);
+  }
+  return out;
+}
+
+// The rows of the card titled `title`, up to the card's end.
+function cardOf(page, title) {
+  const at = find(page, title);
+  assert.ok(at >= 0, title + ' is on the page');
+  const rows = [];
+  for (let r = at + 1; r < page.length && page[r].length; r++) rows.push(page[r]);
+  return rows;
+}
+
+const noBars = (rows) => rows.map((row) => row.filter((value) => !(typeof value === 'string' && /^[█▏▎▍▌▋▊▉]+$/.test(value))));
+
+// A chart sits in the row under its card's title, inside the card's columns.
+function assertInCard(f, sheet, chart) {
+  const position = chart.position.overlayPosition,
+    anchor = position.anchorCell;
+  assert.equal(anchor.sheetId, sheet.getSheetId());
+  assert.equal(f.value(sheet, anchor.rowIndex, anchor.columnIndex + 1), chart.spec.altText, 'the card title is right above its chart');
+  assert.ok(position.offsetXPixels >= 8 && position.offsetYPixels >= 0);
+  assert.ok(position.offsetYPixels + position.heightPixels <= f.pixelSize(sheet, 'ROWS', anchor.rowIndex + 1));
+}
+
 test('one chat turn builds every data tab, the scorecards, the charts and their tables in one atomic write', () => {
   const f = fixture();
   const { reply, results } = buildDashboard(f);
@@ -229,45 +264,53 @@ test('one chat turn builds every data tab, the scorecards, the charts and their 
   assert.deepEqual(gads[4], ['2026-08-31', 'Brand', 100, 10]);
   assert.match(rowsOf(f, 'Ad groups Data')[1][0], /^No date range · 2 rows/);
 
-  // Dashboard tab.
-  const page = rowsOf(f, 'Paid media Dashboard');
-  assert.equal(page[0][0], 'Paid media performance');
-  assert.match(page[1][0], /^Refreshed .*Refresh dashboard/);
+  // Dashboard tab: the band, scorecards, highlights, three chart cards, the table card, the
+  // data sources and the footer.
+  const report = f.tab('Paid media Dashboard');
+  const page = pageOf(f, 'Paid media Dashboard');
+  assert.equal(page[1][0], 'Paid media performance');
+  assert.match(page[2][0], /^Refreshed \d+ [A-Z][a-z]{2} \d{4}, \d\d:\d\d \S+$/);
+  assert.match(page.at(-1)[0], /Refresh dashboard \(no AI needed\)/);
   // Money in two currencies is never added together; clicks are.
-  assert.deepEqual(page[3], ['Spend (AED)', 'Spend (USD)', 'Clicks']);
-  assert.deepEqual(page[4], [175.5, 100, 36]);
-  const sources = find(page, 'Data sources');
-  assert.equal(sources, 6 + 2 * 17, 'three charts reserve two bands of rows');
-  assert.deepEqual(page[sources + 1], ['Dataset', 'Source', 'Connection', 'Report', 'Date range', 'Rows', 'Tab']);
-  assert.deepEqual(page[sources + 2].slice(0, 4).concat(page[sources + 2].slice(5)), ['Google Ads campaigns', 'gads fixture', 'gads account', 'campaign_daily report', 3, 'Google Ads Data']);
-  assert.equal(page[sources + 4][4], 'No date range');
+  const labels = find(page, 'Spend (AED)');
+  assert.deepEqual(page.slice(labels, labels + 2), [['Spend (AED)', 'Spend (USD)', 'Clicks'], [175.5, 100, 36]]);
+  const sources = cardOf(page, 'Data sources');
+  assert.deepEqual(sources[0], ['Dataset', 'Source', 'Connection', 'Report', 'Date range', 'Rows', 'Tab']);
+  assert.deepEqual(sources[1].slice(0, 4).concat(sources[1].slice(5)), ['Google Ads campaigns', 'gads fixture', 'gads account', 'campaign_daily report', 3, 'Google Ads Data']);
+  assert.equal(sources[3][4], 'No date range');
+  // The largest share of a category chart is stated on the page and returned to the chat.
+  assert.deepEqual(run.highlights, ['Clicks by ad group: Shoes holds 63.2% of the total.']);
+  assert.deepEqual(cardOf(page, 'Highlights'), [['•  Clicks by ad group: Shoes holds 63.2% of the total.']]);
 
-  // The dashboard shows charts, not the numbers behind them: those live on the hidden tab.
-  assert.equal(find(page, 'Weekly clicks by platform'), -1);
+  // The dashboard shows charts in cards; the numbers behind them live on the hidden tab.
   const data = rowsOf(f, 'Paid media Dashboard (chart data)');
   const clicks = find(data, 'Weekly clicks by platform');
   assert.equal(clicks, 0);
   assert.deepEqual(data[clicks + 1], ['Date', 'Google Ads campaigns', 'Facebook Ads campaigns']);
-  assert.deepEqual(data[clicks + 2], ['2026-08-31', 15, 8]);
-  assert.deepEqual(data[clicks + 3], ['2026-09-07', 4, 9]);
+  // Weeks read as their first days on the axis; the chat reads the dates themselves.
+  assert.deepEqual(data[clicks + 2], ['31 Aug', 15, 8]);
+  assert.deepEqual(data[clicks + 3], ['7 Sep', 4, 9]);
+  assert.equal(run.tiles[0].preview[1][0], '2026-08-31');
   const spend = find(data, 'Weekly spend');
   assert.deepEqual(data[spend + 1], ['Date', 'AED', 'USD'], 'a money chart over two currencies splits into one series per currency');
-  assert.deepEqual(data[spend + 2], ['2026-08-31', 150, 40]);
+  assert.deepEqual(data[spend + 2], ['31 Aug', 150, 40]);
   const groups = find(data, 'Clicks by ad group');
   assert.deepEqual(data.slice(groups + 1, groups + 4), [['Ad group', 'Clicks'], ['Shoes', 12], ['Hats', 7]]);
-  const table = find(page, 'Campaigns');
-  assert.deepEqual(page[table + 1], ['Source', 'Campaign name', 'Currency', 'Spend', 'Clicks']);
-  assert.deepEqual(page[table + 2], ['Google Ads campaigns', 'Brand', 'AED', 150, 15]);
+  const table = noBars(cardOf(page, 'Campaigns'));
+  assert.deepEqual(table[0], ['Source', 'Campaign name', 'Currency', 'Spend', 'Clicks']);
+  assert.deepEqual(table[1], ['Google Ads campaigns', 'Brand', 'AED', 150, 15]);
+  assert.deepEqual(table.slice(-2), [['Total', 'AED', 175.5, 19], ['Total', 'USD', 100, 17]], 'one total per currency');
 
-  // Native charts sit in the reserved band of the dashboard and read the hidden chart data tab.
-  const dashboardId = f.tab('Paid media Dashboard').getSheetId(),
-    dataId = f.tab('Paid media Dashboard (chart data)').getSheetId();
-  assert.ok(f.state.charts.every((chart) => chart.position.overlayPosition.anchorCell.sheetId === dashboardId));
+  // Native charts sit in their cards on the dashboard and read the hidden chart data tab.
+  const dataId = f.tab('Paid media Dashboard (chart data)').getSheetId();
+  f.state.charts.forEach((chart) => assertInCard(f, report, chart));
   assert.equal(f.state.charts[2].spec.basicChart.chartType, 'BAR');
   assert.ok(f.state.charts[2].spec.basicChart.series.every((series) => series.targetAxis === 'BOTTOM_AXIS'), 'Sheets rejects bar series on any other axis');
   assert.equal(f.state.charts.length, 3);
-  assert.deepEqual(f.state.charts.map((chart) => chart.spec.title), ['Weekly clicks by platform', 'Weekly spend', 'Clicks by ad group']);
-  assert.deepEqual(f.state.charts.map((chart) => [chart.position.overlayPosition.anchorCell.rowIndex, chart.position.overlayPosition.anchorCell.columnIndex]), [[6, 0], [6, 5], [23, 0]]);
+  assert.deepEqual(f.state.charts.map((chart) => chart.spec.altText), ['Weekly clicks by platform', 'Weekly spend', 'Clicks by ad group']);
+  const [first, second, third] = f.state.charts.map((chart) => chart.position.overlayPosition.anchorCell);
+  assert.equal(first.rowIndex, second.rowIndex, 'two charts share a card row');
+  assert.ok(second.columnIndex > first.columnIndex && third.rowIndex > first.rowIndex, 'the third starts the next row');
   const line = f.state.charts[0].spec.basicChart;
   assert.equal(line.chartType, 'LINE');
   assert.equal(line.series.length, 2);
@@ -278,6 +321,11 @@ test('one chat turn builds every data tab, the scorecards, the charts and their 
   assert.deepEqual(reply.events.map((event) => event.kind), ['dashboard', 'report', 'report', 'report', 'dashboard']);
   assert.match(reply.events[1].text, /^Fetched Google Ads campaigns · 3 rows into Google Ads Data$/);
   assert.match(reply.events[4].text, /3 charts, 3 scorecards/);
+  // The step's details lead with the highlights, then the scorecards.
+  assert.deepEqual(reply.events[4].details.slice(0, 2), [
+    { label: 'Highlight', value: 'Clicks by ad group: Shoes holds 63.2% of the total.' },
+    { label: 'Spend (AED)', value: '175.5' },
+  ]);
   assert.deepEqual(reply.events[4].links.map((link) => link.label), ['Dashboard: Paid media Dashboard', 'Data: Google Ads Data', 'Data: Facebook Ads Data', 'Data: Ad groups Data']);
   assert.ok(reply.events[4].links.every((link) => /#gid=\d+&range=A1$/.test(link.url)));
   assert.deepEqual(run.scorecards, [{ label: 'Spend (AED)', value: 175.5 }, { label: 'Spend (USD)', value: 100 }, { label: 'Clicks', value: 36 }]);
@@ -308,20 +356,23 @@ test('Refresh dashboard rebuilds everything without AI, updates its charts in pl
   const refresh = f.state.batches[f.state.batches.length - 1].body.requests;
   assert.equal(refresh.filter((request) => request.updateChartSpec).length, 3);
   assert.equal(refresh.filter((request) => request.addChart || request.addSheet).length, 0);
-  const page = rowsOf(f, 'Paid media Dashboard');
-  assert.deepEqual(page[4], [175.5, 75, 30]);
+  const page = pageOf(f, 'Paid media Dashboard');
+  assert.deepEqual(page[find(page, 'Spend (AED)') + 1], [175.5, 75, 30]);
+  const anchors = () => Object.fromEntries(f.state.charts.map((chart) => [chart.spec.altText, chart.position.overlayPosition.anchorCell]));
+  const placed = anchors();
   assert.deepEqual(rowsOf(f, 'Facebook Ads Data').slice(3), [['Day', 'Campaign name', 'Amount spent', 'Link clicks'], ['2026-09-09', 'Retargeting', 75, 11]], 'rows of the previous refresh are cleared');
 
   // The user deletes one chart by hand: the next refresh adds it back and keeps the others.
   f.state.charts.splice(1, 1);
   plain(f.api.dmvRunDashboard(id));
-  assert.deepEqual(f.state.charts.map((chart) => chart.spec.title).sort(), ['Clicks by ad group', 'Weekly clicks by platform', 'Weekly spend']);
+  assert.deepEqual(f.state.charts.map((chart) => chart.spec.altText).sort(), ['Clicks by ad group', 'Weekly clicks by platform', 'Weekly spend']);
+  f.state.charts.forEach((chart) => assertInCard(f, f.tab('Paid media Dashboard'), chart));
   const again = f.state.batches[f.state.batches.length - 1].body.requests;
   assert.equal(again.filter((request) => request.updateChartSpec).length, 2);
   assert.equal(again.filter((request) => request.addChart).length, 1);
 
   // A later refresh returns more weeks (the range now runs to today): every chart follows.
-  const rangeEnd = () => f.state.charts.find((chart) => chart.spec.title === 'Weekly clicks by platform').spec.basicChart.domains[0].domain.sourceRange.sources[0].endRowIndex;
+  const rangeEnd = () => f.state.charts.find((chart) => chart.spec.altText === 'Weekly clicks by platform').spec.basicChart.domains[0].domain.sourceRange.sources[0].endRowIndex;
   const before = rangeEnd();
   f.rows['gads.campaign_daily'] = SOURCES.gads.reports.campaign_daily.rows.concat([
     { 'segments.date': '2026-09-15', 'campaign.name': 'Brand', 'metrics.cost': 10, 'metrics.clicks': 1 },
@@ -330,7 +381,7 @@ test('Refresh dashboard rebuilds everything without AI, updates its charts in pl
   plain(f.api.dmvRunDashboard(id));
   assert.equal(rangeEnd(), before + 2, 'two more weekly points, two more rows in the chart range');
   assert.equal(f.state.charts.length, 3);
-  assert.equal(find(rowsOf(f, 'Paid media Dashboard'), 'Data sources'), 6 + 2 * 17, 'the dashboard page itself does not move');
+  assert.deepEqual(anchors(), placed, 'the dashboard page itself does not move: more points stay on the chart data tab');
 
   const card = plain(f.api.dmvListDashboards())[0];
   assert.equal(card.status, 'success');
@@ -372,6 +423,85 @@ test('a failing dataset names itself, reaches the model as a tool error and leav
   assert.match(card.lastError, /^Facebook Ads campaigns: /);
 });
 
+test('save_dashboard offers compare lists, highlight rules and polarity, and run_dashboard returns highlights', () => {
+  const f = fixture();
+  const current = SOURCES.gads.reports.campaign_daily.rows;
+  // The previous 90 days spent less and had one more click.
+  f.rows['gads.campaign_daily'] = (ctx) =>
+    ctx.startDate < '2026-06-01' ? [{ 'segments.date': '2026-04-01', 'campaign.name': 'Brand', 'metrics.cost': 80, 'metrics.clicks': 20 }] : current;
+  const plan = JSON.parse(JSON.stringify(f.plan));
+  plan.datasets.push({ ...plan.datasets[0], id: 'gads_prev', label: 'Google Ads campaigns previous', sheetName: 'Google Ads Previous Data', dateRange: { preset: 'previous90' } });
+  plan.tiles[0] = {
+    title: 'Headline',
+    type: 'kpi',
+    datasets: ['gads', 'gads_prev'],
+    metrics: [{ field: 'spend', agg: 'sum' }, { field: 'clicks', agg: 'sum' }],
+    ratios: [{ key: 'cpc', label: 'CPC', numerator: 'spend', denominator: 'clicks' }],
+    compare: { current: ['gads'], previous: ['gads_prev'] },
+  };
+  // A threshold on a metric, then a text rule on a name column.
+  const rules = [
+    { field: 'clicks', op: 'gte', ofTotal: 0.3, color: 'green' },
+    { field: 'campaign_name', op: 'contains', value: 'gen', color: 'red' },
+  ];
+  plan.tiles[4] = { ...plan.tiles[4], highlight: rules };
+  plan.lowerIsBetter = ['cpc'];
+  plan.neutral = ['spend'];
+  const { reply, results } = scriptedTurn(f, [
+    (_results, request) => {
+      const save = request.tools.find((item) => item.name === 'save_dashboard');
+      const schema = save.input_schema.properties;
+      assert.match(save.description, /1 to 8 datasets/);
+      assert.equal(schema.datasets.maxItems, 8);
+      assert.equal(schema.tiles.items.properties.compare.properties.current.type, 'array');
+      assert.equal(schema.tiles.items.properties.compare.properties.previous.type, 'array');
+      assert.match(schema.tiles.items.properties.compare.description, /table grouped by names \(not dates\): a Δ % column after each metric and ratio/);
+      assert.match(schema.tiles.items.properties.compare.description, /must end the day before the current one starts/);
+      assert.match(schema.tiles.items.properties.type.description, /share or a breakdown by category .* use bar/);
+      const rule = schema.tiles.items.properties.highlight.items.properties;
+      assert.deepEqual(rule.op.enum, ['gt', 'gte', 'lt', 'lte', 'eq', 'ne', 'contains', 'in']);
+      // A threshold is a number; a groupBy column is matched by text.
+      assert.deepEqual(rule.value.anyOf, [{ type: 'number' }, { type: 'string' }]);
+      assert.match(rule.field.description, /or one of its groupBy columns/);
+      assert.match(rule.op.description, /eq, ne, contains or in for a groupBy column/);
+      assert.match(rule.ofTotal.description, /^Metrics and ratios only/);
+      assert.match(schema.tiles.items.properties.highlight.description, /A groupBy column takes a text value, for example \{field: "performance_label", op: "eq", value: "LOW", color: "red"\}/);
+      assert.deepEqual(rule.color.enum, ['red', 'green', 'amber']);
+      assert.equal(schema.tiles.items.properties.highlight.maxItems, 4);
+      assert.equal(schema.lowerIsBetter.type, 'array');
+      assert.equal(schema.neutral.type, 'array');
+      assert.match(request.tools.find((item) => item.name === 'run_dashboard').description, /highlights/);
+      return [tool('save', 'save_dashboard', plan)];
+    },
+    (results) => {
+      assert.notEqual(results.get('save').is_error, true, JSON.stringify(results.get('save').value));
+      return [tool('run', 'run_dashboard', { id: results.get('save').value.id })];
+    },
+    (results) => {
+      assert.notEqual(results.get('run').is_error, true, JSON.stringify(results.get('run').value));
+      return [answer()];
+    },
+  ]);
+  const run = results.get('run').value;
+  // A falling click count is bad, a rising cost per click is bad, spend only changes.
+  assert.deepEqual(run.scorecards.map((card) => [card.label, card.tone]), [
+    ['Spend (AED)', 'neutral'],
+    ['Clicks', 'bad'],
+    ['CPC (AED)', 'bad'],
+  ]);
+  // The cards show every change; with rule findings to state, the highlights keep only the
+  // largest change. The rule says its threshold, per currency here, since the table's money is
+  // split, and names the campaigns first: their source follows only where it tells rows apart.
+  assert.deepEqual(run.highlights.slice(0, 1), ['CPC (AED) rose 130.9% to 9.24 (previous 4.00).']);
+  assert.equal(run.highlights[1], 'Campaigns: 3 of 4 rows have Clicks at or above 0.3× the overall of their currency (green rows) — Brand, Retargeting, Prospecting.');
+  const refreshed = reply.events.find((event) => event.action === 'refreshed');
+  assert.deepEqual(refreshed.details.slice(0, 2).map((detail) => detail.label), ['Highlight', 'Highlight']);
+  assert.equal(refreshed.details[0].value, run.highlights[0]);
+  const saved = plain(f.api.dmvUnpack_(f.api.dmvDashboardHere_(results.get('save').value.id).plan));
+  assert.deepEqual([saved.lowerIsBetter, saved.neutral], [['cpc'], ['spend']]);
+  assert.deepEqual(saved.tiles[4].highlight, rules);
+});
+
 test('plans teach the model: charts are required, several datasets need mappings, unknown columns list the real ones', () => {
   const f = fixture();
   const save = (change) => {
@@ -389,24 +519,33 @@ test('plans teach the model: charts are required, several datasets need mappings
   assert.equal(f.fetched.length, 0);
 });
 
-test('a six-dataset plan with wide field lists still fits one private record', () => {
+test('an eight-dataset plan with wide field lists fits one private record and refreshes in one batch', () => {
   const f = createDatamoovSandbox();
   const columns = Array.from({ length: 24 }, (_, index) => ({ key: 'metrics.some_long_provider_field_name_' + index, label: 'Field ' + index, type: index ? 'number' : 'text', role: index ? 'metric' : 'dimension' }));
+  const row = Object.fromEntries(columns.map((column, index) => [column.key, index ? index : 'Item']));
   f.api.dmvRegisterConnector_({ id: 'wide', label: 'Wide', category: 'Test', allowedHosts: [], authFields: [{ key: 'token', label: 'Token', type: 'password', required: true }],
-    reports: Array.from({ length: 6 }, (_, index) => ({ id: 'report' + index, label: 'Report ' + index, fields: columns, dateRange: true, configFields: [], fetch: () => ({ columns, rows: [], metadata: { complete: true } }) })) });
+    reports: Array.from({ length: 8 }, (_, index) => ({ id: 'report' + index, label: 'Report ' + index, fields: columns, dateRange: true, configFields: [], fetch: () => ({ columns, rows: [row], metadata: { complete: true } }) })) });
   const connection = f.api.dmvSaveConnection({ connectorId: 'wide', label: 'Wide account', credentials: { token: SOURCE_KEY } });
   const plan = {
     name: 'Wide dashboard',
     target: { sheetName: 'Wide Dashboard' },
-    datasets: Array.from({ length: 6 }, (_, index) => ({ id: 'd' + index, label: 'Dataset ' + index, sheetName: 'Data ' + index, connectionId: connection.id, reportType: 'report' + index, fields: columns.map((column) => column.key) })),
-    tiles: Array.from({ length: 12 }, (_, index) => ({ title: 'Tile ' + index, type: 'column', datasets: ['d' + (index % 6)], groupBy: [columns[0].key], metrics: [{ field: columns[1 + index].key, agg: 'sum' }] })),
+    datasets: Array.from({ length: 8 }, (_, index) => ({ id: 'd' + index, label: 'Dataset ' + index, sheetName: 'Data ' + index, connectionId: connection.id, reportType: 'report' + index, fields: columns.map((column) => column.key) })),
+    tiles: Array.from({ length: 12 }, (_, index) => ({ title: 'Tile ' + index, type: 'column', datasets: ['d' + (index % 8)], groupBy: [columns[0].key], metrics: [{ field: columns[1 + index].key, agg: 'sum' }] })),
+    lowerIsBetter: [columns[1].key],
+    neutral: [columns[2].key],
   };
   assert.ok(JSON.stringify(plan).length > 8000, 'the plain plan alone would not fit a record');
   const saved = plain(f.api.dmvSaveDashboard(plan));
-  assert.equal(saved.datasets.length, 6);
+  assert.equal(saved.datasets.length, 8);
   const record = f.state.user.getProperty('dmv:v1:dashboard:' + saved.id);
   assert.ok(Buffer.byteLength(record) < 8000);
   assert.ok(!record.includes(SOURCE_KEY));
+  // Eight data tabs, the chart data tab and the dashboard tab are written together.
+  const result = plain(f.api.dmvRunDashboard(saved.id));
+  assert.equal(result.chartCount, 12);
+  assert.equal(f.state.batches.length, 1);
+  assert.equal(f.state.batches[0].body.requests.filter((request) => request.addSheet).length, 10);
+  assert.equal(f.state.charts.length, 12);
 });
 
 test('a dashboard saved by the earlier single-table version asks to be recreated instead of failing obscurely', () => {

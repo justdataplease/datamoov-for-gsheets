@@ -366,10 +366,12 @@ function dmvChatSheetFormat_(input) {
     'wrap',
   ]);
   if (!Object.keys(input).length) throw new Error('Choose at least one formatting change.');
+  // 'number' is Sheets' own Number format. '#,##0.###' printed whole numbers as "2,494.", and the
+  // range's values can change after this edit, so the decimals are fixed rather than guessed.
   var format = {},
     fields = [],
     formats = {
-      number: { type: 'NUMBER', pattern: '#,##0.###' },
+      number: { type: 'NUMBER', pattern: '#,##0.00' },
       currency: { type: 'NUMBER', pattern: '#,##0.00' },
       percent: { type: 'PERCENT', pattern: '0.00%' },
       date: { type: 'DATE', pattern: 'yyyy-mm-dd' },

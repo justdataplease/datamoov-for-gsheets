@@ -78,6 +78,44 @@ test('negative keywords have no period: no date filter and no currency lookup ar
   assert.equal(result.columns[1].label, 'Campaign criterion keyword text');
 });
 
+test('asset performance and keyword quality pass the guard with readable labels, enums as text and scores never summed', () => {
+  const report = load();
+  // The description names them, so chat builds these sections instead of describing them.
+  for (const name of ['ad_group_ad_asset_view', 'ad_group_ad_asset_view.performance_label', 'ad_group_ad_asset_view.field_type', 'asset.text_asset.text', 'ad_group_criterion.quality_info.quality_score', 'ad_group_criterion.keyword.match_type'])
+    assert.ok(report.description.includes(name), name);
+
+  const assets = context(
+    'SELECT campaign.name, ad_group_ad_asset_view.field_type, ad_group_ad_asset_view.performance_label, asset.text_asset.text, asset.name, metrics.impressions, metrics.conversions, metrics.cost_micros FROM ad_group_ad_asset_view',
+    [
+      { results: [{ campaign: { name: 'Brand' }, adGroupAdAssetView: { fieldType: 'HEADLINE', performanceLabel: 'BEST' }, asset: { textAsset: { text: 'Stay a month' } }, metrics: { impressions: '900', conversions: 4.5, costMicros: '20000000' } }] },
+      { results: [{ customer: { currencyCode: 'USD' } }] },
+    ]
+  );
+  const asset = plain(report.fetch(assets));
+  assert.equal(
+    assets.calls[0].body.query,
+    "SELECT campaign.name, ad_group_ad_asset_view.field_type, ad_group_ad_asset_view.performance_label, asset.text_asset.text, asset.name, metrics.impressions, metrics.conversions, metrics.cost_micros FROM ad_group_ad_asset_view WHERE segments.date BETWEEN '2026-06-22' AND '2026-09-19' LIMIT 101"
+  );
+  assert.deepEqual(asset.columns.slice(1, 5).map((column) => [column.label, column.type, column.role]), [
+    ['Asset field', 'text', 'dimension'],
+    ['Performance label', 'text', 'dimension'],
+    ['Asset text', 'text', 'dimension'],
+    ['Asset name', 'text', 'dimension'],
+  ]);
+  assert.deepEqual(asset.rows, [{ 'campaign.name': 'Brand', 'ad_group_ad_asset_view.field_type': 'HEADLINE', 'ad_group_ad_asset_view.performance_label': 'BEST', 'asset.text_asset.text': 'Stay a month', 'asset.name': null, 'metrics.impressions': 900, 'metrics.conversions': 4.5, 'metrics.cost_micros': 20 }]);
+  assert.equal(asset.metadata.currency, 'USD');
+
+  const keywords = context(
+    'SELECT ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type, ad_group_criterion.quality_info.quality_score, metrics.clicks FROM keyword_view WHERE metrics.impressions > 0',
+    [{ results: [{ adGroupCriterion: { keyword: { text: 'monthly rentals', matchType: 'PHRASE' }, qualityInfo: { qualityScore: 7 } }, metrics: { clicks: '12' } }, { adGroupCriterion: { keyword: { text: 'new keyword', matchType: 'EXACT' } }, metrics: { clicks: '1' } }] }]
+  );
+  const keyword = plain(report.fetch(keywords));
+  assert.equal(keywords.calls.length, 1, 'no money column, so no currency lookup');
+  const quality = keyword.columns[2];
+  assert.deepEqual([keyword.columns[0].label, keyword.columns[1].label, quality.label, quality.type, quality.additive], ['Keyword', 'Match type', 'Quality score', 'number', false]);
+  assert.deepEqual(keyword.rows.map((row) => row['ad_group_criterion.quality_info.quality_score']), [7, null], 'a keyword without a score stays blank, never 0');
+});
+
 test('a query that filters dates itself keeps them, unknown metrics get honest types, and lists stay readable', () => {
   const ctx = context(
     "SELECT segments.month, metrics.search_impression_share, metrics.cost_per_conversion, ad_group_ad.ad.final_urls FROM ad_group_ad WHERE segments.date DURING LAST_MONTH",
@@ -130,6 +168,65 @@ test('discovery lists resources, then the attributes, metrics and segments one r
   // The report form's Load columns lists the columns of a complete query, without a request.
   const own = context('SELECT campaign.name, metrics.clicks FROM campaign', []);
   assert.deepEqual(plain(report.discoverFields(own)).map((field) => [field.key, field.default]), [['campaign.name', true], ['metrics.clicks', true]]);
+});
+
+test('an ad asset view also lists its asset: the common fields and its text, image or video, not every asset type', () => {
+  const report = load();
+  const like = (name) => "SELECT name, selectable, is_repeated WHERE name LIKE '" + name + ".%'";
+  const fields = context('FROM ad_group_ad_asset_view', [
+    { results: [{ name: 'ad_group_ad_asset_view', selectableWith: ['metrics.impressions', 'metrics.cost_micros', 'segments.date', 'asset', 'campaign'], attributeResources: ['ad_group_ad', 'asset', 'ad_group', 'campaign', 'customer'] }] },
+    { results: [{ name: 'ad_group_ad_asset_view.field_type', selectable: true }, { name: 'ad_group_ad_asset_view.performance_label', selectable: true }] },
+    {
+      results: [
+        'asset.id',
+        'asset.name',
+        'asset.type',
+        'asset.text_asset.text',
+        'asset.image_asset.full_size.url',
+        'asset.image_asset.data',
+        'asset.youtube_video_asset.youtube_video_title',
+        'asset.sitelink_asset.link_text',
+        'asset.lead_form_asset.headline',
+        'asset.dynamic_custom_asset.item_title',
+      ]
+        .map((name) => ({ name, selectable: true }))
+        .concat([{ name: 'asset.policy_summary', selectable: false }]),
+    },
+    { results: [{ name: 'ad_group.name', selectable: true }] },
+    { results: [{ name: 'campaign.name', selectable: true }] },
+    { results: [{ name: 'customer.descriptive_name', selectable: true }] },
+  ]);
+  assert.deepEqual(plain(report.discoverFields(fields)).map((field) => [field.key, field.label]), [
+    ['ad_group_ad_asset_view.field_type', 'Asset field'],
+    ['ad_group_ad_asset_view.performance_label', 'Performance label'],
+    ['asset.id', 'Asset id'],
+    ['asset.name', 'Asset name'],
+    ['asset.type', 'Asset type'],
+    ['asset.text_asset.text', 'Asset text'],
+    ['asset.image_asset.full_size.url', 'Image URL'],
+    ['asset.youtube_video_asset.youtube_video_title', 'Video title'],
+    ['ad_group.name', 'Ad group name'],
+    ['campaign.name', 'Campaign'],
+    ['customer.descriptive_name', 'Account'],
+    ['metrics.impressions', 'Impressions'],
+    ['metrics.cost_micros', 'Spend'],
+    ['segments.date', 'Date'],
+  ]);
+  assert.deepEqual(
+    fields.calls.slice(1).map((call) => call.body.query),
+    ['ad_group_ad_asset_view', 'asset', 'ad_group', 'campaign', 'customer'].map(like),
+    'ad_group_ad, like ad_group_criterion, is not a parent worth listing'
+  );
+
+  // Other views that hold an asset keep to the account hierarchy.
+  const linked = context('FROM campaign_asset', [
+    { results: [{ name: 'campaign_asset', selectableWith: [], attributeResources: ['asset', 'campaign', 'customer'] }] },
+    { results: [{ name: 'campaign_asset.status', selectable: true }] },
+    { results: [{ name: 'campaign.name', selectable: true }] },
+    { results: [] },
+  ]);
+  assert.deepEqual(plain(report.discoverFields(linked)).map((field) => field.key), ['campaign_asset.status', 'campaign.name']);
+  assert.deepEqual(linked.calls.slice(1).map((call) => call.body.query), ['campaign_asset', 'campaign', 'customer'].map(like));
 });
 
 const level = (id) => {

@@ -198,6 +198,15 @@ function dmvDateRange_(range, today) {
     case 'last90':
       start = new Date(end.getTime() - 89 * 86400000);
       break;
+    case 'previous7':
+    case 'previous14':
+    case 'previous30':
+    case 'previous90':
+      // The window of the same length that ends the day before the matching lastN starts.
+      var days = Number(range.preset.slice('previous'.length));
+      end = new Date(end.getTime() - days * 86400000);
+      start = new Date(end.getTime() - (days - 1) * 86400000);
+      break;
     case 'lastWeek':
     case 'previousWeek':
       // Complete Monday-to-Sunday weeks: last week, or the week immediately before it.
@@ -222,6 +231,10 @@ function dmvDateRange_(range, today) {
     case 'lastMonth':
       start = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth() - 1, 1, 12));
       end = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), 0, 12));
+      break;
+    case 'previousMonth':
+      start = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth() - 2, 1, 12));
+      end = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth() - 1, 0, 12));
       break;
     case 'custom':
       start = dmvDate_(range.startDate);
