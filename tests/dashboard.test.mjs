@@ -321,7 +321,9 @@ test('private dashboard saves two dataset queries and refreshes every data tab, 
     ['Total', 10, 6],
   ]);
   assert.ok(isBar(campaigns[1][3]) && isBar(campaigns[2][3]) && campaigns[1][3].length > campaigns[2][3].length, 'the bar follows the ranked spend');
-  assert.equal(campaigns[1][3], '█'.repeat(12), 'the largest value fills the bar column');
+  assert.equal(campaigns[1][3], '█'.repeat(15), 'the largest value fills the bar column');
+  // Only the full block: Sheets draws partial blocks from a fallback font of another height.
+  assert.equal(campaigns[2][3], '█'.repeat(6), '3 of 7 rounds to 6 of 15 whole blocks');
   const [literalRow, literalColumn] = cellOf(report, '=literal');
   assert.equal(f.formula(report, literalRow, literalColumn), '', 'formula-like text stays text');
   assert.deepEqual(cardOf(page, 'Data sources'), [

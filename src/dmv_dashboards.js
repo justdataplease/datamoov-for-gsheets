@@ -24,6 +24,7 @@ var DMV_DASHBOARD = {
   datePoints: 400,
   categoryPoints: 15,
   highlights: 6,
+  barBlocks: 15,
   previewRows: 5,
   previewColumns: 8,
   previewChars: 40,
@@ -2875,13 +2876,15 @@ function dmvDashboardTable_(context, resultId, tile) {
   };
 }
 
-// An in-cell bar: whole blocks plus an eighth-step remainder, twelve cells at most.
+// An in-cell bar of whole blocks, fifteen at most. Sheets draws the partial-block characters
+// (▏ to ▉) from a fallback font of another height, which leaves a notch at the bar's end, so
+// only the full block is used; set small, it still steps finely.
 function dmvDashboardBar_(value, peak) {
   if (!(value > 0) || !(peak > 0)) return '';
-  var eighths = Math.max(1, Math.round((Math.min(value, peak) / peak) * 96));
+  var blocks = Math.max(1, Math.round((Math.min(value, peak) / peak) * DMV_DASHBOARD.barBlocks));
   var bar = '';
-  for (var i = 0; i < Math.floor(eighths / 8); i++) bar += '█';
-  return bar + (eighths % 8 ? '▏▎▍▌▋▊▉'.charAt((eighths % 8) - 1) : '');
+  for (var i = 0; i < blocks; i++) bar += '█';
+  return bar;
 }
 
 // The tab that holds the numbers behind the charts. It is created hidden: a refresh can then
@@ -4034,7 +4037,7 @@ function dmvDashboardTableView_(block, plan) {
         bands.push({
           column: item.start,
           columns: item.span,
-          format: { color: style.bar, fontSize: 9, align: 'LEFT', wrap: 'CLIP' },
+          format: { color: style.bar, fontSize: 7, align: 'LEFT', wrap: 'CLIP' },
         });
       else if (item.kind === 'delta') {
         var tones = block.entries.map(function (entry) {
