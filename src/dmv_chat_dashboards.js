@@ -64,6 +64,10 @@ function dmvChatDashboardTools_(session, baseTools) {
       dateBucket: summary.dateBucket,
       metrics: summary.metrics,
       ratios: summary.ratios,
+      formulas: Object.assign({}, summary.formulas, {
+        description:
+          'Calculated metrics over totals, evaluated in order, at most 10 per tile: profit = revenue - spend, net ROAS = revenue / 1.05 / spend, margin = (revenue - cost) / revenue. Columns are summed per row, bucket or scorecard first, so a total is a true total. Each key is a value of the tile like a ratio key: a scorecard, a column, a series, orderBy, secondaryAxis, highlight rules and lowerIsBetter/neutral name it. Never compute numbers yourself.',
+      }),
       filters: Object.assign({}, summary.filters, {
         description:
           (summary.filters.description ? summary.filters.description + ' ' : '') +
@@ -84,7 +88,7 @@ function dmvChatDashboardTools_(session, baseTools) {
         type: 'array',
         items: { type: 'string' },
         description:
-          'Metric fields or ratio keys drawn on the right axis of a line, area, scatter or column chart (on columns they become lines), for example ["cpc"] beside spend.',
+          'Metric fields, ratio keys or formula keys drawn on the right axis of a line, area, scatter or column chart (on columns they become lines), for example ["cpc"] beside spend.',
       },
       width: {
         type: 'string',
@@ -111,7 +115,7 @@ function dmvChatDashboardTools_(session, baseTools) {
         },
         required: ['current', 'previous'],
         description:
-          'Change against the previous period, which must end the day before the current one starts (previous30 before last30, previousMonth before lastMonth); both lists are datasets of this tile and each side is added up across its datasets. kpi: each scorecard shows its change. table grouped by names (not dates): a Δ % column after each metric and ratio, rows matched by their groupBy values. line, area or column over one date groupBy column: a dashed previous-period line (lighter column) per value over the same days, aligned by position in the period (first week under first week).',
+          'Change against the previous period, which must end the day before the current one starts (previous30 before last30, previousMonth before lastMonth); both lists are datasets of this tile and each side is added up across its datasets. kpi: each scorecard shows its change. table grouped by names (not dates): a Δ % column after each metric, ratio and formula, rows matched by their groupBy values. line, area or column over one date groupBy column: a dashed previous-period line (lighter column) per value over the same days, aligned by position in the period (first week under first week).',
       },
       highlight: {
         type: 'array',
@@ -122,13 +126,13 @@ function dmvChatDashboardTools_(session, baseTools) {
             field: {
               type: 'string',
               description:
-                'A metric field or ratio key of this tile, or one of its groupBy columns.',
+                'A metric field, ratio key or formula key of this tile, or one of its groupBy columns.',
             },
             op: {
               type: 'string',
               enum: ['gt', 'gte', 'lt', 'lte', 'eq', 'ne', 'contains', 'in'],
               description:
-                'gt, gte, lt, lte or eq for a metric or ratio; eq, ne, contains or in for a groupBy column.',
+                'gt, gte, lt, lte or eq for a metric, ratio or formula; eq, ne, contains or in for a groupBy column.',
             },
             value: {
               anyOf: [{ type: 'number' }, { type: 'string' }],
@@ -138,7 +142,7 @@ function dmvChatDashboardTools_(session, baseTools) {
             ofTotal: {
               type: 'number',
               description:
-                'Metrics and ratios only, instead of value: a multiple of the overall value of this tile, 1.5 means 150% of the overall CPA. The overall value of a summed metric is the table total, so there it is a share below 1: 0.1 flags the rows holding at least a tenth of all conversions.',
+                'Metrics, ratios and formulas only, instead of value: a multiple of the overall value of this tile, 1.5 means 150% of the overall CPA. The overall value of a summed metric is the table total, so there it is a share below 1: 0.1 flags the rows holding at least a tenth of all conversions.',
             },
             color: { type: 'string', enum: ['red', 'green', 'amber'] },
           },
@@ -191,14 +195,14 @@ function dmvChatDashboardTools_(session, baseTools) {
             items: { type: 'string' },
             maxItems: DMV_DASHBOARD.maxPolarity,
             description:
-              'Metric fields or ratio keys where a rise is bad, such as cpa, cpc and other costs: their changes show red when they rise and their table shading darkens as they fall.',
+              'Metric fields, ratio keys or formula keys where a rise is bad, such as cpa, cpc and other costs: their changes show red when they rise and their table shading darkens as they fall.',
           },
           neutral: {
             type: 'array',
             items: { type: 'string' },
             maxItems: DMV_DASHBOARD.maxPolarity,
             description:
-              'Metric fields or ratio keys whose change is neither good nor bad, such as spend or budget: shown grey. Every other value is good when it rises.',
+              'Metric fields, ratio keys or formula keys whose change is neither good nor bad, such as spend or budget: shown grey. Every other value is good when it rises.',
           },
           schedule: {
             type: 'string',

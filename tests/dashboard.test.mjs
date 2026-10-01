@@ -795,7 +795,7 @@ test('invalid, duplicate, oversized and stale plans fail without provider or she
       (input) => {
         input.tiles[2].highlight = [rule];
       },
-      /"Campaigns": each highlight on a metric field or ratio key needs op \(gt, gte, lt, lte or eq\), exactly one of value \(a number\) or ofTotal/,
+      /"Campaigns": each highlight on a metric field, ratio key or formula key needs op \(gt, gte, lt, lte or eq\), exactly one of value \(a number\) or ofTotal/,
     ]),
     // A groupBy column is matched by text: a text op and value, never a multiple of a total.
     ...[
@@ -815,14 +815,14 @@ test('invalid, duplicate, oversized and stale plans fail without provider or she
       (input) => {
         input.tiles[2].highlight = [{ field: 'campaign', op: 'eq', ofTotal: 2, color: 'red' }];
       },
-      /"Campaigns": ofTotal is a multiple of an overall number, so it applies to metric fields and ratio keys; "campaign" is a groupBy column, matched by a text value/,
+      /"Campaigns": ofTotal is a multiple of an overall number, so it applies to metric fields, ratio keys and formula keys; "campaign" is a groupBy column, matched by a text value/,
     ],
     // A column of the dataset that this tile neither groups by nor measures.
     [
       (input) => {
         input.tiles[2].highlight = [{ field: 'date', op: 'eq', value: '2026-08-01', color: 'red' }];
       },
-      /"Campaigns": highlight field "date" is not a metric field, ratio key or groupBy column of this tile/,
+      /"Campaigns": highlight field "date" is not a metric field, ratio key, formula key or groupBy column of this tile/,
     ],
     [
       (input) => {

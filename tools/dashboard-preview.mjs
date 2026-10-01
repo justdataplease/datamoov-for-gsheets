@@ -412,6 +412,10 @@ const RATIOS = {
     percent: true,
   },
 };
+const FORMULAS = {
+  profit: { key: 'profit', label: 'Profit', expression: 'conversion_value - spend' },
+  netRoas: { key: 'net_roas', label: 'Net ROAS', expression: 'conversion_value / 1.05 / spend' },
+};
 const sum = (...fields) => fields.map((name) => ({ field: name, agg: 'sum' }));
 
 function planFor(tier, connections) {
@@ -498,6 +502,8 @@ function planFor(tier, connections) {
       datasets: full ? periods : v2 ? ['ads1', 'ads1_prev'] : both,
       metrics: sum('spend', 'conversions', 'conversion_value'),
       ratios: [RATIOS.cpa, RATIOS.roas, RATIOS.cpc, RATIOS.ctr],
+      // A calculated metric over the same totals, recomputed on every refresh.
+      formulas: full ? [FORMULAS.profit] : undefined,
       compare: full ? compare : v2 ? { current: 'ads1', previous: 'ads1_prev' } : undefined,
     },
     v2
@@ -549,6 +555,7 @@ function planFor(tier, connections) {
       groupBy: v2 ? ['campaign_name'] : ['campaign_name', 'channel_type'],
       metrics: v2 ? sum('spend', 'conversions') : sum('spend', 'conversions', 'conversion_value'),
       ratios: [RATIOS.cpa, RATIOS.roas],
+      formulas: full ? [FORMULAS.netRoas] : undefined,
       orderBy: { field: 'spend__sum', direction: 'desc' },
       limit: 20,
       compare: full ? compare : undefined,

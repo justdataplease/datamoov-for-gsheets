@@ -105,6 +105,54 @@ those rows. Currencies stay separate. Ranking selects whole aggregated rows, so 
 spend and accompanying metrics stay together. Results are cached privately for follow-up questions;
 the complete source data does not need to be written to a scratch tab first.
 
+### Calculated metrics
+
+Ask for maths over totals and the chat plans it as a formula that the runtime computes exactly:
+**"Profit by week across Google Ads and Meta minus Shopify costs"**, **"net ROAS after 5% VAT"**
+or **"margin by campaign"**. The model writes the expression; it never computes the numbers.
+
+- `profit = revenue - spend`, `net_roas = revenue / 1.05 / spend`,
+  `cost_share = spend / (spend + other_spend)`, `margin = (revenue - cost) / revenue` (as a
+  percent), or `blended_cpa = spend / conversions` after `combine_results`.
+- A formula is evaluated per group after aggregation, like a ratio: each column it names is that
+  column's sum over the group, so only summable columns qualify (not rates, averages, reach or
+  text). It may also name a ratio key or an earlier formula of the same request, so
+  `margin = profit / revenue` follows `profit`. Without groupBy the result is the true total,
+  computed from the overall sums, never a sum of per-row results.
+- The language is numbers, column keys (dotted keys such as `metrics.cost` included), `+ - * /`,
+  unary minus, parentheses, `abs(x)`, `min(a, b, ...)`, `max(a, b, ...)` and `round(x)` or
+  `round(x, digits)` with 0 to 6 digits. Nothing else is accepted, and nothing in an expression
+  is ever run as code.
+- At most 10 formulas per request, 300 characters, 60 numbers, names and symbols, and 12 levels
+  of parentheses or functions each. Errors name the problem and its position, for example
+  `Formula "profit": unknown column "revenu" at position 1; summable columns are spend, revenue.`
+- Division by zero and any blank sum give a blank, never an error value. A group with spend but
+  no revenue gets a blank profit rather than a misleading negative.
+- Units follow the operands: money plus or minus money, and money multiplied or divided by a
+  number, stay money; money divided by money (ROAS) is a number. Multiplying two amounts of
+  money, or adding money to a non-money column, is refused, and a money result cannot be a
+  percent. Plain numbers adopt the unit of the other side.
+- Money in different currencies is never combined: a formula over money splits or filters by
+  currency exactly like a money metric. There are no joins on differing names (combine first,
+  with shared column names), no currency conversion and no statistics beyond these functions.
+- `combine_results` appends rows and needs the same columns from every source. For profit across
+  ad platforms and a shop, map ad spend and shop costs to one `cost` key and conversion value to
+  `revenue`; a warehouse query for the shop can select `NULL AS revenue` so its rows fit. A
+  source that cannot supply a shared column cannot be combined with the others.
+- Dashboard tiles take the same `formulas`, checked when the dashboard is saved and computed
+  again on every refresh without AI. The save applies the refresh's rules to every column the
+  reports declare: fields a connector marks as not additive, names in any case, and a ratio key
+  that is also a column. A column a report only discovers when it runs, such as a warehouse
+  query's, is checked on refresh, and the error names the tile. A scorecard and a table's total
+  row evaluate the formula over the overall sums; a table row, a chart bucket and a compared
+  chart's previous-period line over their own sums. A formula key is named like a ratio key in
+  `orderBy` (where a key wins over another column's label), `secondaryAxis`, highlight rules
+  (`value` or `ofTotal`), `lowerIsBetter` and `neutral`; its table column gets a Δ % column
+  when compared and the heat shading of a rate. Values are recomputed from the
+  summed parts at 12 significant digits, so changes and thresholds are not rounded first. A
+  scorecard reads only the columns, ratios and earlier formulas its formula needs, so a
+  conversion rate is not split by currency because another value is money.
+
 ## Editing existing sheets
 
 Ask directly, for example: "Make the header bold, format column C as percentages and freeze the
@@ -467,7 +515,7 @@ Values that come back from providers are framed as data, not instructions.
 | `discover_fields` | Account-specific fields (GA4 custom definitions, HubSpot/Zendesk properties, SQL result columns), with a `search` filter |
 | `describe_database` | Tables and columns of the schemas/datasets a SQL connection scoped for chat, with a `search` filter on table names |
 | `combine_results` | Append complete fetched results with matching column maps and a source label; preserves currency and source caveats |
-| `summarize` | Group, filter, aggregate and sort a result server-side; ratios (CPC, CTR, CPA, ROAS) divide two per-group sums; rankWithin and limitPerGroup select top rows separately per month or other group; rates and averages cannot be summed |
+| `summarize` | Group, filter, aggregate and sort a result server-side; ratios (CPC, CTR, CPA, ROAS) divide two per-group sums; formulas (profit, net ROAS, margin) do arithmetic over per-group sums, ratios and earlier formulas; rankWithin and limitPerGroup select top rows separately per month or other group; rates and averages cannot be summed |
 | `write_to_sheet` | Write a result as a formatted table through the protected writer |
 | `read_sheet` | Read a tab into a result |
 | `create_chart` | Add a line, column, bar, area, scatter or pie chart over a written table |
@@ -477,7 +525,7 @@ Values that come back from providers are framed as data, not instructions.
 | `edit_sheet` | Apply validated values, scalar formulas, formatting, sorting, filters, freeze panes, or tab creation/rename |
 | `create_pivot` | Create a native pivot on a new tab from a validated source range |
 | `list_dashboards` | List private saved dashboards for this spreadsheet |
-| `save_dashboard` | Save a plan: up to 8 datasets (a query, a tab and optional shared column names each), tiles (kpi, chart or table over one or more datasets; `compare` names the current and previous dataset ids, one id or a list each; tables take `highlight` rules with a numeric `value` or an `ofTotal` multiple on a metric, or a text `value` on a groupBy column), the dashboard-level `lowerIsBetter` and `neutral` metric lists, and the dashboard tab |
+| `save_dashboard` | Save a plan: up to 8 datasets (a query, a tab and optional shared column names each), tiles (kpi, chart or table over one or more datasets; `compare` names the current and previous dataset ids, one id or a list each; tables take `highlight` rules with a numeric `value` or an `ofTotal` multiple on a metric, ratio or formula, or a text `value` on a groupBy column; any tile takes `formulas`, calculated metrics whose keys charts, tables, scorecards, rules and polarity lists name like ratio keys), the dashboard-level `lowerIsBetter` and `neutral` metric lists, and the dashboard tab |
 | `run_dashboard` | Fetch every dataset and atomically rebuild all tabs, cards, charts and tables; return scorecard values, the `highlights` sentences, a short preview of each tile and tab links |
 | `list_reports` | List private saved reports (drafts included) with their revisions |
 | `save_report` | Save one report query with a name, tab and optional schedule through `dmvSaveReport`, run it once through the report runtime, and report where the card is listed |

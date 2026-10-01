@@ -455,7 +455,7 @@ test('save_dashboard offers compare lists, highlight rules and polarity, and run
       assert.equal(schema.datasets.maxItems, 8);
       assert.equal(schema.tiles.items.properties.compare.properties.current.type, 'array');
       assert.equal(schema.tiles.items.properties.compare.properties.previous.type, 'array');
-      assert.match(schema.tiles.items.properties.compare.description, /table grouped by names \(not dates\): a Δ % column after each metric and ratio/);
+      assert.match(schema.tiles.items.properties.compare.description, /table grouped by names \(not dates\): a Δ % column after each metric, ratio and formula/);
       assert.match(schema.tiles.items.properties.compare.description, /must end the day before the current one starts/);
       assert.match(schema.tiles.items.properties.type.description, /share or a breakdown by category .* use bar/);
       const rule = schema.tiles.items.properties.highlight.items.properties;
@@ -464,7 +464,7 @@ test('save_dashboard offers compare lists, highlight rules and polarity, and run
       assert.deepEqual(rule.value.anyOf, [{ type: 'number' }, { type: 'string' }]);
       assert.match(rule.field.description, /or one of its groupBy columns/);
       assert.match(rule.op.description, /eq, ne, contains or in for a groupBy column/);
-      assert.match(rule.ofTotal.description, /^Metrics and ratios only/);
+      assert.match(rule.ofTotal.description, /^Metrics, ratios and formulas only/);
       assert.match(schema.tiles.items.properties.highlight.description, /A groupBy column takes a text value, for example \{field: "performance_label", op: "eq", value: "LOW", color: "red"\}/);
       assert.deepEqual(rule.color.enum, ['red', 'green', 'amber']);
       assert.equal(schema.tiles.items.properties.highlight.maxItems, 4);

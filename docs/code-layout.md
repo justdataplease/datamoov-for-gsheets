@@ -19,10 +19,11 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | src/dmv_connector_helpers.js | Provider-neutral helpers: Google credential fields, field selection, discovery check, number/text coercion, page budget, UTC date window, chunk validation/merging and complete-fetch wrapper |
 | src/dmv_ai.js | Private AI settings, general and per-connection instructions with legacy source defaults and bounded versioned storage, and the Anthropic, OpenAI and Gemini adapters |
 | src/dmv_chat.js | One chat turn: system prompt from the live catalog, tool schemas, bounded tool loop, private live progress, transcript replay, budget-exhausted final answer |
-| src/dmv_chat_tools.js | Chat tools, complete-query reuse within one turn, combination and per-group ranking, protected sheet output with tab links; result IDs available through a one-hour private cache |
+| src/dmv_chat_tools.js | Chat tools, complete-query reuse within one turn, combination, per-group ranking, ratios and calculated metrics, protected sheet output with tab links; result IDs available through a one-hour private cache |
+| src/dmv_formulas.js | Calculated metrics: the strict expression parser (no eval), limits, positioned errors, money/number/percent unit rules, references to summable columns, ratios and earlier formulas, and evaluation over per-group sums with blanks for division by zero |
 | src/dmv_chat_sheets.js | Bounded sheet inspection and atomic typed edits, stale-range tokens, scalar formula validation and protected-tab checks |
 | src/dmv_chat_pivots.js | Native pivot creation from explicit validated sheet ranges |
-| src/dmv_dashboards.js | Private dashboard plans (datasets, tiles, period comparisons checked against their resolved dates, highlight rules on numbers or text, change polarity), fresh dataset execution, the dashboard page on its twelve-column grid with runtime highlights, native charts and the atomic multi-tab refresh |
+| src/dmv_dashboards.js | Private dashboard plans (datasets, tiles, period comparisons checked against their resolved dates, highlight rules on numbers or text, change polarity, calculated metrics checked at save and recomputed from summed parts on every tile kind), fresh dataset execution, the dashboard page on its twelve-column grid with runtime highlights, native charts and the atomic multi-tab refresh |
 | src/dmv_chat_dashboards.js | Chat adapters for saving, listing and running the dashboard runtime |
 | src/dmv_chat_reports.js | Chat adapters for listing saved reports and saving one as a draft through the report runtime |
 | src/connectors/ | One self-contained declaration and adapter per provider |

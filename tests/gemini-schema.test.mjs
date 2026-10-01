@@ -174,6 +174,16 @@ test('the complete Gemini toolset uses JSON Schema and retains nested constraint
   assert.equal(schemas.run_report.properties.maxRows.maximum, 1256);
   assert.equal(schemas.run_report.properties.maxRows.default, 1256);
   for (const [name, schema] of Object.entries(schemas)) assertGeminiSubset(schema, name);
+  // Calculated metrics are plain typed objects: an expression string, never a union.
+  const { formulas } = schemas.summarize.properties;
+  assert.equal(formulas.type, 'array');
+  assert.equal(formulas.items.type, 'object');
+  assert.deepEqual(formulas.items.required, ['key', 'expression']);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(formulas.items.properties).map(([key, value]) => [key, value.type])),
+    { key: 'string', label: 'string', expression: 'string', percent: 'boolean' }
+  );
+  assert.match(schemas.summarize.properties.orderBy.properties.field.description, /formula key/);
   // save_dashboard nests arrays of objects three deep (datasets > mapping, tiles > metrics);
   // their bounds, enums, patterns and required lists must reach Gemini untouched.
   const dashboard = schemas.save_dashboard;
@@ -227,6 +237,14 @@ test('the complete Gemini toolset uses JSON Schema and retains nested constraint
   const tile = tiles.items;
   assert.deepEqual(tile.required, ['title', 'type']);
   assert.deepEqual(tile.properties.ratios.items.required, ['key', 'numerator', 'denominator']);
+  // Tile formulas are summarize's, with a note on where a formula key may be named.
+  const { description: formulaNote, ...tileFormulas } = tile.properties.formulas;
+  const { description: _formulaNote, ...summaryFormulas } = schemas.summarize.properties.formulas;
+  assert.deepEqual(tileFormulas, summaryFormulas);
+  assert.match(formulaNote, /secondaryAxis, highlight rules and lowerIsBetter\/neutral/);
+  assert.match(tile.properties.secondaryAxis.description, /formula keys/);
+  assert.match(tile.properties.highlight.items.properties.field.description, /formula key/);
+  for (const name of ['lowerIsBetter', 'neutral']) assert.match(dashboard.properties[name].description, /formula keys/, name);
   // Tile filters are summarize's, with a note on when they apply.
   const { description: _filterNote, ...filters } = tile.properties.filters;
   const { description: _summaryNote, ...summaryFilters } = schemas.summarize.properties.filters;
@@ -296,6 +314,9 @@ test('Gemini adaptation leaves shared schemas and Anthropic/OpenAI declarations 
   const anthropic = plain(f.api.dmvAiAnthropic_.build(f.settings, f.request));
   const openai = plain(f.api.dmvAiOpenAi_.build(f.settings, f.request));
   assert.deepEqual(anthropic.body.tools, original);
+  const summarize = (tools) => tools.find((tool) => (tool.function || tool).name === 'summarize');
+  assert.deepEqual(summarize(anthropic.body.tools).input_schema.properties.formulas.items.required, ['key', 'expression']);
+  assert.deepEqual(summarize(openai.body.tools).function.parameters.properties.formulas.items.required, ['key', 'expression']);
   assert.deepEqual(
     openai.body.tools,
     original.map((tool) => ({

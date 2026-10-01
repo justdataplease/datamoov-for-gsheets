@@ -271,11 +271,23 @@ function dmvChatReportDetails_(connection, definition, query, dates, rows) {
   );
 }
 
+// A name matches a key before a label, so a ratio or formula key is never taken for an earlier
+// column labelled the same way; an exact key wins over one that differs only by case.
 function dmvChatColumn_(result, name, label) {
   var wanted = String(name || '').toLowerCase();
-  var column = result.columns.filter(function (item) {
-    return item.key.toLowerCase() === wanted || String(item.label || '').toLowerCase() === wanted;
-  })[0];
+  var match = function (test) {
+    return result.columns.filter(test)[0];
+  };
+  var column =
+    match(function (item) {
+      return item.key === name;
+    }) ||
+    match(function (item) {
+      return item.key.toLowerCase() === wanted;
+    }) ||
+    match(function (item) {
+      return String(item.label || '').toLowerCase() === wanted;
+    });
   if (!column)
     throw new Error(
       'Unknown ' +
@@ -865,8 +877,35 @@ function dmvChatSummarize_(session, input) {
       type: currency === 1 ? 'currency' : ratio.percent === true ? 'percent' : 'number',
     };
   });
+  // A formula does arithmetic over the same per-group sums (profit = revenue - spend) and may use
+  // ratio keys and earlier formula keys (see dmv_formulas.js). Its columns are summed hidden too.
+  var formulas = dmvFormulaCompile_(
+    input.formulas,
+    result.columns,
+    ratios.map(function (ratio) {
+      return {
+        key: ratio.key,
+        type: ratio.type,
+        numerator: metrics[ratio.numerator].column.key,
+        denominator: metrics[ratio.denominator].column.key,
+      };
+    })
+  );
+  var formulaSums = Object.create(null);
+  formulas.forEach(function (formula) {
+    formula.columns.forEach(function (key) {
+      var column = result.columns.filter(function (item) {
+        return item.key === key;
+      })[0];
+      var index = metrics.findIndex(function (metric) {
+        return metric.column === column && metric.agg === 'sum';
+      });
+      if (index < 0) index = metrics.push({ column: column, agg: 'sum', hidden: true }) - 1;
+      formulaSums[key] = index;
+    });
+  });
   if (!groupBy.length && !metrics.length)
-    throw new Error('Provide groupBy columns, metrics, ratios, or both.');
+    throw new Error('Provide groupBy columns, metrics, ratios, formulas, or both.');
   var filters = (Array.isArray(input.filters) ? input.filters : []).map(function (filter) {
     if (!filter || typeof filter !== 'object')
       throw new Error('Each filter needs field, op and value.');
@@ -1001,6 +1040,21 @@ function dmvChatSummarize_(session, input) {
       additive: false,
     });
   });
+  formulas.forEach(function (formula) {
+    if (
+      columns.some(function (column) {
+        return column.key === formula.key;
+      })
+    )
+      throw new Error('Formula key "' + formula.key + '" is already a column of this summary.');
+    columns.push({
+      key: formula.key,
+      label: formula.label,
+      type: formula.type,
+      role: 'metric',
+      additive: false,
+    });
+  });
   var output = order.map(function (id) {
     var group = groups[id],
       row = {};
@@ -1026,6 +1080,24 @@ function dmvChatSummarize_(session, input) {
       row[ratio.key] =
         above.n && below.sum ? Math.round((above.sum / below.sum) * 10000) / 10000 : null;
     });
+    if (formulas.length) {
+      // Formulas read unrounded sums and ratios; only their own results are rounded.
+      var values = Object.create(null);
+      Object.keys(formulaSums).forEach(function (key) {
+        var slot = group.values[formulaSums[key]];
+        values[key] = slot.n ? slot.sum : null;
+      });
+      ratios.forEach(function (ratio) {
+        var above = group.values[ratio.numerator],
+          below = group.values[ratio.denominator];
+        values[ratio.key] = above.n && below.sum ? above.sum / below.sum : null;
+      });
+      var computed = dmvFormulaEvaluateAll_(formulas, values);
+      formulas.forEach(function (formula) {
+        var value = computed[formula.key];
+        row[formula.key] = value === null ? null : Math.round(value * 10000) / 10000;
+      });
+    }
     return row;
   });
   var orderBy = input.orderBy && typeof input.orderBy === 'object' ? input.orderBy : null;
@@ -1193,6 +1265,12 @@ function dmvChatSummarize_(session, input) {
             ' / ' +
             metrics[ratio.denominator].column.key
           );
+        }),
+      ],
+      [
+        'Formulas',
+        formulas.map(function (formula) {
+          return formula.key + ' = ' + formula.expression;
         }),
       ],
       [

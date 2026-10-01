@@ -115,11 +115,18 @@ function dmvDashboardFieldType_(dataset, name) {
     if (!entry) return name === 'source' || name === 'currency' ? 'text' : null;
     field = entry.field;
   }
-  var fields = dmvDefinition_(dmvConnector_(dataset.connectorId), dataset.reportType).fields;
-  var found = (Array.isArray(fields) ? fields : []).filter(function (item) {
-    return !!item && item.key === field;
+  var found = dmvDashboardDeclared_(dataset).filter(function (item) {
+    return item.key === field;
   })[0];
   return found ? found.type || 'text' : null;
+}
+
+// The fields a dataset's report declares; a report that discovers its fields declares none.
+function dmvDashboardDeclared_(dataset) {
+  var fields = dmvDefinition_(dmvConnector_(dataset.connectorId), dataset.reportType).fields;
+  return (Array.isArray(fields) ? fields : []).filter(function (item) {
+    return !!item && typeof item.key === 'string';
+  });
 }
 
 function dmvDashboardDated_(dataset, name) {
@@ -278,6 +285,7 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
       'limitPerGroup',
       'filters',
       'ratios',
+      'formulas',
       'compare',
       'highlight',
       'stacked',
@@ -434,7 +442,16 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
         );
       return { field: known(filter.field), op: filter.op, value: filter.value };
     });
-    var values = metrics.length + ratios.length;
+    var formulas = dmvDashboardFormulas_(tile.formulas, {
+      title: title,
+      members: members,
+      allowed: allowed,
+      known: known,
+      groupBy: groupBy,
+      metrics: metrics,
+      ratios: ratios,
+    });
+    var values = metrics.length + ratios.length + formulas.length;
     var bucket = tile.dateBucket || 'day';
     if (['day', 'week', 'month', 'year'].indexOf(bucket) < 0)
       throw new Error('Choose day, week, month or year date grouping.');
@@ -447,23 +464,30 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
       metrics: metrics,
     };
     if (ratios.length) validated.ratios = ratios;
+    if (formulas.length) validated.formulas = formulas;
     if (filters.length) validated.filters = filters;
     if (type === 'kpi') {
       if (groupBy.length || !values)
-        throw new Error('"' + title + '": a kpi tile takes metrics or ratios and no groupBy.');
+        throw new Error(
+          '"' + title + '": a kpi tile takes metrics, ratios or formulas and no groupBy.'
+        );
       kpis += values;
     } else if (type === 'table') {
       if (!groupBy.length && !values)
-        throw new Error('"' + title + '": a table needs groupBy columns, metrics or ratios.');
+        throw new Error(
+          '"' + title + '": a table needs groupBy columns, metrics, ratios or formulas.'
+        );
     } else {
       if (!groupBy.length || groupBy.length > 2 || !values)
         throw new Error(
           '"' +
             title +
-            '": a chart needs metrics or ratios and one groupBy column for its axis; a second groupBy column splits it into series.'
+            '": a chart needs metrics, ratios or formulas and one groupBy column for its axis; a second groupBy column splits it into series.'
         );
       if ((groupBy.length === 2 || type === 'pie') && values !== 1)
-        throw new Error('"' + title + '": a pie or split chart takes exactly one metric or ratio.');
+        throw new Error(
+          '"' + title + '": a pie or split chart takes exactly one metric, ratio or formula.'
+        );
       if (tile.stacked !== undefined) {
         if (tile.stacked !== true || ['column', 'bar', 'area'].indexOf(type) < 0)
           throw new Error('"' + title + '": stacked applies to column, bar and area charts.');
@@ -477,8 +501,8 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
             return metric.field;
           })
           .concat(
-            ratios.map(function (ratio) {
-              return ratio.key;
+            ratios.concat(formulas).map(function (item) {
+              return item.key;
             })
           );
         var right = dmvDashboardNames_(tile.secondaryAxis, 8, 'secondaryAxis columns');
@@ -494,7 +518,7 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
           throw new Error(
             '"' +
               title +
-              '": secondaryAxis names metric fields or ratio keys of a line, column, area or scatter chart without a split, and leaves at least one on the left axis.'
+              '": secondaryAxis names metric fields, ratio keys or formula keys of a line, column, area or scatter chart without a split, and leaves at least one on the left axis.'
           );
         validated.secondaryAxis = right;
       }
@@ -606,8 +630,8 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
           return metric.field;
         })
         .concat(
-          ratios.map(function (ratio) {
-            return ratio.key;
+          ratios.concat(formulas).map(function (item) {
+            return item.key;
           })
         );
       if (
@@ -626,7 +650,7 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
             throw new Error(
               '"' +
                 title +
-                '": ofTotal is a multiple of an overall number, so it applies to metric fields and ratio keys; "' +
+                '": ofTotal is a multiple of an overall number, so it applies to metric fields, ratio keys and formula keys; "' +
                 rule.field +
                 '" is a groupBy column, matched by a text value.'
             );
@@ -652,7 +676,7 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
               title +
               '": highlight field "' +
               String(rule.field).slice(0, 80) +
-              '" is not a metric field, ratio key or groupBy column of this tile.'
+              '" is not a metric field, ratio key, formula key or groupBy column of this tile.'
           );
         if (
           ['gt', 'gte', 'lt', 'lte', 'eq'].indexOf(rule.op) < 0 ||
@@ -665,7 +689,7 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
           throw new Error(
             '"' +
               title +
-              '": each highlight on a metric field or ratio key needs op (gt, gte, lt, lte or eq), exactly one of value (a number) or ofTotal (a multiple of the overall value, such as 1.5) and color (red, green or amber).'
+              '": each highlight on a metric field, ratio key or formula key needs op (gt, gte, lt, lte or eq), exactly one of value (a number) or ofTotal (a multiple of the overall value, such as 1.5) and color (red, green or amber).'
           );
         // The overall value of a sum or count is the total of every row, which no single row of
         // several can exceed: ofTotal is then a share of it.
@@ -741,15 +765,15 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
     );
   if (kpis > DMV_DASHBOARD.maxKpis) throw new Error('Choose at most eight kpi metrics.');
   // Polarity colours changes: a rise is good unless the value is lower-is-better (a cost) or
-  // neutral (spend, budget). Names are metric fields or ratio keys; a name no tile uses (a
+  // neutral (spend, budget). Names are metric fields, ratio or formula keys; a name no tile uses (a
   // generic cpm on a dashboard without one) is dropped.
   var known = Object.create(null);
   tiles.forEach(function (tile) {
     tile.metrics.forEach(function (metric) {
       known[metric.field] = true;
     });
-    (tile.ratios || []).forEach(function (ratio) {
-      known[ratio.key] = true;
+    (tile.ratios || []).concat(tile.formulas || []).forEach(function (item) {
+      known[item.key] = true;
     });
   });
   var polarity = {};
@@ -781,6 +805,206 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
     plan.lowerIsBetter = polarity.lowerIsBetter;
   if (polarity.neutral && polarity.neutral.length) plan.neutral = polarity.neutral;
   return plan;
+}
+
+// The formulas of a tile, checked as summarize checks them: keys apart from the tile's other
+// names, expressions parsed, and references and units checked against the columns known at
+// save. A column a report only discovers at refresh counts as a summable number here; the
+// refresh checks it again with its real type.
+function dmvDashboardFormulas_(list, tile) {
+  var title = tile.title;
+  if (list === undefined) return [];
+  if (!Array.isArray(list) || list.length > DMV_FORMULAS.maxFormulas)
+    throw new Error('"' + title + '": choose at most ' + DMV_FORMULAS.maxFormulas + ' formulas.');
+  // Summarize matches names without regard to case, and refuses a formula key that repeats a
+  // column in any case; so does this check, with each dataset's mapped names or declared fields.
+  var taken = Object.create(null);
+  ['source', 'currency'].concat(tile.groupBy, tile.allowed || []).forEach(function (name) {
+    taken[name.toLowerCase()] = true;
+  });
+  tile.members.forEach(function (dataset) {
+    (dataset.mapping || dmvDashboardDeclared_(dataset)).forEach(function (item) {
+      taken[item.key.toLowerCase()] = true;
+    });
+  });
+  tile.metrics.forEach(function (metric) {
+    taken[metric.field.toLowerCase()] = true;
+    taken[(metric.field + '__' + metric.agg).toLowerCase()] = true;
+  });
+  tile.ratios.forEach(function (ratio) {
+    taken[ratio.key.toLowerCase()] = true;
+  });
+  var formulas = list.map(function (formula) {
+    dmvDashboardObject_(formula, ['key', 'label', 'expression', 'percent']);
+    if (
+      typeof formula.key !== 'string' ||
+      !/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(formula.key) ||
+      taken[formula.key.toLowerCase()] ||
+      typeof formula.expression !== 'string' ||
+      (formula.label !== undefined && typeof formula.label !== 'string') ||
+      (formula.percent !== undefined && typeof formula.percent !== 'boolean')
+    )
+      throw new Error(
+        '"' +
+          title +
+          '": each formula needs a distinct key (a letter, then letters, digits or underscores) that names no metric, ratio or column of this tile, and an expression.'
+      );
+    taken[formula.key.toLowerCase()] = true;
+    var entry = { key: formula.key, expression: formula.expression };
+    if (formula.label) entry.label = formula.label.slice(0, 80);
+    if (formula.percent === true) entry.percent = true;
+    return entry;
+  });
+  var ratioKeys = Object.create(null),
+    formulaKeys = Object.create(null),
+    seen = Object.create(null),
+    columns = [];
+  tile.ratios.forEach(function (ratio) {
+    ratioKeys[ratio.key.toLowerCase()] = true;
+  });
+  formulas.forEach(function (formula) {
+    formulaKeys[formula.key.toLowerCase()] = true;
+  });
+  // Every dataset of the tile must agree on a type for it to count.
+  var typeOf = function (name) {
+    var types = tile.members.map(function (dataset) {
+      return dmvDashboardFieldType_(dataset, name);
+    });
+    return types.indexOf(null) >= 0 ? null : types[0];
+  };
+  var fields = tile.allowed
+    ? tile.allowed
+    : dmvDashboardDeclared_(tile.members[0]).map(function (field) {
+        return field.key;
+      });
+  formulas.forEach(function (formula) {
+    var tree;
+    try {
+      tree = dmvFormulaParse_(formula.expression);
+    } catch (error) {
+      throw new Error('"' + title + '": Formula "' + formula.key + '": ' + error.message + '.');
+    }
+    dmvDashboardRefs_(tree).forEach(function (name) {
+      var lower = name.toLowerCase();
+      if (formulaKeys[lower] || seen[lower]) return;
+      var match = fields.filter(function (key) {
+        return key.toLowerCase() === lower;
+      })[0];
+      // A ratio key reads the ratio. When a column has the same name, a refresh refuses the
+      // formula as ambiguous, so the column goes in too and the check below refuses it now.
+      if (ratioKeys[lower] && !match) return;
+      var key = tile.known(match || name);
+      seen[lower] = true;
+      columns.push(dmvDashboardFormulaColumn_(tile.members, key));
+    });
+  });
+  try {
+    dmvFormulaCompile_(
+      formulas,
+      columns,
+      tile.ratios.map(function (ratio) {
+        var money = [ratio.numerator, ratio.denominator].filter(function (field) {
+          return typeOf(field) === 'currency';
+        }).length;
+        return {
+          key: ratio.key,
+          type: money === 1 ? 'currency' : ratio.percent ? 'percent' : 'number',
+        };
+      })
+    );
+  } catch (error) {
+    throw new Error('"' + title + '": ' + error.message);
+  }
+  return formulas;
+}
+
+// The column a refresh reads for a name a formula uses, as the reports declare it, so a field a
+// connector marks as not additive (reach, users) or whose label names a rate is refused at save
+// as summarize refuses it. A mapped column is combined: its label is its name, and it cannot be
+// summed when any dataset's field cannot. A column some dataset only discovers at refresh counts
+// as a summable number; the refresh checks it again.
+function dmvDashboardFormulaColumn_(members, key) {
+  var column = { key: key, label: key.replace(/_/g, ' '), type: null };
+  for (var index = 0; index < members.length; index++) {
+    var dataset = members[index],
+      name = key;
+    if (dataset.mapping) {
+      var entry = dataset.mapping.filter(function (item) {
+        return item.key === key;
+      })[0];
+      if (!entry)
+        return key === 'source' || key === 'currency'
+          ? { key: key, type: 'text' }
+          : { key: key, type: 'number', summable: true };
+      name = entry.field;
+    }
+    var field = dmvDashboardDeclared_(dataset).filter(function (item) {
+      return item.key === name;
+    })[0];
+    if (!field) return { key: key, type: 'number', summable: true };
+    if (!dataset.mapping) column.label = field.label || field.key;
+    if (column.type === null) column.type = field.type || 'text';
+    if (!dmvChatAdditive_(field)) column.additive = false;
+  }
+  return column;
+}
+
+// The names an expression refers to, in the order they appear.
+function dmvDashboardRefs_(node, out) {
+  out = out || [];
+  if (node.type === 'ref') out.push(node.name);
+  else if (node.type === 'neg') dmvDashboardRefs_(node.arg, out);
+  else if (node.type === 'bin') {
+    dmvDashboardRefs_(node.left, out);
+    dmvDashboardRefs_(node.right, out);
+  } else if (node.type === 'call')
+    node.args.forEach(function (arg) {
+      dmvDashboardRefs_(arg, out);
+    });
+  return out;
+}
+
+// What one formula of a tile reads: the ratios and earlier formulas it names, directly or
+// through those formulas, with the formula itself last. A scorecard of one formula is computed
+// from these alone, so an amount of money it does not use cannot split it by currency.
+function dmvDashboardNeeds_(tile, key) {
+  var formulas = tile.formulas || [],
+    wanted = Object.create(null);
+  wanted[key.toLowerCase()] = true;
+  for (var index = formulas.length - 1; index >= 0; index--)
+    if (wanted[formulas[index].key.toLowerCase()])
+      dmvDashboardRefs_(dmvFormulaParse_(formulas[index].expression)).forEach(function (name) {
+        wanted[name.toLowerCase()] = true;
+      });
+  var pick = function (list) {
+    return list.filter(function (item) {
+      return wanted[item.key.toLowerCase()];
+    });
+  };
+  return { ratios: pick(tile.ratios || []), formulas: pick(formulas) };
+}
+
+// A tile's formulas compiled against the columns of the rows it reads, with its ratios typed
+// and their parts named as those columns are (see dmv_formulas.js).
+function dmvDashboardCompile_(base, ratios, formulas) {
+  return dmvFormulaCompile_(
+    formulas || [],
+    base.columns,
+    (ratios || []).map(function (ratio) {
+      var sides = [ratio.numerator, ratio.denominator].map(function (field) {
+        return dmvChatColumn_(base, field, 'ratio column');
+      });
+      var money = sides.filter(function (column) {
+        return column.type === 'currency';
+      }).length;
+      return {
+        key: ratio.key,
+        type: money === 1 ? 'currency' : ratio.percent ? 'percent' : 'number',
+        numerator: sides[0].key,
+        denominator: sides[1].key,
+      };
+    })
+  );
 }
 
 // The packed part of a record: what a refresh needs beside the record's own fields.
@@ -1295,16 +1519,28 @@ function dmvDashboardSummarize_(session, resultId, spec) {
   return dmvDashboardPrecise_(session, resultId, effective, summary);
 }
 
-// Summaries round ratios to four decimals, which leaves a small rate such as a 1.46% CTR with
-// two significant digits; changes and thresholds need more. Each ratio is divided again from
-// its summed parts, grouped the same way.
+// Summaries round ratios and formulas to four decimals, which leaves a small rate such as a
+// 1.46% CTR with two significant digits; changes and thresholds need more. Each ratio is divided
+// again from its summed parts, grouped the same way, and each formula evaluated again over those
+// sums, the precise ratios and the formulas before it.
 function dmvDashboardPrecise_(session, resultId, spec, summary) {
-  if (!(spec.ratios || []).length || !summary.rows.length) return summary;
-  var parts = [];
-  spec.ratios.forEach(function (ratio) {
-    [ratio.numerator, ratio.denominator].forEach(function (field) {
-      if (parts.indexOf(field) < 0) parts.push(field);
+  var ratios = spec.ratios || [],
+    formulas = spec.formulas || [];
+  if ((!ratios.length && !formulas.length) || !summary.rows.length) return summary;
+  var base = dmvChatResult_(session, resultId),
+    compiled = dmvDashboardCompile_(base, ratios, formulas),
+    parts = [];
+  var part = function (key) {
+    if (parts.indexOf(key) < 0) parts.push(key);
+    return key;
+  };
+  var sides = ratios.map(function (ratio) {
+    return [ratio.numerator, ratio.denominator].map(function (field) {
+      return part(dmvChatColumn_(base, field, 'ratio column').key);
     });
+  });
+  compiled.forEach(function (formula) {
+    formula.sums.forEach(part);
   });
   var described = dmvChatSummarize_(session, {
     resultId: resultId,
@@ -1331,20 +1567,31 @@ function dmvDashboardPrecise_(session, resultId, spec, summary) {
   whole.rows.forEach(function (row) {
     lookup[key(row)] = row;
   });
-  var sums = whole.columns.slice(dims.length);
   var sumOf = function (row, field) {
-    return Number(row[sums[parts.indexOf(field)].key]);
+    var value = row[field + '__sum'];
+    return dmvDashboardBlank_(value) || !isFinite(Number(value)) ? null : Number(value);
   };
   return Object.assign({}, summary, {
     rows: summary.rows.map(function (row) {
       var found = lookup[key(row)];
       if (!found) return row;
-      var copy = Object.assign({}, row);
-      spec.ratios.forEach(function (ratio) {
-        var above = sumOf(found, ratio.numerator),
-          below = sumOf(found, ratio.denominator);
-        if (!dmvDashboardBlank_(row[ratio.key]) && isFinite(above) && isFinite(below) && below)
-          copy[ratio.key] = Number((above / below).toPrecision(12));
+      var copy = Object.assign({}, row),
+        sums = Object.create(null),
+        values = Object.create(null);
+      parts.forEach(function (field) {
+        sums[field] = values[field] = sumOf(found, field);
+      });
+      ratios.forEach(function (ratio, index) {
+        var above = sums[sides[index][0]],
+          below = sums[sides[index][1]];
+        values[ratio.key] = above !== null && below ? above / below : null;
+        if (!dmvDashboardBlank_(row[ratio.key]) && values[ratio.key] !== null)
+          copy[ratio.key] = Number(values[ratio.key].toPrecision(12));
+      });
+      var computed = dmvFormulaEvaluateAll_(compiled, values);
+      compiled.forEach(function (formula) {
+        if (!dmvDashboardBlank_(row[formula.key]) && computed[formula.key] !== null)
+          copy[formula.key] = Number(computed[formula.key].toPrecision(12));
       });
       return copy;
     }),
@@ -1617,7 +1864,8 @@ function dmvDashboardChangeText_(card) {
   };
 }
 
-// One scorecard per metric or ratio, split by currency when the money is mixed. A compared tile
+// One scorecard per metric, ratio or formula, split by currency when the money is mixed. A
+// formula's card is computed over the overall sums, a true total. A compared tile
 // summarizes each side over all of its datasets; the previous side's value with the same
 // currency supplies the change.
 function dmvDashboardCards_(context, resultId, tile) {
@@ -1645,8 +1893,11 @@ function dmvDashboardCards_(context, resultId, tile) {
       input,
       Object.assign({ filters: tile.filters, limit: 50, groupBy: [] }, spec)
     );
+    // The value is the last column; a formula's ratios and earlier formulas come before it.
     var value = summary.columns[summary.columns.length - 1];
-    var splits = summary.columns.slice(0, -1);
+    var splits = summary.columns.filter(function (column) {
+      return column.role === 'dimension';
+    });
     // Money always names its currency, so neither a reader nor the chat has to guess it.
     var single = value.type === 'currency' ? (summary.metadata || {}).currency || '' : '';
     // A filter that leaves no rows still shows its cards: a count or sum of nothing is 0, a
@@ -1683,6 +1934,13 @@ function dmvDashboardCards_(context, resultId, tile) {
     .concat(
       (tile.ratios || []).map(function (ratio) {
         return { key: ratio.key, spec: { metrics: [], ratios: [ratio] } };
+      }),
+      (tile.formulas || []).map(function (formula) {
+        var needs = dmvDashboardNeeds_(tile, formula.key);
+        return {
+          key: formula.key,
+          spec: { metrics: [], ratios: needs.ratios, formulas: needs.formulas },
+        };
       })
     )
     .forEach(function (item) {
@@ -1788,6 +2046,7 @@ function dmvDashboardChartTable_(context, resultId, tile) {
     dateBucket: tile.dateBucket,
     metrics: tile.metrics,
     ratios: tile.ratios,
+    formulas: tile.formulas,
     filters: tile.filters,
     limit: DMV_LIMITS.maxRows,
   });
@@ -2171,7 +2430,8 @@ function dmvDashboardBucketLabel_(start, index, bucket) {
 // A chart over dates against the previous period. Each side's days count from the first day of
 // their own dataset's period and are bucketed by that offset, so the first week of this period
 // sits above the first week of the last one even when their calendar weeks differ. Sums add up
-// per bucket, averages are weighted by their counts and ratios divide their summed parts.
+// per bucket, averages are weighted by their counts, ratios divide their summed parts and
+// formulas are evaluated over them.
 function dmvDashboardCompareChart_(context, resultId, tile) {
   var session = context.session,
     bucket = tile.dateBucket,
@@ -2185,10 +2445,11 @@ function dmvDashboardCompareChart_(context, resultId, tile) {
   var parts = [],
     partKeys = [];
   function part(field, agg) {
-    var key = dmvChatColumn_(base, field, 'metric').key + '__' + agg;
+    var column = dmvChatColumn_(base, field, 'metric').key,
+      key = column + '__' + agg;
     if (partKeys.indexOf(key) < 0) {
       partKeys.push(key);
-      parts.push({ field: field, agg: agg });
+      parts.push({ field: field, agg: agg, column: column });
     }
     return key;
   }
@@ -2221,6 +2482,20 @@ function dmvDashboardCompareChart_(context, resultId, tile) {
         };
       })
     );
+  // Formulas evaluate per bucket over its sums, its ratios and the formulas before them.
+  var compiled = dmvDashboardCompile_(base, tile.ratios, tile.formulas);
+  compiled.forEach(function (formula) {
+    formula.sums.forEach(function (key) {
+      part(key, 'sum');
+    });
+    specs.push({
+      name: formula.key,
+      agg: 'formula',
+      label: formula.label,
+      type: formula.type,
+      formula: formula,
+    });
+  });
   // The previous side's rows carry the labels of the current datasets they stand for; each row
   // still counts its days from its own dataset's first day.
   var renamed = dmvDashboardRenamed_(context, tile);
@@ -2273,7 +2548,9 @@ function dmvDashboardCompareChart_(context, resultId, tile) {
     var summary = dmvDashboardSummarize_(session, side.input, {
       groupBy: [axis.key, 'source'],
       dateBucket: 'day',
-      metrics: parts,
+      metrics: parts.map(function (item) {
+        return { field: item.field, agg: item.agg };
+      }),
       filters: tile.filters,
       limit: DMV_CHAT_RESULTS.maxSummaryRows,
     });
@@ -2324,7 +2601,20 @@ function dmvDashboardCompareChart_(context, resultId, tile) {
       return (cell && cell[key]) || null;
     };
     var out = null;
-    if (spec.agg === 'ratio') {
+    if (spec.agg === 'formula') {
+      var values = Object.create(null);
+      partKeys.forEach(function (key, index) {
+        if (parts[index].agg === 'sum')
+          values[parts[index].column] = get(key) && get(key).n ? get(key).sum : null;
+      });
+      specs.forEach(function (other) {
+        if (other.agg !== 'ratio') return;
+        var top = get(other.numerator),
+          bottom = get(other.denominator);
+        values[other.name] = top && top.n && bottom && bottom.sum ? top.sum / bottom.sum : null;
+      });
+      out = dmvFormulaEvaluateAll_(compiled, values)[spec.name];
+    } else if (spec.agg === 'ratio') {
       var above = get(spec.numerator),
         below = get(spec.denominator);
       out = above && above.n && below && below.sum ? above.sum / below.sum : null;
@@ -2476,8 +2766,8 @@ function dmvDashboardPreview_(block) {
   return preview;
 }
 
-// A table tile: its rows, an overall total (one summarize without groupBy, so ratios are true
-// overall ratios and money stays split by currency), the change of every value against the
+// A table tile: its rows, an overall total (one summarize without groupBy, so ratios and
+// formulas are true overall values and money stays split by currency), the change of every value against the
 // previous period when compared, the rows its highlight rules flag and an in-cell bar.
 function dmvDashboardTable_(context, resultId, tile) {
   var session = context.session;
@@ -2505,9 +2795,11 @@ function dmvDashboardTable_(context, resultId, tile) {
     metrics: tile.metrics,
     limit: tile.limit || DMV_DASHBOARD.tableRows,
   };
-  ['orderBy', 'rankWithin', 'limitPerGroup', 'ratios', 'filters'].forEach(function (key) {
-    if (tile[key] !== undefined) spec[key] = tile[key];
-  });
+  ['orderBy', 'rankWithin', 'limitPerGroup', 'ratios', 'formulas', 'filters'].forEach(
+    function (key) {
+      if (tile[key] !== undefined) spec[key] = tile[key];
+    }
+  );
   var summary = dmvDashboardSummarize_(session, current, spec);
   var normalized = dmvNormalizeResult_(summary, DMV_DASHBOARD.maxTableRows);
   var metadata = summary.metadata || {};
@@ -2530,20 +2822,26 @@ function dmvDashboardTable_(context, resultId, tile) {
       item.numeric = dmvChatNumeric_(column);
       dims.push(item);
     } else {
-      // A value is named like the plan names it: a metric by its field, a ratio by its key.
-      var metric = (tile.ratios || []).some(function (ratio) {
-        return ratio.key === column.key;
-      })
-        ? null
-        : tile.metrics.filter(function (entry) {
-            return (
-              dmvChatColumn_(base, entry.field, 'metric').key + '__' + entry.agg === column.key
-            );
-          })[0];
+      // A value is named like the plan names it: a metric by its field, a ratio or formula by
+      // its key.
+      var formula = (tile.formulas || []).some(function (entry) {
+        return entry.key === column.key;
+      });
+      var metric =
+        formula ||
+        (tile.ratios || []).some(function (ratio) {
+          return ratio.key === column.key;
+        })
+          ? null
+          : tile.metrics.filter(function (entry) {
+              return (
+                dmvChatColumn_(base, entry.field, 'metric').key + '__' + entry.agg === column.key
+              );
+            })[0];
       item.name = metric ? metric.field : column.key;
-      item.agg = metric ? metric.agg : 'ratio';
-      // Rates and averages are shaded by rank; amounts get the bar instead.
-      item.heat = item.agg === 'ratio' || item.agg === 'avg';
+      item.agg = metric ? metric.agg : formula ? 'formula' : 'ratio';
+      // Rates, averages and formulas are shaded by rank; amounts get the bar instead.
+      item.heat = item.agg === 'ratio' || item.agg === 'avg' || item.agg === 'formula';
       values.push(item);
     }
   });
@@ -2613,6 +2911,7 @@ function dmvDashboardTable_(context, resultId, tile) {
       groupBy: [],
       metrics: tile.metrics,
       ratios: tile.ratios,
+      formulas: tile.formulas,
       filters: tile.filters,
       limit: 50,
     });
@@ -2747,6 +3046,7 @@ function dmvDashboardTable_(context, resultId, tile) {
           dateBucket: tile.dateBucket,
           metrics: tile.metrics,
           ratios: tile.ratios,
+          formulas: tile.formulas,
           filters: tile.filters,
           limit: DMV_CHAT_RESULTS.maxSummaryRows,
         }).rows
@@ -4679,14 +4979,23 @@ function dmvRunDashboard(id, requestedDeadline) {
         dmvDashboardIds_(tile.compare.previous).forEach(function (id) {
           previousIds[id] = true;
         });
+      // A formula over a column only discovered now is checked now; its error names the formula,
+      // and the tile is added so the owner can find it.
+      var named = function (build) {
+        try {
+          return build(context, input, tile);
+        } catch (error) {
+          if (/^Formula (key )?"/.test(error.message))
+            throw new Error('"' + tile.title + '": ' + error.message);
+          throw error;
+        }
+      };
       if (tile.type === 'kpi') {
-        cards = cards.concat(dmvDashboardCards_(context, input, tile));
+        cards = cards.concat(named(dmvDashboardCards_));
         return;
       }
       var chart = dmvDashboardIsChart_(tile);
-      var block = chart
-        ? dmvDashboardChartTable_(context, input, tile)
-        : dmvDashboardTable_(context, input, tile);
+      var block = named(chart ? dmvDashboardChartTable_ : dmvDashboardTable_);
       block.title = tile.title;
       block.type = tile.type;
       block.chart = chart;
