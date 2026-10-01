@@ -113,6 +113,13 @@
   #card .note { margin: calc(var(--u) * .6) 0 0; font-size: calc(var(--u) * 1.6); letter-spacing: .12em;
     text-transform: uppercase; color: #77779a; font-weight: 600; }
   #card [hidden] { display: none; }
+
+  /* Chrome only sends a screencast frame when something repaints, so a caption swapped during a
+     still shot would not reach the video until the next move. One invisible pixel that repaints
+     every frame keeps the capture continuous. */
+  #tick { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; z-index: 1;
+    animation: tick 1s steps(30) infinite; }
+  @keyframes tick { from { background: #0b0b12; } to { background: #0b0b13; } }
   #card.small h1 { font-size: calc(var(--u) * 5); }
 </style>
 </head>
@@ -146,6 +153,7 @@
   <div id="pointer"></div>
 </div>
 
+<div id="tick"></div>
 <div id="caption"></div>
 <div id="card"><div class="inner">
   <div class="logo" id="card-logo"></div>
