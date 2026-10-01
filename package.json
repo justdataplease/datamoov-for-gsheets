@@ -23,6 +23,7 @@
     "preview:dashboard": "node tools/dashboard-preview.mjs",
     "test:browser": "playwright test",
     "walkthrough": "node tools/walkthrough.mjs",
+    "video": "node videos/kit/record.mjs",
     "push:dev": "node tools/publish.mjs data/development-project.json",
     "push:prod": "node tools/publish.mjs data/production-project.json",
     "format": "prettier --write \"src/**/*.{js,html,json}\"",

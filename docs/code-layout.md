@@ -35,6 +35,7 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | tests/ | Real implementation exercised with offline services and provider fixtures |
 | tests/browser/ | Sidebar behavior at narrow and wider widths |
 | tools/ | Source checks, local preview and guarded development publication |
+| videos/ | Social feature videos: a recorder over the local preview with fictional data and a privacy check, one storyboard per video (see videos/README.md) |
 | data/ and .local/ | Ignored private snapshots, verification records and credentials |
 
 Apps Script server files share a global namespace. The dmv prefix identifies the app's functions; names ending in an underscore are internal helpers. Node imports belong only in tools and tests.

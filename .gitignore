@@ -10,3 +10,7 @@ coverage/
 *.log
 .clasp.json
 .clasp.original.json
+
+# Social videos: renders and intermediate frames stay local (the folder syncs to Drive).
+videos/kit/.render/
+videos/*/out/

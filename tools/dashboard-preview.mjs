@@ -4,16 +4,19 @@
 // No network and no deployment: what you see is what the batch would draw, approximately.
 //
 //   node tools/dashboard-preview.mjs [--plan v2|v2-basic|v1] [--refresh] [--html-only] [--root <dir>]
+//                                    [--fixture <module>] [--out <dir>]
 //
 // --root runs another checkout's src/ and tests/helpers/ (for example a git archive of HEAD), so
-// a baseline and the working tree can be rendered from the same fixture.
+// a baseline and the working tree can be rendered from the same fixture. --fixture swaps the
+// seeded business for another module's (videos/kit/demo-fixture.mjs is a fictional shop with no
+// account numbers), and --out writes somewhere other than data/dashboard-preview/.
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from '@playwright/test';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const outDir = path.join(root, 'data', 'dashboard-preview');
+let outDir = path.join(root, 'data', 'dashboard-preview');
 const VIEWPORT = 1600;
 const DATA_TAB_ROWS = 120; // data tabs can hold thousands of rows; the preview shows the top
 const ROW_HEADER = 46;
@@ -35,9 +38,17 @@ function seeded(key) {
 
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const round = (value, digits) => Math.round(value * 10 ** digits) / 10 ** digits;
-const ACCOUNTS = ['7675648123', '5317611045'];
+let ACCOUNTS = ['7675648123', '5317611045'];
+// What the page calls each account, the currency both report in, and how keyword campaigns, long-
+// tail keywords and ad groups are named. A --fixture module may replace any of these and the
+// tables below.
+let LABELS = ['Google Ads 7675648123', 'Google Ads 5317611045'];
+let CURRENCY = 'AED';
+let keywordCampaign = (code) => code + '_Gue_Sea_Adw_EN_Dom_All';
+let longTailKeyword = (city, modifier) => 'furnished apartments ' + city + ' ' + modifier;
+let adGroupName = (code, city) => code + '_' + city;
 // [account, campaign, channel, monthly spend, CPA, value per conversion, CPC, CTR]
-const CAMPAIGNS = [
+let CAMPAIGNS = [
   [0, 'Nyc_Gue_Sea_Adw_EN_Dom_All', 'SEARCH', 103000, 1700, 28800, 11.5, 0.071],
   [0, 'Chi_Gue_Sea_Adw_EN_Dom_All', 'SEARCH', 71000, 1085, 28000, 9.8, 0.068],
   [0, 'Bos_Gue_Sea_Adw_EN_Dom_All', 'SEARCH', 71000, 1445, 30000, 10.2, 0.064],
@@ -114,7 +125,7 @@ function totalsRow(account, startDate, endDate) {
   return [total];
 }
 
-const KEYWORD_CITIES = [
+let KEYWORD_CITIES = [
   ['Nyc', 'nyc', 1.6],
   ['Chi', 'chicago', 1.1],
   ['Bos', 'boston', 1],
@@ -125,7 +136,7 @@ const KEYWORD_CITIES = [
   ['Mia', 'miami', 0.5],
   ['Atx', 'austin', 0.4],
 ];
-const KEYWORD_THEMES = [
+let KEYWORD_THEMES = [
   'furnished apartments',
   'monthly rentals',
   'corporate housing',
@@ -133,7 +144,7 @@ const KEYWORD_THEMES = [
   'serviced apartments',
 ];
 // Searches the business cannot serve: they spend and never convert.
-const WASTE = [
+let WASTE = [
   ['cheap apartments nyc', 'BROAD', 'Nyc', 4820],
   ['apartments for sale chicago', 'PHRASE', 'Chi', 3350],
   ['hotel deals san francisco', 'BROAD', 'Sfo', 2780],
@@ -144,7 +155,7 @@ const WASTE = [
   ['section 8 apartments los angeles', 'PHRASE', 'Lax', 1050],
 ];
 const MATCH = ['EXACT', 'PHRASE', 'BROAD'];
-const LONG_TAIL = [
+let LONG_TAIL = [
   ...['near me', 'downtown', 'with parking', 'pet friendly', 'for families', 'for students'],
   ...['1 bedroom', '2 bedroom', 'studio', 'luxury', 'cheap', 'monthly'],
   ...['weekly', 'long stay', 'corporate', 'relocation', 'with gym', 'with pool'],
@@ -161,7 +172,7 @@ function keywordRows(account, startDate, endDate) {
     rows.push({
       'ad_group_criterion.keyword.text': text,
       'ad_group_criterion.keyword.match_type': match,
-      'campaign.name': code + '_Gue_Sea_Adw_EN_Dom_All',
+      'campaign.name': keywordCampaign(code),
       'metrics.clicks': clicks,
       'metrics.impressions': impressions,
       'metrics.ctr': impressions ? round(clicks / impressions, 4) : 0,
@@ -202,7 +213,7 @@ function keywordRows(account, startDate, endDate) {
     for (const modifier of LONG_TAIL) {
       const r = seeded(account + city + modifier);
       add({
-        text: 'furnished apartments ' + city + ' ' + modifier,
+        text: longTailKeyword(city, modifier),
         match: MATCH[Math.floor(r() * 3)],
         code,
         impressions: Math.round((40 + 600 * r()) * scale),
@@ -215,7 +226,7 @@ function keywordRows(account, startDate, endDate) {
   return rows;
 }
 
-const ASSETS = [
+let ASSETS = [
   ['HEADLINE', 'Furnished Apartments in NYC', 'BEST'],
   ['HEADLINE', 'Move-In Ready Monthly Rentals', 'BEST'],
   ['HEADLINE', 'Stay 30 Days or More', 'GOOD'],
@@ -249,11 +260,11 @@ const LABEL_LIFT = { BEST: 1.5, GOOD: 1, LOW: 0.45, LEARNING: 0.3 };
 // account returns thousands of asset rows; here every asset serves in each city's ad group.
 // Without a cost column the ranked report keeps the top rows by impressions, which keeps image
 // and video assets (cheap per impression) beside the text ones a cost ranking would favour.
-const AD_GROUPS = KEYWORD_CITIES.map(([code, city, weight]) => [code + '_' + city, weight]);
-const AD_GROUP_WEIGHT = AD_GROUPS.reduce((total, [, weight]) => total + weight, 0);
 
 function assetRows(account, startDate, endDate) {
   const scale = days(startDate, endDate).length / 30;
+  const AD_GROUPS = KEYWORD_CITIES.map(([code, city, weight]) => [adGroupName(code, city), weight]);
+  const AD_GROUP_WEIGHT = AD_GROUPS.reduce((total, [, weight]) => total + weight, 0);
   return ASSETS.flatMap(([type, text, label]) => {
     const r = seeded(account + text);
     const reach = 160000 * LABEL_LIFT[label] * (0.4 + r()) * scale * (type === 'VIDEO' ? 0.4 : 1);
@@ -329,7 +340,7 @@ function registerFixture(f) {
     fetch(ctx) {
       const columns = fields.filter((item) => !ctx.fields.length || ctx.fields.includes(item.key));
       let data = rows(ctx.credentials.account, ctx.startDate, ctx.endDate);
-      const metadata = { complete: true, currency: 'AED' };
+      const metadata = { complete: true, currency: CURRENCY };
       const rank =
         ranked &&
         (columns.find((item) => item.key === 'metrics.cost_micros') ||
@@ -363,7 +374,7 @@ function registerFixture(f) {
     plain(
       f.api.dmvSaveConnection({
         connectorId: 'google_ads_fixture',
-        label: 'Google Ads ' + account,
+        label: LABELS[ACCOUNTS.indexOf(account)],
         credentials: { account, token: 'fixture-token' },
       })
     )
@@ -434,8 +445,8 @@ function planFor(tier, connections) {
     };
   };
   const datasets = [
-    dataset('ads1', 'Google Ads 7675648123', 'Google Ads 1 Data', one, 'campaign_daily'),
-    dataset('ads2', 'Google Ads 5317611045', 'Google Ads 2 Data', two, 'campaign_daily'),
+    dataset('ads1', LABELS[0], 'Google Ads 1 Data', one, 'campaign_daily'),
+    dataset('ads2', LABELS[1], 'Google Ads 2 Data', two, 'campaign_daily'),
   ];
   // The previous month of both accounts, by day and campaign: it feeds the scorecard changes,
   // the dashed previous-period trend and the change columns of the campaign table.
@@ -443,7 +454,7 @@ function planFor(tier, connections) {
     datasets.push(
       dataset(
         'ads1_prev',
-        'Google Ads 7675648123 previous month',
+        LABELS[0] + ' previous month',
         'Google Ads 1 Previous',
         one,
         'campaign_daily',
@@ -451,7 +462,7 @@ function planFor(tier, connections) {
       ),
       dataset(
         'ads2_prev',
-        'Google Ads 5317611045 previous month',
+        LABELS[1] + ' previous month',
         'Google Ads 2 Previous',
         two,
         'campaign_daily',
@@ -462,7 +473,7 @@ function planFor(tier, connections) {
     datasets.push(
       dataset(
         'ads1_prev',
-        'Google Ads 7675648123 previous month',
+        LABELS[0] + ' previous month',
         'Google Ads 1 Previous',
         one,
         'account_totals',
@@ -476,7 +487,7 @@ function planFor(tier, connections) {
   datasets.push(
     dataset(
       'keywords',
-      'Google Ads 7675648123 keywords',
+      LABELS[0] + ' keywords',
       'Keywords Data',
       one,
       'keyword',
@@ -485,7 +496,7 @@ function planFor(tier, connections) {
     ),
     dataset(
       'assets',
-      'Google Ads 7675648123 assets',
+      LABELS[0] + ' assets',
       'Assets Data',
       one,
       'ad_asset',
@@ -1885,6 +1896,24 @@ const slug = (text) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
 
+// A fixture module exports any of these; what it leaves out keeps the built-in value.
+function useFixture(fixture) {
+  ({
+    ACCOUNTS = ACCOUNTS,
+    LABELS = LABELS,
+    CURRENCY = CURRENCY,
+    CAMPAIGNS = CAMPAIGNS,
+    KEYWORD_CITIES = KEYWORD_CITIES,
+    KEYWORD_THEMES = KEYWORD_THEMES,
+    WASTE = WASTE,
+    LONG_TAIL = LONG_TAIL,
+    ASSETS = ASSETS,
+    keywordCampaign = keywordCampaign,
+    longTailKeyword = longTailKeyword,
+    adGroupName = adGroupName,
+  } = fixture);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const tier = args.includes('--plan') ? args[args.indexOf('--plan') + 1] : null;
@@ -1893,6 +1922,12 @@ async function main() {
     args.includes('--root') ? args[args.indexOf('--root') + 1] : root
   );
   if (sourceRoot !== path.resolve(root)) console.log('Runtime from ' + sourceRoot);
+  if (args.includes('--out')) outDir = path.resolve(args[args.indexOf('--out') + 1]);
+  if (args.includes('--fixture')) {
+    const fixturePath = path.resolve(args[args.indexOf('--fixture') + 1]);
+    useFixture(await import(pathToFileURL(fixturePath).href));
+    console.log('Fixture from ' + fixturePath);
+  }
   const run = await buildDashboard({ tier, refresh: args.includes('--refresh'), sourceRoot });
   for (const attempt of run.attempts)
     console.log(`Plan ${attempt.tier} was not accepted: ${attempt.error}`);

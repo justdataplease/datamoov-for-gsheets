@@ -196,6 +196,9 @@ export function previewFixture(catalog, aiProviders = [], families = []) {
 function installPreview(initial) {
   window.DATAMOOV_LOCAL_PREVIEW = true;
   const data = structuredClone(initial);
+  // A recording (videos/kit/record.mjs) reshapes the fixture before the sidebar boots: its own
+  // connection names, a configured AI provider. Absent the hook nothing changes.
+  if (typeof window.DATAMOOV_PREVIEW_SETUP === 'function') window.DATAMOOV_PREVIEW_SETUP(data);
   const copy = (value) => structuredClone(value);
   let nextId = 1;
   const chatProgress = new Map();
@@ -1010,6 +1013,25 @@ function installPreview(initial) {
       };
       await progressStep('Working on your request');
       if (window.DATAMOOV_PREVIEW_CHAT_REPLY) return finish(window.DATAMOOV_PREVIEW_CHAT_REPLY);
+      // A scripted conversation answers one turn per entry, its progress steps shown first.
+      const scripted = (window.DATAMOOV_PREVIEW_CHAT_SCRIPT || []).shift();
+      if (scripted) {
+        for (const label of scripted.steps || []) await progressStep(label);
+        const reply = scripted.reply;
+        return finish({
+          events: [],
+          options: null,
+          ...reply,
+          transcriptAppend: [
+            { role: 'user', text },
+            {
+              role: 'assistant',
+              text: reply.text,
+              actions: (reply.events || []).map((event) => event.text),
+            },
+          ],
+        });
+      }
       // "Create a report …" saves a draft report and runs it once, like save_report does.
       if (/\breport\b/i.test(text) && /create|build|save|keep/i.test(text) && !/dashboard/i.test(text)) {
         await progressStep('Saving and running the report');
