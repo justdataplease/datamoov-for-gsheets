@@ -94,7 +94,7 @@ test('the real chat request carries artifact intent, reusable periods and bounde
   assert.doesNotMatch(request.system, /Only an explicit week-versus-previous-week request/);
   assert.match(
     request.system,
-    /Performance dashboards compare with the previous period by default, and always when asked: per account add one lean totals dataset for the previous period \(previous7\/14\/30\/90 for last7\/14\/30\/90, previousWeek for lastWeek, previousMonth for lastMonth; for a custom range the custom range of equal length just before it; yesterday, thisMonth, thisYear and lastYear have none, so those dashboards are not compared\) with only the kpi fields, no date or campaign fields, mapped to the same keys as its current dataset and labeled with account and period/
+    /Performance dashboards compare with the previous period by default, and always when asked: per account add one lean totals dataset for the previous period \(previous7\/14\/30\/90 for last7\/14\/30\/90, previousWeek for lastWeek, previousMonth for lastMonth; for a custom range the equal range just before it; yesterday, thisMonth, thisYear and lastYear have none, so those dashboards are not compared\) with only the kpi fields, mapped to the same keys as its current dataset and labeled with account and period/
   );
   assert.match(
     request.system,
@@ -102,11 +102,18 @@ test('the real chat request carries artifact intent, reusable periods and bounde
   );
   assert.match(request.system, /Trends and tables may compare too when the previous datasets hold their date or group fields/);
   assert.match(request.system, /a mapped dataset offers tiles only its mapped keys/);
-  // Every requested section is built, from the custom query report when the standard ones lack
-  // the subject, and an honest note replaces controls a Sheets dashboard cannot have.
+  // Every requested section is built, from the source's report for the subject or else its
+  // custom query report, and an honest note replaces controls a Sheets dashboard cannot have.
   assert.match(
     request.system,
-    /Build every section the user asks for as tiles over real datasets, never as a description of how it could be built; subjects the standard reports lack \(keywords, search terms, assets, audiences, geography\) come from the source's custom query report\. If the dataset limit forces a section out, say which\./
+    /Build every section the user asks for as tiles over real datasets, never as a description of how it could be built; each subject \(keywords, assets, audiences, geography\) comes from the source's report for it, else from its custom query report\. If the dataset limit forces a section out, say which\./
+  );
+  assert.doesNotMatch(request.system, /subjects the standard reports lack/);
+  // Item lists are the rows someone acts on, ranked and labelled by the source, never a whole
+  // account's dump, and never the base of a total.
+  assert.match(
+    request.system,
+    /Item lists \(keywords, search terms, ads, assets, placements, landing pages\) are action lists, never dumps: the source's report for the subject with config top \(300 unless asked, at most 1,000\), else a custom query keeping its top rows only where its description says how \(its result is then labelled\), no date field, and the condition in the query or a tile filter \(spend with zero conversions, low CTR with impressions\)\. A top-N dataset never feeds kpi totals or shares\./
   );
   assert.match(request.system, /Requested insights are the Highlights block the runtime writes on every refresh/);
   assert.match(
@@ -120,7 +127,7 @@ test('the real chat request carries artifact intent, reusable periods and bounde
   );
   assert.match(
     request.system,
-    /Flag, highlight, alert or red\/green requests are table highlight rules, with ofTotal for relative thresholds \(CPA above 1\.5x overall: \{field: "cpa", op: "gt", ofTotal: 1\.5, color: "red"\}; on a summed metric ofTotal is a share of the table total, so top converters are \{field: "conversions", op: "gte", ofTotal: 0\.1, color: "green"\}\) or a text value on a groupBy column \(low-rated assets: \{field: "performance_label", op: "eq", value: "LOW", color: "red"\}\); percent thresholds are fractions \(CTR below 2% is value 0\.02\)/
+    /Flag, highlight, alert or red\/green requests are table highlight rules, with ofTotal for relative thresholds \(CPA above 1\.5x overall: \{field: "cpa", op: "gt", ofTotal: 1\.5, color: "red"\}; on a summed metric ofTotal is a share of the table total, so top converters are \{field: "conversions", op: "gte", ofTotal: 0\.1, color: "green"\}\) or a text value on a groupBy column \(broad match: \{field: "match_type", op: "eq", value: "BROAD", color: "red"\}\); percent thresholds are fractions \(CTR below 2% is value 0\.02\)/
   );
   // A share is a bar chart, since the runtime draws pies as bars.
   assert.match(request.system, /bar to rank segments and for a share by category, as pies are drawn as bars\)/);
@@ -158,11 +165,21 @@ test('the real chat request carries artifact intent, reusable periods and bounde
   assert.match(request.system, /at most 8 scorecard values across all kpi tiles/);
   // SQL datasets cover the whole population: aggregate, never LIMIT to fit the cap.
   assert.match(request.system, /never add a LIMIT to fit the row cap/);
-  assert.match(request.system, /Never cap a dataset with LIMIT; aggregate instead/);
+  // Only sources that label the rows a LIMIT keeps may cut a list with one; a SQL LIMIT would
+  // cut it without a word, so SQL datasets aggregate.
+  assert.match(request.system, /never LIMIT a SQL dataset, as nothing would label the rows it drops/);
+  assert.doesNotMatch(request.system, /custom query ordered by a metric DESC with LIMIT/);
+  assert.doesNotMatch(request.system, /performance_label/, 'Google no longer fills the asset performance label for Search and Display');
   assert.match(request.system, /The tab links are shown to the user automatically/);
   assert.match(
     request.system,
     /If saving or running failed, say which step failed and do not claim the dashboard exists/
+  );
+  // A dataset over the row limit or the one Sheets write is narrowed first; the higher limit is
+  // the last resort, not the first answer.
+  assert.match(
+    request.system,
+    /A row-limit or too-large error names a dataset: narrow it \(config top where its report has it, a condition in the query, fewer fields, no date field\) and retry; suggest a higher row limit only if it still needs one\./
   );
   // The earlier single-table flow (sources plus summary, then create_chart) must not linger
   // beside the rules above.

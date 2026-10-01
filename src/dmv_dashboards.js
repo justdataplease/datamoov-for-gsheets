@@ -1129,6 +1129,76 @@ function dmvDashboardPad_(row, width) {
   return row;
 }
 
+// A connector that keeps only the top rows of a ranked list (a report's "Keep the top rows", a
+// query's own LIMIT) says so with metadata.topRows beside its note. It counts only when the
+// result holds exactly that many rows: a shorter list is the whole list.
+function dmvDashboardTopOf_(result) {
+  var metadata = result.metadata || {},
+    count = metadata.topRows;
+  if (
+    typeof count !== 'number' ||
+    count !== Math.floor(count) ||
+    count < 1 ||
+    result.rows.length !== count
+  )
+    return null;
+  // "Top 100 by Cost" reads "top 100 by Cost" beside a title; advice after a ";" stays on the
+  // data tab and in the data sources.
+  var note =
+    typeof metadata.note === 'string' && metadata.note.split(';')[0].trim()
+      ? metadata.note.split(';')[0].trim()
+      : 'Top ' + count.toLocaleString() + ' rows';
+  // The note's first word says which end of the list was kept when it precedes the count:
+  // "Lowest 100 by CTR" is the lowest 100, "First 100 rows (query LIMIT)" the first. Any other
+  // note reads as the top.
+  var lead = /^([a-z]+)\s+([\d.,\s]+)/i.exec(note);
+  return {
+    rows: count,
+    note: note.charAt(0).toLowerCase() + note.slice(1),
+    word: lead && Number(lead[2].replace(/\D/g, '')) === count ? lead[1].toLowerCase() : 'top',
+  };
+}
+
+// How a tile names the cut datasets it reads: label for its total row and scorecards ("top 100",
+// "lowest 100", "top 100 each", or "top rows" when the counts differ or a whole dataset is read
+// too, "kept rows" when the lists were cut at different ends) and note for its card ("top 100
+// by Cost", or each dataset's own). Null when it reads none.
+function dmvDashboardTileTop_(context, tile) {
+  var ids = tile.datasets.filter(function (id) {
+    return context.tops[id];
+  });
+  if (!ids.length) return null;
+  var every = ids.length === tile.datasets.length;
+  var distinct = function (key) {
+    return ids
+      .map(function (id) {
+        return context.tops[id][key];
+      })
+      .filter(function (value, index, list) {
+        return list.indexOf(value) === index;
+      });
+  };
+  var counts = distinct('rows'),
+    notes = distinct('note'),
+    words = distinct('word'),
+    each = ids.length > 1 ? ' each' : '';
+  return {
+    label:
+      words.length > 1
+        ? 'kept rows'
+        : words[0] +
+          (every && counts.length === 1 ? ' ' + counts[0].toLocaleString() + each : ' rows'),
+    note:
+      every && notes.length === 1
+        ? notes[0] + each
+        : ids
+            .map(function (id) {
+              return context.labels[id] + ': ' + context.tops[id].note;
+            })
+            .join(', '),
+  };
+}
+
 // The rows a tile reads: one dataset as fetched, or datasets appended under their shared mapped
 // names with a source column. Tiles over the same datasets share one input.
 function dmvDashboardInput_(session, datasets, tile, fetched, memo) {
@@ -1551,6 +1621,7 @@ function dmvDashboardChangeText_(card) {
 // currency supplies the change.
 function dmvDashboardCards_(context, resultId, tile) {
   var session = context.session,
+    top = dmvDashboardTileTop_(context, tile),
     cards = [];
   var inputs = tile.compare
     ? {
@@ -1629,10 +1700,11 @@ function dmvDashboardCards_(context, resultId, tile) {
         previous[entry.split] = entry.value;
       });
       now.forEach(function (entry) {
+        // A total over a dataset cut to its top rows says so: "Spend (AED, top 100)".
+        var aside = [entry.split, top ? top.label : ''].filter(Boolean).join(', ');
         var card = {
           key: item.key,
-          label:
-            dmvDashboardLabel_(entry.column.label) + (entry.split ? ' (' + entry.split + ')' : ''),
+          label: dmvDashboardLabel_(entry.column.label) + (aside ? ' (' + aside + ')' : ''),
           value: dmvDashboardBlank_(entry.value) ? '' : entry.value,
           type: entry.column.type,
         };
@@ -2888,9 +2960,11 @@ function dmvDashboardHighlights_(cards, blocks) {
     dmvDashboardSpan_(DMV_DASHBOARD.gridColumns) -
     2 * DMV_DASHBOARD.inset -
     2 * DMV_DASHBOARD.gapWidth;
+  // Rows counted over a dataset cut to its top rows are counted "in the top 100", not in all.
   flagged.forEach(function (item) {
     var block = item.block,
-      match = item.match;
+      match = item.match,
+      within = block.top ? 'the ' + block.top.label : '';
     var lead =
       dmvDashboardTitle_(block.title) +
       ': ' +
@@ -2898,7 +2972,11 @@ function dmvDashboardHighlights_(cards, blocks) {
       ' of ' +
       block.entries.length +
       ' rows' +
-      (block.groups ? ' (' + match.all + ' of ' + block.groups + ' in all)' : '') +
+      (block.groups
+        ? ' (' + match.all + ' of ' + block.groups + ' in ' + (within || 'all') + ')'
+        : within
+          ? ' (in ' + within + ')'
+          : '') +
       ((block.groups ? match.shown : match.all) === 1 ? ' has ' : ' have ') +
       dmvDashboardRuleText_(block, match, false) +
       ' (' +
@@ -2931,10 +3009,13 @@ function dmvDashboardHighlights_(cards, blocks) {
       ' '
     );
   };
+  // A share over a dataset cut to its top rows is a share of those rows, and says so: "of the
+  // top 100", "of spend in the top 100".
   blocks.forEach(function (block) {
     var share = block.concentration;
     if (!share) return;
-    var title = dmvDashboardTitle_(block.title);
+    var title = dmvDashboardTitle_(block.title),
+      named = words(title).indexOf(words(share.label)) >= 0;
     out.push({
       text:
         title +
@@ -2943,7 +3024,11 @@ function dmvDashboardHighlights_(cards, blocks) {
         ' holds ' +
         dmvDashboardPercent_(share.share) +
         ' of ' +
-        (words(title).indexOf(words(share.label)) >= 0 ? 'the total' : share.label) +
+        (block.top
+          ? (named ? '' : share.label + ' in ') + 'the ' + block.top.label
+          : named
+            ? 'the total'
+            : share.label) +
         '.',
     });
   });
@@ -2960,7 +3045,9 @@ function dmvDashboardHighlights_(cards, blocks) {
         block.lead.column.label.toLowerCase() +
         ' (' +
         dmvDashboardPercent_(block.lead.share) +
-        ' of the total).',
+        ' of the ' +
+        (block.top ? block.top.label : 'total') +
+        ').',
     });
   });
   return out.slice(0, DMV_DASHBOARD.highlights);
@@ -3612,17 +3699,27 @@ function dmvDashboardPage_(dashboard, view) {
   });
   // The data sources take the columns their text needs, like a table's names. The source
   // column goes when every connection label already starts with its source's name, and the
-  // connection column when every dataset label starts with its connection's.
+  // connection column when every dataset label starts with its connection's. The note column
+  // (a connector's own note, such as "Top 100 by Cost") is there when a dataset has one.
   var startsWith = function (index, prefix) {
     return view.sources.every(function (source) {
       return String(source[index]).indexOf(String(source[prefix])) === 0;
     });
   };
-  var kept = [0, 1, 2, 3, 4, 5, 6].filter(function (index) {
-    return !(index === 1 && startsWith(2, 1)) && !(index === 2 && startsWith(0, 2));
+  var noted = view.sources.some(function (source) {
+    return !!source[7];
+  });
+  var kept = [0, 1, 2, 3, 4, 5, 6, 7].filter(function (index) {
+    return (
+      !(index === 1 && startsWith(2, 1)) &&
+      !(index === 2 && startsWith(0, 2)) &&
+      !(index === 7 && !noted)
+    );
   });
   var headers = kept.map(function (index) {
-    return ['Dataset', 'Source', 'Connection', 'Report', 'Date range', 'Rows', 'Tab'][index];
+    return ['Dataset', 'Source', 'Connection', 'Report', 'Date range', 'Rows', 'Tab', 'Note'][
+      index
+    ];
   });
   var listed = view.sources.map(function (source) {
     return kept.map(function (index) {
@@ -3871,15 +3968,21 @@ function dmvDashboardTableView_(block, plan) {
     if (word > cut.length / 2) cut = cut.slice(0, word);
     return cut.replace(/[\s_\-.,/:;]+$/, '') + '…';
   }
+  // The total covers every group of the tile, and of a top-N dataset only its top rows:
+  // "Total (all 20)", "Total (top 100)", "Total (all 20 of top 100)".
+  var top = block.top ? block.top.label : '';
+  var scope = block.groups
+    ? ' (all ' + block.groups + (top ? ' of ' + top : '') + ')'
+    : top
+      ? ' (' + top + ')'
+      : '';
   function cells(entry, total) {
     return columns.map(function (item) {
       var key = item.column.key;
       if (item.kind === 'dim') {
         if (total)
           return item.first
-            ? 'Total' +
-                (block.groups ? ' (all ' + block.groups + ')' : '') +
-                (item.column.short ? ' (' + entry.values[key] + ')' : '')
+            ? 'Total' + scope + (item.column.short ? ' (' + entry.values[key] + ')' : '')
             : item.column.short
               ? entry.values[key]
               : '';
@@ -4234,6 +4337,76 @@ function dmvDashboardChartRequests_(
   return requests;
 }
 
+// A dashboard shows the rows worth acting on, not a full dump: what narrows a dataset that is
+// too large, in words that fit every source. A query's own LIMIT is left to the sources whose
+// description offers it, as only those label the rows it keeps; elsewhere it would cut a list
+// without a word.
+function dmvDashboardNarrow_(subject) {
+  return (
+    'Keep only the rows worth acting on' +
+    (subject ? ' in ' + subject : '') +
+    ": a ranked report's Keep the top rows, conditions or aggregation in the query, or fewer dimensions."
+  );
+}
+
+// Errors reach the user through dmvSafeError_, which keeps their first 400 characters: a list
+// names as many items as fit beside the advice after it ("and 2 more"), and an optional last
+// sentence comes only whole.
+function dmvDashboardMessage_(lead, items, close, advice, optional) {
+  var text = function (count) {
+    return (
+      lead +
+      items.slice(0, count).join(', ') +
+      (count < items.length ? ' and ' + (items.length - count) + ' more' : '') +
+      close +
+      advice
+    );
+  };
+  var count = items.length;
+  while (count > 1 && text(count).length > 400) count--;
+  var message = text(count);
+  return optional && (message + optional).length <= 400 ? message + optional : message;
+}
+
+// A refresh past one Sheets write names its largest parts, rows by columns, from the writer's
+// per-output sizes (those at least a tenth of the largest), and what shrinks the largest: a
+// dataset keeps fewer rows, the page shorter tables.
+function dmvDashboardTooLarge_(sizes, parts) {
+  var known = sizes
+    .filter(function (size) {
+      return parts[size.id];
+    })
+    .sort(function (a, b) {
+      return b.size - a.size;
+    });
+  var largest = known
+    .filter(function (size, index) {
+      return index < 3 && size.size * 10 >= known[0].size;
+    })
+    .map(function (size) {
+      return parts[size.id];
+    });
+  var count = function (number, noun) {
+    return number.toLocaleString() + ' ' + noun + (number === 1 ? '' : 's');
+  };
+  var lead = 'This dashboard is too large for one Sheets write.';
+  return dmvDashboardMessage_(
+    lead + (largest.length ? ' Largest parts: ' : ' '),
+    largest.map(function (part) {
+      return (
+        part.label + ' (' + count(part.rows, 'row') + ' x ' + count(part.columns, 'column') + ')'
+      );
+    }),
+    largest.length ? '. ' : '',
+    largest.length && largest[0].dataset
+      ? dmvDashboardNarrow_('those datasets')
+      : 'Lower the row limit of its longest table tiles, give them fewer metrics and ratios, or narrow its datasets.',
+    largest.length && largest[0].dataset
+      ? ' Then shorten the longest table tiles if the page is still too large.'
+      : ''
+  );
+}
+
 function dmvRunDashboard(id, requestedDeadline) {
   if (
     requestedDeadline !== undefined &&
@@ -4343,7 +4516,12 @@ function dmvRunDashboard(id, requestedDeadline) {
       counts = {},
       // The period each dataset holds (null without one), and its label, by dataset id.
       ranges = {},
-      labels = {};
+      labels = {},
+      // Datasets a connector cut to their top rows, and each dataset's own note, by id.
+      tops = {},
+      notes = {},
+      // What each output holds, by output id, to name the largest parts of a write too large.
+      parts = {};
     plan.datasets.forEach(function (dataset, index) {
       phase(
         'Fetching dataset ' + (index + 1) + ' of ' + plan.datasets.length + ': ' + dataset.label
@@ -4353,31 +4531,64 @@ function dmvRunDashboard(id, requestedDeadline) {
         result = dmvFetchReport_(queries[index], spreadsheet, deadline);
       } catch (error) {
         var reason = dmvSafeError_(error, {});
-        if (/row limit|too many rows|more than .*rows/i.test(reason))
-          reason +=
-            ' This dataset allows ' +
-            queries[index].maxRows.toLocaleString() +
-            ' rows. Increase Maximum rows per chat report under Settings > AI provider (up to ' +
-            DMV_LIMITS.maxRows.toLocaleString() +
-            '), or ask Chat to narrow this dataset.';
-        throw new Error(dataset.label + ': ' + reason);
+        // A dashboard needs the rows worth acting on, not every row: narrowing comes first,
+        // the row limit setting only after it. A dataset's period is the page's, so a source's
+        // advice to shorten the date range is left out: it would mix periods on one page.
+        if (!/exceeds the row limit|too many rows|more than .*rows/i.test(reason))
+          throw new Error(dataset.label + ': ' + reason);
+        reason = reason.replace(/\s*[^.]*\bdate range\b[^.]*\./gi, '') || reason;
+        throw new Error(
+          dmvDashboardMessage_(
+            dataset.label +
+              ': ' +
+              reason +
+              ' This dataset allows ' +
+              queries[index].maxRows.toLocaleString() +
+              ' rows. ',
+            [],
+            '',
+            dmvDashboardNarrow_(''),
+            ' Only then raise Maximum rows per chat report (Settings > AI provider, up to ' +
+              DMV_LIMITS.maxRows.toLocaleString() +
+              ').'
+          )
+        );
       }
       dmvDashboardDeadline_(deadline);
       fetchedRows += result.rows.length;
+      counts[dataset.id] = result.rows.length;
+      labels[dataset.id] = dataset.label;
       if (fetchedRows > DMV_LIMITS.maxRows)
         throw new Error(
-          'The dashboard datasets exceed ' +
-            DMV_LIMITS.maxRows.toLocaleString() +
-            ' rows together. Narrow them.'
+          dmvDashboardMessage_(
+            'The dashboard datasets exceed ' +
+              DMV_LIMITS.maxRows.toLocaleString() +
+              ' rows together (',
+            plan.datasets
+              .slice(0, index + 1)
+              .sort(function (a, b) {
+                return counts[b.id] - counts[a.id];
+              })
+              .map(function (item) {
+                return item.label + ' ' + counts[item.id].toLocaleString();
+              }),
+            '). ',
+            dmvDashboardNarrow_('the largest datasets')
+          )
         );
       var resultId = dmvChatResultId_();
       session.results[resultId] = result;
       fetched[dataset.id] = resultId;
-      counts[dataset.id] = result.rows.length;
-      labels[dataset.id] = dataset.label;
+      var metadata = result.metadata || {};
+      tops[dataset.id] = dmvDashboardTopOf_(result);
+      notes[dataset.id] =
+        typeof metadata.note === 'string' && metadata.note.trim()
+          ? metadata.note.trim()
+          : tops[dataset.id]
+            ? 'Top ' + tops[dataset.id].rows.toLocaleString() + ' rows'
+            : '';
       // A custom query without metrics (negative keywords, settings) reports no period.
-      ranges[dataset.id] =
-        dates[index] && (result.metadata || {}).dateFiltered !== false ? dates[index] : null;
+      ranges[dataset.id] = dates[index] && metadata.dateFiltered !== false ? dates[index] : null;
       var connector = dmvConnector_(dataset.connectorId);
       var provenance = [
         dataset.label,
@@ -4398,11 +4609,19 @@ function dmvRunDashboard(id, requestedDeadline) {
             ranges[dataset.id] ? dmvDashboardPeriod_([ranges[dataset.id]]) : 'No date range',
           ])
           .concat(provenance.slice(5))
+          .concat([notes[dataset.id]])
       );
       var width = result.columns.length;
+      var outputId = dmvDashboardOutputId_(dashboard, dataset);
+      parts[outputId] = {
+        label: dataset.label,
+        rows: result.rows.length,
+        columns: width,
+        dataset: true,
+      };
       outputs.push({
         report: {
-          id: dmvDashboardOutputId_(dashboard, dataset),
+          id: outputId,
           spreadsheetId: spreadsheet.getId(),
           target: { sheetName: dataset.sheetName, startCell: 'A1' },
         },
@@ -4415,7 +4634,9 @@ function dmvRunDashboard(id, requestedDeadline) {
                 provenance[4] +
                   ' · ' +
                   result.rows.length.toLocaleString() +
-                  ' rows · Refreshed ' +
+                  ' rows' +
+                  (notes[dataset.id] ? ' · ' + notes[dataset.id] : '') +
+                  ' · Refreshed ' +
                   stamp +
                   ' · Dashboard: ' +
                   dashboard.name,
@@ -4440,6 +4661,7 @@ function dmvRunDashboard(id, requestedDeadline) {
         memo: {},
         ranges: ranges,
         labels: labels,
+        tops: tops,
         datasets: {},
       },
       cards = [],
@@ -4465,6 +4687,10 @@ function dmvRunDashboard(id, requestedDeadline) {
       block.title = tile.title;
       block.type = tile.type;
       block.chart = chart;
+      // A tile over datasets cut to their top rows says so first: "top 100 by Cost · top 15
+      // of 40" is the top 15 rows of the tile, drawn from the top 100 of the dataset.
+      block.top = dmvDashboardTileTop_(context, tile);
+      if (block.top) block.note = [block.top.note, block.note].filter(Boolean).join(' · ');
       blocks.push(block);
       dmvDashboardDeadline_(deadline);
     });
@@ -4500,6 +4726,16 @@ function dmvRunDashboard(id, requestedDeadline) {
     });
     if (JSON.stringify(page.matrix).length > DMV_LIMITS.maxBytes)
       throw new Error('The dashboard tab is too large. Use fewer or smaller tiles.');
+    parts[dashboard.id + '-charts'] = {
+      label: 'the hidden chart data tab',
+      rows: page.data.matrix.length,
+      columns: page.data.matrix.length ? page.data.matrix[0].length : 0,
+    };
+    parts[dashboard.id + '-report'] = {
+      label: 'the dashboard page',
+      rows: page.matrix.length,
+      columns: page.width,
+    };
     outputs.push({
       report: {
         id: dashboard.id + '-charts',
@@ -4554,11 +4790,8 @@ function dmvRunDashboard(id, requestedDeadline) {
           }
         );
       } catch (error) {
-        // What grows with a plan is its long tables and its datasets: name them, not the report.
-        if (error.tooLarge)
-          throw new Error(
-            'This dashboard is too large for one Sheets write. Lower the row limit of its longest table tiles, give them fewer metrics and ratios, or narrow its datasets.'
-          );
+        // What grows with a plan is its datasets and its long tables: name them, not the report.
+        if (error.tooLarge) throw new Error(dmvDashboardTooLarge_(error.parts || [], parts));
         throw error;
       }
       sheetUpdated = true;
@@ -4589,6 +4822,8 @@ function dmvRunDashboard(id, requestedDeadline) {
             label: output.label,
             sheetName: output.sheetName,
             rowCount: output.rows,
+            // The connector's own note, such as "Top 100 by Cost" for a ranked list.
+            note: notes[output.id] || undefined,
             url: dmvSheetLink_(spreadsheet, { sheetName: output.sheetName, startCell: 'A1' }),
           };
         }),

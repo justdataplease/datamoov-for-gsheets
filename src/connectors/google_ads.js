@@ -332,6 +332,29 @@ function dmvGoogleAdsQueryColumn_(name) {
   return column;
 }
 
+// "Spend" reads "spend" inside a sentence; CTR keeps its capitals.
+function dmvGoogleAdsInline_(label) {
+  return /^[A-Z][a-z]/.test(label) ? label.charAt(0).toLowerCase() + label.slice(1) : label;
+}
+
+// A query that stops at its own LIMIT holds the top of its ORDER BY, not the whole report:
+// "Top 100 by spend", or "First 100 rows (query LIMIT)" when it has no order.
+function dmvGoogleAdsTopNote_(parsed, count, labels) {
+  var order = /^([a-z_]+(?:\.[a-z0-9_]+)+)(?:\s+(asc|desc))?$/i.exec(
+    parsed.orderBy.split(',')[0].trim()
+  );
+  if (!order) return 'First ' + count.toLocaleString() + ' rows (query LIMIT)';
+  var column = dmvGoogleAdsQueryColumn_(order[1]);
+  var first = /^desc$/i.test(order[2] || '')
+    ? 'Top '
+    : column.role === 'metric'
+      ? 'Lowest '
+      : 'First ';
+  return (
+    first + count.toLocaleString() + ' by ' + dmvGoogleAdsInline_(labels[order[1]] || column.label)
+  );
+}
+
 function dmvGoogleAdsQueryFetch_(ctx) {
   var parsed = dmvGoogleAdsParseQuery_(ctx.config.gaql);
   var connection = dmvGoogleAdsConnection_(ctx);
@@ -388,6 +411,22 @@ function dmvGoogleAdsQueryFetch_(ctx) {
           1
         )[0] || {}
       ).customer || {};
+  var metadata = {
+    apiVersion: 'v25',
+    accountId: connection.id,
+    currency: account.currencyCode || '',
+    timeZone: account.timeZone || '',
+    grain: 'Custom GAQL query FROM ' + parsed.resource,
+    dateFiltered: dated,
+    complete: true,
+  };
+  // Reaching the query's own LIMIT means more rows exist: topRows tells the runtime (a dashboard
+  // labels totals over it) and the note tells people. Fewer rows are the whole list.
+  var limit = Number(parsed.limit);
+  if (limit > 0 && raw.length === limit) {
+    metadata.topRows = limit;
+    metadata.note = dmvGoogleAdsTopNote_(parsed, limit, labels);
+  }
   return {
     columns: columns,
     rows: raw.map(function (item) {
@@ -406,15 +445,7 @@ function dmvGoogleAdsQueryFetch_(ctx) {
       });
       return row;
     }),
-    metadata: {
-      apiVersion: 'v25',
-      accountId: connection.id,
-      currency: account.currencyCode || '',
-      timeZone: account.timeZone || '',
-      grain: 'Custom GAQL query FROM ' + parsed.resource,
-      dateFiltered: dated,
-      complete: true,
-    },
+    metadata: metadata,
   };
 }
 
@@ -530,6 +561,8 @@ var DMV_GOOGLE_ADS_LEVELS = [
     label: 'Account performance',
     resource: 'customer',
     note: 'Totals for the whole account; split by date, device or network.',
+    // One row per account and split: nothing to keep the top of.
+    top: false,
     dims: ['customer.descriptive_name|Account', 'customer.id', 'customer.currency_code'],
     defaults: ['segments.date'],
   },
@@ -577,9 +610,51 @@ var DMV_GOOGLE_ADS_LEVELS = [
     defaults: ['campaign.name', 'ad_group.name', 'ad_group_ad.ad.id', 'ad_group_ad.ad.type'],
   },
   {
+    id: 'ad_asset',
+    label: 'Ad assets',
+    resource: 'ad_group_ad_asset_view',
+    chat: true,
+    // Assets still in the latest version of an enabled ad, ad group and campaign: the ones a
+    // change can act on.
+    where:
+      "ad_group_ad_asset_view.enabled = TRUE AND ad_group_ad.status = 'ENABLED' AND ad_group.status = 'ENABLED' AND campaign.status = 'ENABLED'",
+    // Google stopped filling the performance label for Search and Display assets in favour of
+    // each asset's own statistics, so it stays selectable but is not a default: weak assets are
+    // read from their metrics.
+    note: 'One row per asset of each enabled ad: its type (HEADLINE, DESCRIPTION, MARKETING_IMAGE...), text or name, and its own metrics. Google no longer fills the performance label for Search and Display assets, so judge assets by their metrics.',
+    dims: [
+      'campaign.name',
+      'ad_group.name|Ad group',
+      'ad_group_ad_asset_view.field_type|Asset type',
+      'ad_group_ad_asset_view.performance_label|Performance label',
+      'asset.text_asset.text|Asset text',
+      'asset.name|Asset name',
+      'asset.type|Asset format',
+    ],
+    metrics: [
+      'metrics.impressions',
+      'metrics.clicks',
+      'metrics.ctr',
+      'metrics.conversions',
+      'metrics.cost_micros',
+    ],
+    defaults: [
+      'campaign.name',
+      'ad_group.name',
+      'ad_group_ad_asset_view.field_type',
+      'asset.text_asset.text',
+      'asset.name',
+      'metrics.impressions',
+      'metrics.clicks',
+      'metrics.conversions',
+      'metrics.cost_micros',
+    ],
+  },
+  {
     id: 'keyword',
     label: 'Keyword performance',
     resource: 'keyword_view',
+    chat: true,
     dims: [
       'campaign.name',
       'ad_group.name|Ad group',
@@ -599,6 +674,7 @@ var DMV_GOOGLE_ADS_LEVELS = [
     id: 'search_term',
     label: 'Search terms',
     resource: 'search_term_view',
+    chat: true,
     dims: [
       'campaign.name',
       'ad_group.name|Ad group',
@@ -779,18 +855,56 @@ function dmvGoogleAdsLevelFields_(level) {
     });
 }
 
+// Keep the top rows ranks by spend, or by impressions when spend is not selected. A blank one
+// ranks by spend only: without spend the report fails over the row limit, as it always did.
+var DMV_GOOGLE_ADS_RANKS = ['metrics.cost_micros', 'metrics.impressions'];
+
+// A period column makes a report a trend, whatever its grain.
+var DMV_GOOGLE_ADS_PERIODS = /^segments\.(date|week|month|quarter|year)$/;
+
+// A ranked level can keep only its top rows: the actionable part of a long list.
+var DMV_GOOGLE_ADS_TOP = {
+  key: 'top',
+  label: 'Keep the top rows',
+  type: 'number',
+  required: false,
+  min: 1,
+  // DMV_LIMITS.maxRows, written out: a connector can register before dmv_core.js has run.
+  max: 30000,
+  help: 'Ranks rows by spend (impressions without spend) and keeps this many. Blank keeps every row up to the row limit.',
+};
+
+// The form sends '' for a blank field and the chat may send "100"; both read as configured.
+function dmvGoogleAdsTop_(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return 0;
+  var top = Number(value);
+  if (!Number.isInteger(top) || top < 1 || top > DMV_LIMITS.maxRows)
+    throw new Error(
+      'Keep the top rows must be a whole number from 1 to ' +
+        DMV_LIMITS.maxRows.toLocaleString() +
+        ', or blank for every row.'
+    );
+  return top;
+}
+
 function dmvGoogleAdsLevelReport_(level) {
   var curated = dmvGoogleAdsLevelFields_(level);
+  var rankable =
+    level.top !== false &&
+    curated.some(function (column) {
+      return DMV_GOOGLE_ADS_RANKS.indexOf(column.key) >= 0;
+    });
   return {
     id: level.id,
     label: level.label,
     description:
       (level.note || 'One row per combination of the dimensions you select.') +
       ' Load columns lists every dimension and metric Google Ads offers at this level.',
-    // The chat reaches every level through the custom query instead of listing them all.
-    chat: false,
+    // The chat sees the item lists dashboards rank (keywords, search terms, assets); it reaches
+    // every other level through the custom query instead of listing them all.
+    chat: level.chat === true,
     fields: curated,
-    configFields: [],
+    configFields: rankable ? [Object.assign({}, DMV_GOOGLE_ADS_TOP)] : [],
     dateRange: level.dated !== false,
     fetch: function (ctx) {
       var names = ctx.fields && ctx.fields.length ? ctx.fields : dmvDefaultFields_(curated);
@@ -800,20 +914,46 @@ function dmvGoogleAdsLevelReport_(level) {
       // Entities that never served would otherwise fill a performance report with empty rows.
       var filter = level.filter === undefined ? 'metrics.impressions > 0' : level.filter;
       var where = [level.where, metrics ? filter : ''].filter(Boolean).join(' AND ');
-      var order =
-        names.indexOf('segments.date') >= 0
-          ? 'segments.date'
-          : names.indexOf('metrics.cost_micros') >= 0
-            ? 'metrics.cost_micros DESC'
-            : '';
-      // Without a date column the report is a ranking, so the row limit keeps the top rows
-      // by spend, as reporting tools do for search terms. A trend needs every row and fails
-      // instead when it is over the limit.
-      var ranked = order === 'metrics.cost_micros DESC';
       var labels = {};
       curated.forEach(function (column) {
         labels[column.key] = column.label;
       });
+      // A period column (day, week, month...) makes the report a trend: every period needs all
+      // of its rows, so it fails instead when it is over the limit. Without one the report is a
+      // ranking: Keep the top rows keeps that many, and when it is blank the row limit keeps the
+      // top rows by spend, as reporting tools do for search terms.
+      var period = names.filter(function (name) {
+        return DMV_GOOGLE_ADS_PERIODS.test(name);
+      })[0];
+      var top = rankable ? dmvGoogleAdsTop_((ctx.config || {}).top) : 0;
+      var rank = period
+        ? ''
+        : DMV_GOOGLE_ADS_RANKS.filter(function (name, index) {
+            return (top || index === 0) && names.indexOf(name) >= 0;
+          })[0] || '';
+      if (top && !rank) {
+        var split = period ? labels[period] || dmvGoogleAdsQueryColumn_(period).label : '';
+        throw new Error(
+          period
+            ? 'Keep the top rows ranks totals for the date range, so it cannot be combined with ' +
+                split +
+                '. Remove ' +
+                split +
+                ' or clear Keep the top rows.'
+            : 'Keep the top rows ranks by spend or impressions. Select one of them.'
+        );
+      }
+      // More top rows than the row limit allows would fail on the limit, whose advice (dates,
+      // dimensions) does not fit: say which of the two settings to change.
+      if (top > ctx.maxRows)
+        throw new Error(
+          'Keep the top rows (' +
+            top.toLocaleString() +
+            ") is above this report's row limit (" +
+            ctx.maxRows.toLocaleString() +
+            '). Lower it or raise the row limit.'
+        );
+      var limit = top || ctx.maxRows;
       var query = Object.create(ctx);
       query.fields = [];
       query.labels = labels;
@@ -824,14 +964,20 @@ function dmvGoogleAdsLevelReport_(level) {
           ' FROM ' +
           level.resource +
           (where ? ' WHERE ' + where : '') +
-          (order ? ' ORDER BY ' + order : '') +
-          (ranked ? ' LIMIT ' + ctx.maxRows : ''),
+          (period ? ' ORDER BY ' + period : '') +
+          (rank ? ' ORDER BY ' + rank + ' DESC LIMIT ' + limit : ''),
       };
+      // The query's own LIMIT gives "Top 100 by spend" and topRows when the list was cut; the
+      // row limit's note also says how to get more.
       var result = dmvGoogleAdsQueryFetch_(query);
       result.metadata.grain = level.label;
-      if (ranked && result.rows.length === ctx.maxRows)
+      if (rank && !top && result.metadata.topRows)
         result.metadata.note =
-          'Top ' + ctx.maxRows.toLocaleString() + ' rows by spend; raise the row limit for more.';
+          'Top ' +
+          limit.toLocaleString() +
+          ' rows by ' +
+          dmvGoogleAdsInline_(labels[rank] || dmvGoogleAdsQueryColumn_(rank).label) +
+          '; raise the row limit for more.';
       return result;
     },
     discoverFields: function (ctx) {
@@ -1108,7 +1254,7 @@ dmvRegisterConnector_({
       id: 'custom_query',
       label: 'Custom query (GAQL)',
       description:
-        'Any Google Ads resource in one GAQL query: customer (account totals), campaign, ad_group, ad_group_ad (ads), keyword_view (keywords: ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type, ad_group_criterion.quality_info.quality_score), search_term_view, campaign_criterion or ad_group_criterion (negative keywords: WHERE campaign_criterion.negative = TRUE), ad_group_ad_asset_view (ad asset performance: ad_group_ad_asset_view.field_type such as HEADLINE or DESCRIPTION, ad_group_ad_asset_view.performance_label such as LOW, GOOD or BEST, asset.text_asset.text or asset.name, with metrics), asset_group, geographic_view, age_range_view, gender_view, landing_page_view. Select segments.date only for a daily trend; without it rows are totals for the date range, which keeps reports small. Money fields (*_micros, average costs) arrive in account currency.',
+        'Any Google Ads resource in one GAQL query: customer (account totals), campaign, ad_group, ad_group_ad (ads), keyword_view, search_term_view and ad_group_ad_asset_view (the keyword, search term and ad asset reports list their fields), campaign_criterion or ad_group_criterion (negative keywords: WHERE campaign_criterion.negative = TRUE), asset_group, geographic_view, age_range_view, gender_view, landing_page_view, group_placement_view (placements). Select segments.date only for a daily trend; without it rows are totals for the date range, which keeps reports small. For lists, rank and keep the top rows with ORDER BY metrics.cost_micros DESC LIMIT n. Money fields (*_micros, average costs) arrive in account currency.',
       fields: [],
       configFields: [
         {

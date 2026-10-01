@@ -64,6 +64,34 @@ test('a custom query reaches ad groups, applies the report dates and types money
   assert.deepEqual(result.rows, [{ 'ad_group.name': 'Shoes', 'campaign.name': 'Brand', 'metrics.cost_micros': 12.5, 'metrics.clicks': 40, 'metrics.ctr': 0.05, 'metrics.average_cpc': 0.3125 }]);
   assert.equal(result.metadata.currency, 'AED');
   assert.equal(result.metadata.complete, true);
+  assert.equal(result.metadata.topRows, undefined, 'one row under LIMIT 50 is the whole list');
+  assert.equal(result.metadata.note, undefined);
+});
+
+test('a custom query that reaches its own LIMIT says it holds the top rows, by its ORDER BY', () => {
+  const report = load();
+  const rows = (count) => ({ results: Array.from({ length: count }, (_, index) => ({ campaign: { name: 'C' + index }, metrics: { costMicros: '1000000', ctr: 0.01 } })) });
+  const run = (gaql, count, overrides) => {
+    const ctx = context(gaql, [rows(count), { results: [{ customer: { currencyCode: 'EUR' } }] }], overrides);
+    return { ctx, metadata: plain(report.fetch(ctx).metadata) };
+  };
+  const spend = 'SELECT campaign.name, metrics.cost_micros FROM campaign ORDER BY metrics.cost_micros DESC LIMIT 3';
+  const top = run(spend, 3).metadata;
+  assert.deepEqual([top.topRows, top.note], [3, 'Top 3 by spend']);
+  const whole = run(spend, 2).metadata;
+  assert.deepEqual([whole.topRows, whole.note], [undefined, undefined], 'fewer rows than the LIMIT are the whole list');
+
+  // A column label the caller gave is the one named; ascending orders say which end they keep.
+  assert.equal(run(spend, 3, { labels: { 'metrics.cost_micros': 'Cost' } }).metadata.note, 'Top 3 by cost');
+  assert.equal(run('SELECT campaign.name, metrics.ctr FROM campaign ORDER BY metrics.ctr ASC LIMIT 3', 3).metadata.note, 'Lowest 3 by CTR');
+  assert.equal(run('SELECT campaign.name, metrics.cost_micros FROM campaign ORDER BY campaign.name, metrics.cost_micros DESC LIMIT 3', 3).metadata.note, 'First 3 by campaign');
+  const first = run('SELECT campaign.name, metrics.cost_micros FROM campaign LIMIT 3', 3).metadata;
+  assert.deepEqual([first.topRows, first.note], [3, 'First 3 rows (query LIMIT)']);
+
+  // A LIMIT above the row limit is cut to one row past it, so a full page is still the whole list.
+  const large = run('SELECT campaign.name, metrics.cost_micros FROM campaign ORDER BY metrics.cost_micros DESC LIMIT 500', 100);
+  assert.match(large.ctx.calls[0].body.query, / LIMIT 101$/);
+  assert.equal(large.metadata.topRows, undefined);
 });
 
 test('negative keywords have no period: no date filter and no currency lookup are added', () => {
@@ -80,9 +108,20 @@ test('negative keywords have no period: no date filter and no currency lookup ar
 
 test('asset performance and keyword quality pass the guard with readable labels, enums as text and scores never summed', () => {
   const report = load();
-  // The description names them, so chat builds these sections instead of describing them.
-  for (const name of ['ad_group_ad_asset_view', 'ad_group_ad_asset_view.performance_label', 'ad_group_ad_asset_view.field_type', 'asset.text_asset.text', 'ad_group_criterion.quality_info.quality_score', 'ad_group_criterion.keyword.match_type'])
+  // The description names the resources and how a list keeps its top rows, so chat builds these
+  // sections instead of describing them; the keyword and ad asset reports list their fields.
+  for (const name of ['ad_group_ad_asset_view', 'keyword_view', 'search_term_view', 'group_placement_view', 'ORDER BY metrics.cost_micros DESC LIMIT n'])
     assert.ok(report.description.includes(name), name);
+  for (const [id, names] of [
+    ['ad_asset', ['ad_group_ad_asset_view.performance_label', 'ad_group_ad_asset_view.field_type', 'asset.text_asset.text']],
+    ['keyword', ['ad_group_criterion.quality_info.quality_score', 'ad_group_criterion.keyword.match_type']],
+  ]) {
+    load.report = id;
+    const typed = load();
+    load.report = null;
+    assert.equal(typed.chat, true, id);
+    for (const name of names) assert.ok(typed.fields.some((field) => field.key === name), name);
+  }
 
   const assets = context(
     'SELECT campaign.name, ad_group_ad_asset_view.field_type, ad_group_ad_asset_view.performance_label, asset.text_asset.text, asset.name, metrics.impressions, metrics.conversions, metrics.cost_micros FROM ad_group_ad_asset_view',
@@ -241,7 +280,8 @@ const level = (id) => {
 test('every report level is a plain dimension-and-metric picker over one Google Ads resource', () => {
   const keyword = level('keyword');
   assert.equal(keyword.label, 'Keyword performance');
-  assert.equal(keyword.chat, false, 'chat reaches every level through the custom query instead');
+  assert.equal(keyword.chat, true, 'chat ranks keyword, search term and asset lists with their own reports');
+  assert.deepEqual(['ad', 'campaign', 'placement'].map((id) => level(id).chat), [false, false, false], 'chat reaches the other levels through the custom query');
   const fields = plain(keyword.fields);
   assert.deepEqual(fields.filter((field) => field.default).map((field) => field.label), ['Campaign', 'Ad group', 'Keyword', 'Match type', 'Impressions', 'Clicks', 'Spend', 'Conversions']);
   assert.ok(['segments.date', 'segments.week', 'segments.month', 'segments.device'].every((key) => fields.some((field) => field.key === key && !field.default)));
@@ -257,6 +297,134 @@ test('every report level is a plain dimension-and-metric picker over one Google 
   assert.deepEqual(result.columns.map((column) => column.label), ['Campaign', 'Keyword', 'Match type', 'Clicks', 'Spend']);
   assert.deepEqual(result.rows, [{ 'campaign.name': 'Brand', 'ad_group_criterion.keyword.text': 'shoes', 'ad_group_criterion.keyword.match_type': 'EXACT', 'metrics.clicks': 7, 'metrics.cost_micros': 3.5 }]);
   assert.equal(result.metadata.grain, 'Keyword performance');
+});
+
+test('a ranked level keeps the top rows asked for, and says so only when the list was cut', () => {
+  const keyword = level('keyword');
+  const [top] = plain(keyword.configFields);
+  assert.deepEqual([top.key, top.label, top.type, top.required, top.min, top.max], ['top', 'Keep the top rows', 'number', false, 1, 30000]);
+  const fields = ['campaign.name', 'ad_group_criterion.keyword.text', 'metrics.clicks', 'metrics.cost_micros'];
+  const rows = (count) => ({ results: Array.from({ length: count }, (_, index) => ({ campaign: { name: 'Brand' }, adGroupCriterion: { keyword: { text: 'k' + index } }, metrics: { clicks: '1', costMicros: String((count - index) * 1000000) } })) });
+  const run = (config, count, more = {}) => {
+    const ctx = context(undefined, [rows(count), { results: [{ customer: { currencyCode: 'EUR' } }] }], { fields, config, ...more });
+    const result = plain(keyword.fetch(ctx));
+    return { query: ctx.calls[0].body.query, metadata: result.metadata };
+  };
+  const base = "SELECT campaign.name, ad_group_criterion.keyword.text, metrics.clicks, metrics.cost_micros FROM keyword_view WHERE metrics.impressions > 0 AND segments.date BETWEEN '2026-06-22' AND '2026-09-19' ORDER BY metrics.cost_micros DESC LIMIT ";
+  const cut = run({ top: 25 }, 25);
+  assert.equal(cut.query, base + '25');
+  assert.deepEqual([cut.metadata.topRows, cut.metadata.note], [25, 'Top 25 by spend']);
+  const short = run({ top: 25 }, 7);
+  assert.deepEqual([short.metadata.topRows, short.metadata.note], [undefined, undefined], 'a shorter list is the whole list');
+
+  // Blank keeps every row up to the row limit, as before; a full page says how to get more.
+  const all = run({ top: '' }, 100);
+  assert.equal(all.query, base + '100');
+  assert.deepEqual([all.metadata.topRows, all.metadata.note], [100, 'Top 100 rows by spend; raise the row limit for more.']);
+  assert.equal(run({}, 99).metadata.note, undefined);
+  // Values arrive as the form or the chat sent them.
+  assert.equal(run({ top: '40' }, 3).query, base + '40');
+  assert.equal(run({ top: ' ' }, 3).query, base + '100');
+
+  // Without spend the ranking is by impressions, but only when a top was asked for.
+  const reach = run({ top: 10 }, 10, { fields: ['ad_group_criterion.keyword.text', 'metrics.impressions'] });
+  assert.match(reach.query, /ORDER BY metrics\.impressions DESC LIMIT 10$/);
+  assert.deepEqual([reach.metadata.topRows, reach.metadata.note], [10, 'Top 10 by impressions']);
+  // A blank top without spend is not a ranking: the report fails over the row limit, as before.
+  const impressions = ['campaign.name', 'metrics.impressions'];
+  const unranked = context(undefined, [{ results: [] }], { fields: impressions, config: {} });
+  keyword.fetch(unranked);
+  assert.equal(unranked.calls[0].body.query, "SELECT campaign.name, metrics.impressions FROM keyword_view WHERE metrics.impressions > 0 AND segments.date BETWEEN '2026-06-22' AND '2026-09-19' LIMIT 101");
+  const over = { results: Array.from({ length: 101 }, (_, index) => ({ campaign: { name: 'c' + index }, metrics: { impressions: '5' } })) };
+  assert.throws(() => keyword.fetch(context(undefined, [over], { fields: impressions, config: {} })), /exceeds the row limit/);
+});
+
+test('Keep the top rows is a whole number within the row ceiling, for ranked totals only', () => {
+  const keyword = level('keyword');
+  const ctx = (config, fields = ['ad_group_criterion.keyword.text', 'metrics.cost_micros'], responses = []) => context(undefined, responses, { fields, config });
+  for (const top of [0, -5, 30001, 1.5, 'abc', '12abc'])
+    assert.throws(() => keyword.fetch(ctx({ top })), /Keep the top rows must be a whole number from 1 to 30,000/, String(top));
+  // A top above the row limit is refused before any request, naming both settings, never cut to
+  // fit and never sent to fail on the limit's own advice (dates, dimensions).
+  for (const top of [101, 30000]) {
+    const ceiling = ctx({ top });
+    assert.throws(
+      () => keyword.fetch(ceiling),
+      new RegExp(`^Error: Keep the top rows \\(${top.toLocaleString('en-US')}\\) is above this report's row limit \\(100\\)\\. Lower it or raise the row limit\\.$`)
+    );
+    assert.equal(ceiling.calls.length, 0);
+  }
+  const exact = ctx({ top: 100 }, undefined, [{ results: [] }, { results: [] }]);
+  keyword.fetch(exact);
+  assert.match(exact.calls[0].body.query, / LIMIT 100$/);
+  // Any period column makes a trend, whose periods each need every row: the top is refused,
+  // naming the column, and without a top the trend is ordered by its period and fails over the
+  // row limit instead of keeping the top rows of all periods together.
+  for (const [period, label] of [['segments.date', 'Date'], ['segments.week', 'Week'], ['segments.month', 'Month'], ['segments.quarter', 'Quarter'], ['segments.year', 'Year']]) {
+    assert.throws(
+      () => keyword.fetch(ctx({ top: 50 }, [period, 'ad_group_criterion.keyword.text', 'metrics.cost_micros'])),
+      new RegExp(`cannot be combined with ${label}\\. Remove ${label} or clear Keep the top rows\\.`),
+      period
+    );
+    const trend = ctx({}, [period, 'ad_group_criterion.keyword.text', 'metrics.cost_micros'], [{ results: [] }, { results: [] }]);
+    keyword.fetch(trend);
+    assert.match(trend.calls[0].body.query, new RegExp(`ORDER BY ${period.replace('.', '\\.')} LIMIT 101$`), period);
+  }
+  assert.throws(() => keyword.fetch(ctx({ top: 50 }, ['ad_group_criterion.keyword.text', 'metrics.clicks'])), /ranks by spend or impressions/);
+
+  // Every level that ranks by spend offers it; totals per account, lists without metrics and
+  // conversions by action (no spend beside the split) do not.
+  for (const id of ['campaign', 'ad_group', 'ad', 'ad_asset', 'search_term', 'geographic', 'age', 'gender', 'audience', 'landing_page', 'placement', 'asset_group', 'shopping'])
+    assert.deepEqual(plain(level(id).configFields).map((field) => field.key), ['top'], id);
+  for (const id of ['account', 'negative_keyword', 'negative_keyword_ad_group', 'conversion_action'])
+    assert.deepEqual(plain(level(id).configFields), [], id);
+});
+
+test('ad assets list the enabled assets of enabled ads with short labels, ranked by spend or impressions', () => {
+  const assets = level('ad_asset');
+  assert.deepEqual([assets.label, assets.chat, assets.dateRange], ['Ad assets', true, true]);
+  // Google no longer fills the performance label for Search and Display assets, so the report
+  // does not promise it: assets are judged by their own metrics.
+  assert.match(assets.description, /no longer fills the performance label for Search and Display assets, so judge assets by their metrics/);
+  assert.doesNotMatch(assets.description, /LOW, GOOD, BEST/);
+  assert.deepEqual(plain(assets.fields).filter((field) => !field.key.startsWith('segments.')).map((field) => [field.key, field.label, field.type, field.default]), [
+    ['campaign.name', 'Campaign', 'text', true],
+    ['ad_group.name', 'Ad group', 'text', true],
+    ['ad_group_ad_asset_view.field_type', 'Asset type', 'text', true],
+    ['ad_group_ad_asset_view.performance_label', 'Performance label', 'text', false],
+    ['asset.text_asset.text', 'Asset text', 'text', true],
+    ['asset.name', 'Asset name', 'text', true],
+    ['asset.type', 'Asset format', 'text', false],
+    ['metrics.impressions', 'Impressions', 'number', true],
+    ['metrics.clicks', 'Clicks', 'number', true],
+    ['metrics.ctr', 'CTR', 'percent', false],
+    ['metrics.conversions', 'Conversions', 'number', true],
+    ['metrics.cost_micros', 'Spend', 'currency', true],
+  ]);
+
+  const enabled = "ad_group_ad_asset_view.enabled = TRUE AND ad_group_ad.status = 'ENABLED' AND ad_group.status = 'ENABLED' AND campaign.status = 'ENABLED'";
+  const ctx = context(undefined, [
+    { results: [{ campaign: { name: 'Brand' }, adGroup: { name: 'Stays' }, adGroupAdAssetView: { fieldType: 'HEADLINE', performanceLabel: 'LOW' }, asset: { textAsset: { text: 'Book a month' } }, metrics: { impressions: '1200', clicks: '30', conversions: 0, costMicros: '45000000' } }] },
+    { results: [{ customer: { currencyCode: 'EUR' } }] },
+  ], { fields: [], config: { top: 50 } });
+  const result = plain(assets.fetch(ctx));
+  assert.equal(
+    ctx.calls[0].body.query,
+    'SELECT campaign.name, ad_group.name, ad_group_ad_asset_view.field_type, asset.text_asset.text, asset.name, metrics.impressions, metrics.clicks, metrics.conversions, metrics.cost_micros FROM ad_group_ad_asset_view WHERE ' +
+      enabled +
+      " AND metrics.impressions > 0 AND segments.date BETWEEN '2026-06-22' AND '2026-09-19' ORDER BY metrics.cost_micros DESC LIMIT 50"
+  );
+  assert.deepEqual(result.columns.map((column) => column.label), ['Campaign', 'Ad group', 'Asset type', 'Asset text', 'Asset name', 'Impressions', 'Clicks', 'Conversions', 'Spend']);
+  assert.deepEqual(result.rows, [{ 'campaign.name': 'Brand', 'ad_group.name': 'Stays', 'ad_group_ad_asset_view.field_type': 'HEADLINE', 'asset.text_asset.text': 'Book a month', 'asset.name': null, 'metrics.impressions': 1200, 'metrics.clicks': 30, 'metrics.conversions': 0, 'metrics.cost_micros': 45 }]);
+  assert.deepEqual([result.metadata.grain, result.metadata.currency, result.metadata.topRows], ['Ad assets', 'EUR', undefined]);
+
+  // Without spend, impressions rank the assets; without metrics only the enabled links are listed.
+  const reach = context(undefined, [{ results: [] }], { fields: ['ad_group_ad_asset_view.field_type', 'asset.text_asset.text', 'metrics.impressions'], config: { top: 20 } });
+  assets.fetch(reach);
+  assert.match(reach.calls[0].body.query, /AND metrics\.impressions > 0 AND segments\.date BETWEEN '2026-06-22' AND '2026-09-19' ORDER BY metrics\.impressions DESC LIMIT 20$/);
+  const links = context(undefined, [{ results: [] }], { fields: ['campaign.name', 'asset.text_asset.text'], config: {} });
+  assets.fetch(links);
+  assert.equal(links.calls[0].body.query, 'SELECT campaign.name, asset.text_asset.text FROM ad_group_ad_asset_view WHERE ' + enabled + ' LIMIT 101');
 });
 
 test('dated levels order by date, lists have no period, and conversions by action avoid the metrics Google forbids', () => {

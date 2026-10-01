@@ -30,12 +30,12 @@ function loadProduction() {
   return context;
 }
 
-test('complete production bundle registers twelve offered sources and fifty-two reports without Google services', () => {
+test('complete production bundle registers twelve offered sources and fifty-three reports without Google services', () => {
   const app = loadProduction();
   const catalog = app.dmvCatalog_();
   assert.deepEqual(Array.from(catalog, connector => connector.id).sort(),
     ['bigquery', 'facebook_ads', 'ga4', 'github', 'google_ads', 'hubspot', 'linkedin_ads', 'microsoft_ads', 'postgres', 'search_console', 'snowflake', 'zendesk']);
-  assert.equal(catalog.reduce((count, connector) => count + connector.reports.length, 0), 52);
+  assert.equal(catalog.reduce((count, connector) => count + connector.reports.length, 0), 53);
   for (const connector of catalog) {
     const guide = connector.guide;
     assert.ok(guide && (guide.steps?.length || guide.modes), connector.id + ' explains how to get its credentials');

@@ -243,6 +243,9 @@ function dmvChatSession_(spreadsheet, selectedIds) {
 function dmvChatCatalogText_(session) {
   if (!session.connections.length)
     return 'No sources are selected. Ask the user to select sources in the Chat dropdown or add one in the Sources tab.';
+  // Reports and fields belong to the source, not the account: they are listed under the first
+  // connection of each source, and its other connections point there.
+  var first = Object.create(null);
   return session.connections
     .map(function (connection) {
       var connector = session.catalog[connection.connectorId];
@@ -267,6 +270,15 @@ function dmvChatCatalogText_(session) {
             ? ' — call describe_database first to see its tables and columns.'
             : ''),
       ];
+      if (first[connection.connectorId]) {
+        lines.push(
+          '  - The same reportTypes, config and fields as connectionId "' +
+            first[connection.connectorId] +
+            '".'
+        );
+        return lines.join('\n');
+      }
+      first[connection.connectorId] = connection.id;
       connector.reports.forEach(function (report) {
         // Reports a connector keeps for the report form; chat reaches the same data otherwise.
         if (report.chat === false) return;
@@ -382,9 +394,9 @@ function dmvChatSystemPrompt_(session) {
     '- For one-off analysis, a week-versus-previous-period comparison is two period totals, not a weekly trend or a campaign ranking. Fetch once per requested source per period, combine the source results separately within each period, and summarize each by source and currency. For overall totals, summarize the same cached combined result by currency. Once both periods have complete aggregates, answer from those results: do not fetch a wider range spanning both periods or rerun the reports for an unrequested trend or chart. If further breakdowns are requested, first reuse the existing resultIds when their columns allow it.',
     '- Only for a requested weekly trend, summarize the combined dated result with dateBucket week and groupBy date, source, currency; weeks start Monday and boundary weeks include only the requested dates. For requested campaign performance group by source, currency, campaign_id and campaign_name. For complete reports set summarize limit to 30000; never describe a limited ranking as all campaigns. Keep currencies separate; never invent exchange rates. Derive CTR, CPC, CPA and ROAS with summarize ratios over the summed counts, never by adding or averaging rate columns. State any unavailable sources and do not count analytics traffic or duplicate warehouse exports as additional advertising delivery.',
     '- For the highest-spend campaigns in each month, summarize with groupBy date, source, currency, campaign_id and campaign_name; dateBucket month; orderBy spend__sum descending; rankWithin date and currency (also source when per platform); limitPerGroup the requested count; and limit 30000. Keep currencies separate. When requested, write the result to a new descriptive tab with write_to_sheet.',
-    '- DASHBOARDS. A request to create or build a dashboard or a performance report or overview ("create a marketing performance week vs previous period", "performance dashboard for Google Ads and Facebook") asks for a saved spreadsheet artifact; keep that intent after a source-selection reply such as "Use all ad platforms", and never finish such a request with chat numbers alone. A question such as "how much did we spend" is analysis. Build a dashboard with exactly these calls: list_dashboards (reuse or update a matching one), save_dashboard, run_dashboard. Do not call run_report, combine_results, summarize, write_to_sheet or create_chart for it: run_dashboard fetches every dataset once and builds every tab. Discover fields only when a needed column is not in the catalog. Build every section the user asks for as tiles over real datasets, never as a description of how it could be built; subjects the standard reports lack (keywords, search terms, assets, audiences, geography) come from the source\'s custom query report. If the dataset limit forces a section out, say which. Requested insights are the Highlights block the runtime writes on every refresh. Sheets dashboards have no interactive controls: the period is the dataset preset (changed by asking chat) and a dropdown filter becomes tiles or tile filters; say so in one sentence.',
-    '- Dashboard datasets (at most 8): one query per requested account or subject, each with its own id, label and tab named "<label> Data"; the dashboard tab is "<subject> Dashboard". Keep datasets lean: only the fields the tiles use, a date field only for trends, campaign fields only for campaign tiles. Cover a trend with ONE query per account over the whole period (last 3 months is {preset: "last90"}) and let tiles bucket it with dateBucket week or month; never split a trend into several date ranges. Performance dashboards compare with the previous period by default, and always when asked: per account add one lean totals dataset for the previous period (previous7/14/30/90 for last7/14/30/90, previousWeek for lastWeek, previousMonth for lastMonth; for a custom range the custom range of equal length just before it; yesterday, thisMonth, thisYear and lastYear have none, so those dashboards are not compared) with only the kpi fields, no date or campaign fields, mapped to the same keys as its current dataset and labeled with account and period. Different subjects of one account (campaigns, ad groups, keywords, search terms, assets) are separate datasets. When tiles read several datasets together, give each a mapping to the same keys (date, campaign_name, spend, clicks, impressions, conversions, currency) and use those keys plus source in the tiles; a mapped dataset offers tiles only its mapped keys, and a tile over one unmapped dataset uses its own column keys. For SQL sources, aggregate in the query to the grain the tiles need (COUNT(*) AS items, SUMs) with the columns decisions depend on (gap to a benchmark, 0/1 flags, buckets); keep one row per item only for an item list that fits the cap. Never cap a dataset with LIMIT; aggregate instead.',
-    '- Dashboard tiles: design for decisions. Every tile answers one question someone acts on, against a comparison: the previous period, a benchmark, a target or the other segments. Start with ONE kpi tile of headline totals and rates, at most 8 scorecard values across all kpi tiles (marketing: spend, conversions, CPA, CTR, ROAS; pricing: items, share priced above market, price index); with previous-period datasets it reads every current and previous dataset with compare: {current: [current ids], previous: [previous ids]} (a compared tile without datasets reads its compare lists). Trends and tables may compare too when the previous datasets hold their date or group fields. Then 2 to 6 charts that answer the request (line or column over date with dateBucket for trends, split by source to compare platforms; bar to rank segments and for a share by category, as pies are drawn as bars). One measure per chart, or a volume with a rate on secondaryAxis (spend with cpa); never three measures of different scale on one chart. Then the action tables: the items or segments that need attention, ordered by impact (such as the campaigns with the highest cost per conversion), with the columns needed to act and a limit of 10 to 25 rows. Flag, highlight, alert or red/green requests are table highlight rules, with ofTotal for relative thresholds (CPA above 1.5x overall: {field: "cpa", op: "gt", ofTotal: 1.5, color: "red"}; on a summed metric ofTotal is a share of the table total, so top converters are {field: "conversions", op: "gte", ofTotal: 0.1, color: "green"}) or a text value on a groupBy column (low-rated assets: {field: "performance_label", op: "eq", value: "LOW", color: "red"}); percent thresholds are fractions (CTR below 2% is value 0.02). Set lowerIsBetter to the cost-per and cost-rate keys the tiles use (cpa, cpc, cpm, cost per conversion) and neutral to their spend, cost and budget. Tile filters select dataset rows before aggregation, so a condition on totals needs a dataset that already has one row per item. Rates and indices are ratios of summed counts or amounts, never averages of per-row rates. A tile restricted to part of a dataset (Brand campaigns, one country) uses filters; a share over time is a stacked column; a long trend may take width full. Give every tile a plain title. Money in several currencies is split by currency automatically. Set schedule (with at: {hour, weekday} for a named time) only when the user asks for automatic refreshes. After run_dashboard succeeds, quote the highlights it returns, then add 3 to 5 findings read from its scorecards and tile previews, each with its number and the action it suggests; state no finding the returned values do not show. The first and last week or month of a trend can be partial, so do not read a rise or drop into them. Then say what was created, which tab holds what, and that Reports > Dashboards > Refresh dashboard rebuilds all of it without AI. The tab links are shown to the user automatically. If saving or running failed, say which step failed and do not claim the dashboard exists; fix the plan and retry when the error says how.',
+    '- DASHBOARDS. A request to create or build a dashboard or a performance report or overview ("create a marketing performance week vs previous period", "performance dashboard for Google Ads and Facebook") asks for a saved spreadsheet artifact; keep that intent after a source-selection reply such as "Use all ad platforms", and never finish such a request with chat numbers alone. A question such as "how much did we spend" is analysis. Build a dashboard with exactly these calls: list_dashboards (reuse or update a matching one), save_dashboard, run_dashboard. Do not call run_report, combine_results, summarize, write_to_sheet or create_chart for it: run_dashboard fetches every dataset once and builds every tab. Discover fields only when a needed column is not in the catalog. Build every section the user asks for as tiles over real datasets, never as a description of how it could be built; each subject (keywords, assets, audiences, geography) comes from the source\'s report for it, else from its custom query report. If the dataset limit forces a section out, say which. Requested insights are the Highlights block the runtime writes on every refresh. Sheets dashboards have no interactive controls: the period is the dataset preset (changed by asking chat) and a dropdown filter becomes tiles or tile filters; say so in one sentence.',
+    '- Dashboard datasets (at most 8): one query per requested account or subject, each with its own id, label and tab named "<label> Data"; the dashboard tab is "<subject> Dashboard". Keep datasets lean: only the fields the tiles use, a date field only for trends, campaign fields only for campaign tiles. Cover a trend with ONE query per account over the whole period (last 3 months is {preset: "last90"}) and let tiles bucket it with dateBucket week or month; never split a trend into several date ranges. Performance dashboards compare with the previous period by default, and always when asked: per account add one lean totals dataset for the previous period (previous7/14/30/90 for last7/14/30/90, previousWeek for lastWeek, previousMonth for lastMonth; for a custom range the equal range just before it; yesterday, thisMonth, thisYear and lastYear have none, so those dashboards are not compared) with only the kpi fields, mapped to the same keys as its current dataset and labeled with account and period. Item lists (keywords, search terms, ads, assets, placements, landing pages) are action lists, never dumps: the source\'s report for the subject with config top (300 unless asked, at most 1,000), else a custom query keeping its top rows only where its description says how (its result is then labelled), no date field, and the condition in the query or a tile filter (spend with zero conversions, low CTR with impressions). A top-N dataset never feeds kpi totals or shares. When tiles read several datasets together, give each a mapping to the same keys (date, campaign_name, spend, clicks, impressions, conversions, currency) and use those keys plus source in the tiles; a mapped dataset offers tiles only its mapped keys, and a tile over one unmapped dataset uses its own column keys. For SQL sources, aggregate in the query to the grain the tiles need (COUNT(*) AS items, SUMs) with the columns decisions depend on (gap to a benchmark, 0/1 flags, buckets); never LIMIT a SQL dataset, as nothing would label the rows it drops.',
+    '- Dashboard tiles: design for decisions. Every tile answers one question someone acts on, against a comparison: the previous period, a benchmark, a target or the other segments. Start with ONE kpi tile of headline totals and rates, at most 8 scorecard values across all kpi tiles (marketing: spend, conversions, CPA, CTR, ROAS; pricing: items, share priced above market, price index); with previous-period datasets it reads every current and previous dataset with compare: {current: [current ids], previous: [previous ids]} (a compared tile without datasets reads its compare lists). Trends and tables may compare too when the previous datasets hold their date or group fields. Then 2 to 6 charts that answer the request (line or column over date with dateBucket for trends, split by source to compare platforms; bar to rank segments and for a share by category, as pies are drawn as bars). One measure per chart, or a volume with a rate on secondaryAxis (spend with cpa); never three measures of different scale on one chart. Then the action tables: the items or segments that need attention, ordered by impact (the campaigns with the highest CPA), with the columns needed to act and a limit of 10 to 25 rows. Flag, highlight, alert or red/green requests are table highlight rules, with ofTotal for relative thresholds (CPA above 1.5x overall: {field: "cpa", op: "gt", ofTotal: 1.5, color: "red"}; on a summed metric ofTotal is a share of the table total, so top converters are {field: "conversions", op: "gte", ofTotal: 0.1, color: "green"}) or a text value on a groupBy column (broad match: {field: "match_type", op: "eq", value: "BROAD", color: "red"}); percent thresholds are fractions (CTR below 2% is value 0.02). Set lowerIsBetter to the cost-per and cost-rate keys the tiles use (cpa, cpc, cpm, cost per conversion) and neutral to their spend, cost and budget. Tile filters select dataset rows before aggregation (Brand campaigns, one country), so a condition on totals needs a dataset that already has one row per item. Rates and indices are ratios of summed counts or amounts, never averages of per-row rates. A share over time is a stacked column; a long trend may take width full. Give every tile a plain title. Currencies are split automatically. Set schedule (at: {hour, weekday} for a named time) only when asked. After run_dashboard succeeds, quote the highlights it returns, then add 3 to 5 findings read from its scorecards and tile previews, each with its number and the action it suggests; state no finding the returned values do not show. The first and last week or month of a trend can be partial, so do not read a rise or drop into them. Then say what was created, which tab holds what, and that Reports > Dashboards > Refresh dashboard rebuilds all of it without AI. The tab links are shown to the user automatically. If saving or running failed, say which step failed and do not claim the dashboard exists; fix the plan and retry when the error says how. A row-limit or too-large error names a dataset: narrow it (config top where its report has it, a condition in the query, fewer fields, no date field) and retry; suggest a higher row limit only if it still needs one.',
     '- SAVED REPORTS. A request to create, build, keep or schedule a report from one source ("create a report of daily GA4 sessions", "keep a Google Ads campaign table updated every morning", "import last month\'s deals as a report") asks for a saved report: call list_reports (reuse or update a matching one), then save_report with the name, query, tab and, only when asked, the schedule; it saves and runs the report in one call. Do not also call run_report or write_to_sheet for it. A plain request for data in a tab ("put daily sessions in a tab") is a one-off write with run_report and write_to_sheet, and a question is an answer; neither creates a saved report. Several sources with scorecards and charts are a dashboard.',
     '- DRAFTS. Reports and dashboards you save land under Reports > Drafts unless the user asked for a schedule; a draft can be refreshed by hand but not scheduled until the user saves it. Never set a schedule the user did not ask for. The sidebar adds the draft location and its Save and Remove steps under your answer, so state only that it was saved as a draft (or saved with its schedule) and what it holds.',
     "- GUIDANCE. When the user asks what you or DataMoov can do, or how to do something in the sidebar, answer from the CAPABILITIES section and the catalog only, in two to four sentences with the next click, naming the user's actual selected sources; suggest one or two example requests. Never describe a feature that is not listed there. To point to a place in the sidebar, write a link whose address is sidebar:<place> with place one of reports, drafts, dashboards, chat, connections or settings, for example [Reports > Drafts](sidebar:drafts).",
@@ -474,27 +486,44 @@ function dmvChatCapabilities_(session) {
   ].join('\n');
 }
 
+// The config keys of the reports the chat can run on the selected sources, as the catalog lists
+// them. Reports that share a key and its wording are named together, so a setting many reports
+// offer is described once: "Google Ads · Keyword performance, Search terms: Keep the top rows...".
 function dmvChatConfigSchema_(session) {
-  var properties = {};
-  Object.keys(session.catalog).forEach(function (id) {
-    var connector = session.catalog[id];
+  var properties = {},
+    groups = {},
+    seen = Object.create(null);
+  session.connections.forEach(function (connection) {
+    var connector = session.catalog[connection.connectorId];
+    if (!connector || seen[connection.connectorId]) return;
+    seen[connection.connectorId] = true;
     connector.reports.forEach(function (report) {
+      if (report.chat === false) return;
       (report.configFields || []).forEach(function (field) {
-        var description =
-          connector.label +
-          ' · ' +
-          report.label +
-          ': ' +
-          field.label +
-          (field.help ? '. ' + field.help : '');
-        if (properties[field.key]) properties[field.key].description += ' | ' + description;
+        var text = field.label + (field.help ? '. ' + field.help : '');
+        if (!properties[field.key]) {
+          properties[field.key] = { type: field.type === 'number' ? 'number' : 'string' };
+          groups[field.key] = [];
+        }
+        var group = groups[field.key].filter(function (item) {
+          return item.connector === connector.label && item.text === text;
+        })[0];
+        if (group) group.reports.push(report.label);
         else
-          properties[field.key] = {
-            type: field.type === 'number' ? 'number' : 'string',
-            description: description,
-          };
+          groups[field.key].push({
+            connector: connector.label,
+            reports: [report.label],
+            text: text,
+          });
       });
     });
+  });
+  Object.keys(properties).forEach(function (key) {
+    properties[key].description = groups[key]
+      .map(function (group) {
+        return group.connector + ' · ' + group.reports.join(', ') + ': ' + group.text;
+      })
+      .join(' | ');
   });
   return {
     type: 'object',
@@ -535,7 +564,7 @@ function dmvChatTools_(session) {
             default: session.maxRows || DMV_LIMITS.chatDefaultRows,
             maximum: session.maxRows || DMV_LIMITS.maxRows,
             description:
-              'Optional lower row limit; otherwise use the configured maximum. The report fails instead of truncating. Increase Maximum rows in Settings > AI provider if needed.',
+              'Optional lower row limit; otherwise use the configured maximum. The report fails instead of truncating, except a ranked list that keeps its top rows and says so in metadata.note. Increase Maximum rows in Settings > AI provider if needed.',
           },
         },
         required: ['connectionId', 'reportType'],
@@ -873,6 +902,51 @@ function dmvChatRequireSource_(session, id) {
     throw new Error('Choose one of the sources selected in Chat.');
 }
 
+// The report runtime keeps only the config keys a report declares, so a key the model put on
+// the wrong report (top on a custom query) would vanish and the same query run again. A query
+// in a tool input (run_report, discover_fields, save_report, or a save_dashboard dataset) is
+// refused instead, with the keys its report does take. Unknown sources and reports are left to
+// the tool's own validation.
+function dmvChatConfigCheck_(session, input) {
+  if (!input || typeof input !== 'object') return;
+  [input].concat(Array.isArray(input.datasets) ? input.datasets : []).forEach(function (query) {
+    if (!query || typeof query !== 'object' || !query.config || typeof query.config !== 'object')
+      return;
+    var connection = (session.connections || []).filter(function (item) {
+      return item.id === query.connectionId;
+    })[0];
+    var connector = connection && (session.catalog || {})[connection.connectorId];
+    var report =
+      connector &&
+      (connector.reports || []).filter(function (item) {
+        return item.id === query.reportType;
+      })[0];
+    if (!report) return;
+    var declared = (report.configFields || []).map(function (field) {
+      return field.key;
+    });
+    var extra = Object.keys(query.config).filter(function (key) {
+      var value = query.config[key];
+      return (
+        declared.indexOf(key) < 0 &&
+        value !== undefined &&
+        value !== null &&
+        String(value).trim() !== ''
+      );
+    });
+    if (extra.length)
+      throw new Error(
+        report.label +
+          ' has no config ' +
+          extra.join(', ') +
+          (declared.length
+            ? '; its config keys are ' + declared.join(', ') + '.'
+            : '; it takes no config.') +
+          ' Use a report that declares the setting, or do it in the query where its description says how.'
+      );
+  });
+}
+
 function dmvChatRunTool_(session, tools, call) {
   var tool = tools.filter(function (item) {
     return item.name === call.name;
@@ -881,6 +955,7 @@ function dmvChatRunTool_(session, tools, call) {
     return { content: JSON.stringify({ error: 'Unknown tool ' + call.name + '.' }), isError: true };
   var eventOffset = session.events.length;
   try {
+    dmvChatConfigCheck_(session, call.input);
     var content = dmvChatToolResult_(tool.run(session, call.input));
     // A later success of the same tool means the model corrected its earlier failed call.
     session.events.forEach(function (event) {

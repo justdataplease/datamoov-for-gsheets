@@ -144,6 +144,13 @@ const WASTE = [
   ['section 8 apartments los angeles', 'PHRASE', 'Lax', 1050],
 ];
 const MATCH = ['EXACT', 'PHRASE', 'BROAD'];
+const LONG_TAIL = [
+  ...['near me', 'downtown', 'with parking', 'pet friendly', 'for families', 'for students'],
+  ...['1 bedroom', '2 bedroom', 'studio', 'luxury', 'cheap', 'monthly'],
+  ...['weekly', 'long stay', 'corporate', 'relocation', 'with gym', 'with pool'],
+  ...['walkable', 'quiet', 'all bills included', 'no deposit', 'last minute', 'this month'],
+  ...['next month', 'for nurses', 'for interns', 'for couples', 'with balcony', 'with view'],
+];
 
 function keywordRows(account, startDate, endDate) {
   const scale = days(startDate, endDate).length / 30;
@@ -189,6 +196,22 @@ function keywordRows(account, startDate, endDate) {
     const impressions = Math.round((cost * scale) / cpc / ctr);
     add({ text, match, code, impressions, ctr, cpc, cpa: 0, quality: 2 + Math.floor(r() * 4) });
   }
+  // The long tail a live account holds: hundreds of keywords with a few clicks each, most of
+  // them without a conversion. An action list keeps only the top rows by spend.
+  for (const [code, city] of KEYWORD_CITIES)
+    for (const modifier of LONG_TAIL) {
+      const r = seeded(account + city + modifier);
+      add({
+        text: 'furnished apartments ' + city + ' ' + modifier,
+        match: MATCH[Math.floor(r() * 3)],
+        code,
+        impressions: Math.round((40 + 600 * r()) * scale),
+        ctr: 0.03 + 0.05 * r(),
+        cpc: 4 + 6 * r(),
+        cpa: r() < 0.6 ? 0 : 900 + 1500 * r(),
+        quality: 3 + Math.floor(r() * 6),
+      });
+    }
   return rows;
 }
 
@@ -218,29 +241,40 @@ const ASSETS = [
   ['VIDEO', 'Apartment tour 30s', 'GOOD'],
   ['VIDEO', 'How booking works 15s', 'LEARNING'],
 ];
+// How well each asset does, as Google once labelled it: it shapes the numbers only. Google no
+// longer fills the label for Search and Display assets, so the report does not select it.
 const LABEL_LIFT = { BEST: 1.5, GOOD: 1, LOW: 0.45, LEARNING: 0.3 };
+
+// Google reports each asset once per ad group that serves it (and per field type), so a live
+// account returns thousands of asset rows; here every asset serves in each city's ad group.
+// Without a cost column the ranked report keeps the top rows by impressions, which keeps image
+// and video assets (cheap per impression) beside the text ones a cost ranking would favour.
+const AD_GROUPS = KEYWORD_CITIES.map(([code, city, weight]) => [code + '_' + city, weight]);
+const AD_GROUP_WEIGHT = AD_GROUPS.reduce((total, [, weight]) => total + weight, 0);
 
 function assetRows(account, startDate, endDate) {
   const scale = days(startDate, endDate).length / 30;
-  return ASSETS.map(([type, text, label]) => {
+  return ASSETS.flatMap(([type, text, label]) => {
     const r = seeded(account + text);
-    const impressions = Math.round(
-      160000 * LABEL_LIFT[label] * (0.4 + r()) * scale * (type === 'VIDEO' ? 0.4 : 1)
-    );
-    const clicks = Math.round(
-      impressions *
-        (type === 'IMAGE' || type === 'VIDEO' ? 0.006 : 0.045) *
-        (0.6 + 0.8 * r()) *
-        Math.sqrt(LABEL_LIFT[label])
-    );
-    return {
-      'ad_group_ad_asset_view.field_type': type,
-      'asset.name': text,
-      'ad_group_ad_asset_view.performance_label': label,
-      'metrics.impressions': impressions,
-      'metrics.clicks': clicks,
-      'metrics.conversions': round(clicks * 0.011 * (0.5 + r()), 3),
-    };
+    const reach = 160000 * LABEL_LIFT[label] * (0.4 + r()) * scale * (type === 'VIDEO' ? 0.4 : 1);
+    const rate =
+      (type === 'IMAGE' || type === 'VIDEO' ? 0.006 : 0.045) *
+      (0.6 + 0.8 * r()) *
+      Math.sqrt(LABEL_LIFT[label]);
+    const conversion = 0.011 * (0.5 + r());
+    return AD_GROUPS.map(([adGroup, weight]) => {
+      const g = seeded(account + text + adGroup);
+      const impressions = Math.round(((reach * weight) / AD_GROUP_WEIGHT) * (0.6 + 0.8 * g()));
+      const clicks = Math.round(impressions * rate * (0.8 + 0.4 * g()));
+      return {
+        'ad_group.name': adGroup,
+        'ad_group_ad_asset_view.field_type': type,
+        'asset.name': text,
+        'metrics.impressions': impressions,
+        'metrics.clicks': clicks,
+        'metrics.conversions': round(clicks * conversion, 3),
+      };
+    });
   });
 }
 
@@ -268,9 +302,9 @@ const KEYWORD_FIELDS = [
   field('ad_group_criterion.quality_info.quality_score', 'Quality score', 'number'),
 ];
 const ASSET_FIELDS = [
+  field('ad_group.name', 'Ad group', 'text'),
   field('ad_group_ad_asset_view.field_type', 'Asset type', 'text'),
   field('asset.name', 'Asset', 'text'),
-  field('ad_group_ad_asset_view.performance_label', 'Performance label', 'text'),
   field('metrics.impressions', 'Impressions', 'number'),
   field('metrics.clicks', 'Clicks', 'number'),
   field('metrics.conversions', 'Conversions', 'number'),
@@ -278,21 +312,35 @@ const ASSET_FIELDS = [
 const REPORT_FIELDS = {
   campaign_daily: CAMPAIGN_FIELDS,
   account_totals: TOTAL_FIELDS,
-  keyword_view: KEYWORD_FIELDS,
-  asset_view: ASSET_FIELDS,
+  keyword: KEYWORD_FIELDS,
+  ad_asset: ASSET_FIELDS,
 };
 
 function registerFixture(f) {
-  const report = (id, label, fields, rows) => ({
+  // ranked: as the source's ranked reports (keywords, ad assets) declare it, the rows go by cost
+  // (by impressions without a cost column) down to the top asked for, and only a cut list says
+  // so: metadata.topRows beside the note the dashboard shows.
+  const report = (id, label, fields, rows, ranked) => ({
     id,
     label,
     fields,
     dateRange: true,
-    configFields: [],
+    configFields: ranked ? [{ key: 'top', label: 'Keep the top rows', type: 'number' }] : [],
     fetch(ctx) {
       const columns = fields.filter((item) => !ctx.fields.length || ctx.fields.includes(item.key));
-      const data = rows(ctx.credentials.account, ctx.startDate, ctx.endDate);
-      return { columns, rows: data, metadata: { complete: true, currency: 'AED' } };
+      let data = rows(ctx.credentials.account, ctx.startDate, ctx.endDate);
+      const metadata = { complete: true, currency: 'AED' };
+      const rank =
+        ranked &&
+        (columns.find((item) => item.key === 'metrics.cost_micros') ||
+          columns.find((item) => item.key === 'metrics.impressions'));
+      if (rank) {
+        const top = ctx.config.top;
+        data = data.sort((a, b) => b[rank.key] - a[rank.key]).slice(0, top || ctx.maxRows);
+        if (top && data.length === top)
+          Object.assign(metadata, { topRows: top, note: `Top ${top} by ${rank.label}` });
+      }
+      return { columns, rows: data, metadata };
     },
   });
   f.api.dmvRegisterConnector_({
@@ -307,8 +355,8 @@ function registerFixture(f) {
     reports: [
       report('campaign_daily', 'Daily campaign performance', CAMPAIGN_FIELDS, campaignRows),
       report('account_totals', 'Account totals', TOTAL_FIELDS, totalsRow),
-      report('keyword_view', 'Keyword performance', KEYWORD_FIELDS, keywordRows),
-      report('asset_view', 'Asset performance', ASSET_FIELDS, assetRows),
+      report('keyword', 'Keyword performance', KEYWORD_FIELDS, keywordRows, true),
+      report('ad_asset', 'Ad assets', ASSET_FIELDS, assetRows, true),
     ],
   });
   return ACCOUNTS.map((account) =>
@@ -360,7 +408,15 @@ function planFor(tier, connections) {
     full = tier === 'v2';
   const [one, two] = connections.map((connection) => connection.id);
   // Campaign datasets get shared column names, so tiles can read them together.
-  const dataset = (id, label, sheetName, connectionId, reportType, preset = 'lastMonth') => {
+  const dataset = (
+    id,
+    label,
+    sheetName,
+    connectionId,
+    reportType,
+    preset = 'lastMonth',
+    config
+  ) => {
     const fields = REPORT_FIELDS[reportType];
     const mapped = reportType === 'campaign_daily' || reportType === 'account_totals';
     return {
@@ -369,7 +425,7 @@ function planFor(tier, connections) {
       sheetName,
       connectionId,
       reportType,
-      config: {},
+      config: config || {},
       fields: fields.map((item) => item.key),
       dateRange: { preset },
       mapping: mapped
@@ -413,9 +469,29 @@ function planFor(tier, connections) {
         'previousMonth'
       )
     );
+  // Keywords and assets are action lists, not dumps: v2 asks each ranked report for its top 300
+  // by cost, which the page then names on the tiles, their totals and the data sources. v1 took
+  // every row, as the dashboards that overflowed the row limit and the Sheets write did.
+  const top = v2 ? { top: 300 } : undefined;
   datasets.push(
-    dataset('keywords', 'Google Ads 7675648123 keywords', 'Keywords Data', one, 'keyword_view'),
-    dataset('assets', 'Google Ads 7675648123 assets', 'Assets Data', one, 'asset_view')
+    dataset(
+      'keywords',
+      'Google Ads 7675648123 keywords',
+      'Keywords Data',
+      one,
+      'keyword',
+      'lastMonth',
+      top
+    ),
+    dataset(
+      'assets',
+      'Google Ads 7675648123 assets',
+      'Assets Data',
+      one,
+      'ad_asset',
+      'lastMonth',
+      top
+    )
   );
   const both = ['ads1', 'ads2'];
   const periods = ['ads1', 'ads2', 'ads1_prev', 'ads2_prev'];
@@ -516,27 +592,18 @@ function planFor(tier, connections) {
       title: 'Asset performance',
       type: 'table',
       datasets: ['assets'],
-      groupBy: [
-        'asset.name',
-        'ad_group_ad_asset_view.field_type',
-        'ad_group_ad_asset_view.performance_label',
-      ],
+      groupBy: ['asset.name', 'ad_group_ad_asset_view.field_type'],
       metrics: sum('metrics.impressions', 'metrics.clicks', 'metrics.conversions'),
       ratios: [RATIOS.fieldCtr],
+      // The user's request: flag the weak assets for replacement. Google no longer rates them,
+      // so their click-through rate does, among the text assets: images and videos run far
+      // below text, and a rule over all of them would flag every one.
+      filters: full
+        ? [{ field: 'ad_group_ad_asset_view.field_type', op: 'in', value: 'HEADLINE,DESCRIPTION' }]
+        : undefined,
       orderBy: { field: 'metrics.impressions__sum', direction: 'desc' },
       limit: 20,
-      // The user's request: flag the assets Google rates LOW for replacement. A click-through
-      // rule would flag every image and video, whose rates run far below text, BEST ones too.
-      highlight: full
-        ? [
-            {
-              field: 'ad_group_ad_asset_view.performance_label',
-              op: 'eq',
-              value: 'LOW',
-              color: 'red',
-            },
-          ]
-        : undefined,
+      highlight: full ? [{ field: 'ctr', op: 'lt', ofTotal: 0.75, color: 'red' }] : undefined,
     },
   ].filter(Boolean);
   // JSON drops the undefined options, which the runtime would reject as unknown settings.

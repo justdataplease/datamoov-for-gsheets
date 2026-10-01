@@ -1337,10 +1337,30 @@ test('each dataset allows the larger of its saved row limit and the Settings row
 
   const before = f.snapshot();
   f.setRows('one', [row('A'), row('B'), row('C')]);
+  // The overflow names the dataset and asks for the rows worth acting on first, in words that
+  // fit every source; the row limit setting comes last, for a dataset that still needs it.
+  let message = '';
   assert.throws(
     () => f.run(saved.id),
-    /^Error: Source 1: The report exceeds the row limit\..* This dataset allows 2 rows\. Increase Maximum rows per chat report under Settings > AI provider/
+    (error) => {
+      message = error.message;
+      return true;
+    }
   );
+  // The runtime's own advice to narrow the date range is left out: a dataset's period is the
+  // page's, and a shorter one would mix periods on one dashboard.
+  assert.match(message, /^Source 1: The report exceeds the row limit\. This dataset allows 2 rows\. Keep only the rows worth acting on: /);
+  assert.doesNotMatch(message, /date range/);
+  // No LIMIT advice: only some sources label the rows a query's LIMIT keeps (a SQL LIMIT would
+  // cut a list without a word), so that stays in the descriptions of the sources that do.
+  assert.match(message, /a ranked report's Keep the top rows, conditions or aggregation in the query, or fewer dimensions\./);
+  assert.doesNotMatch(message, /LIMIT|top rows by a metric/);
+  assert.match(message, / Only then raise Maximum rows per chat report \(Settings > AI provider, up to 30,000\)\.$/);
+  assert.ok(message.indexOf('Keep the top rows') < message.indexOf('Maximum rows per chat report'), 'narrowing comes before the setting');
+  assert.doesNotMatch(message, /Google|GAQL|fixture/i, 'the advice names no provider');
+  // A long label leaves out the last sentence whole rather than have it cut mid-word.
+  const long = f.api.dmvDashboardMessage_('L'.repeat(240) + ': ', [], '', f.api.dmvDashboardNarrow_(''), ' Only then raise the limit.');
+  assert.ok(long.length <= 400 && long.endsWith('fewer dimensions.'));
   assert.deepEqual(f.snapshot(), before);
   assert.equal(f.state.batches.length, 1);
   assert.match(plain(f.api.dmvListDashboards())[0].lastError, /^Source 1: .*allows 2 rows/);
@@ -1433,7 +1453,11 @@ test('combined row and cumulative workbook capacity limits stop every output', (
       clicks: 2,
     }))
   );
-  assert.throws(() => f.run(f.save().id), /datasets exceed 30,000 rows together/);
+  // The datasets fetched so far are named, the largest first, with what narrows them.
+  assert.throws(
+    () => f.run(f.save().id),
+    /^Error: The dashboard datasets exceed 30,000 rows together \(Source 1 15,001, Source 2 15,001\)\. Keep only the rows worth acting on in the largest datasets: /
+  );
   assert.equal(f.state.batches.length, 0);
   for (const name of f.tabs) assert.equal(f.tab(name), null);
   const g = fixture();
@@ -2133,6 +2157,124 @@ test('the page reads like a report: codes in words, partly covered weeks with th
   assert.ok(page.find((line) => line.includes('Data sources')).includes('Keyword waste'));
 });
 
+test('a dataset cut to its top rows says so in the data sources, on its tiles and in their totals; whole datasets read as before', () => {
+  const f = fixture();
+  const row = (date, campaign, spend) => ({ date, campaign, spend, clicks: 1 });
+  f.setRows('one', [row('2026-08-01', 'Alpha', 30), row('2026-08-02', 'Beta', 20), row('2026-08-03', 'Gamma', 10)]);
+  f.setRows('two', [row('2026-08-02', 'Second', 7)]);
+  // The connector kept the top 3 by spend and says so (metadata.topRows beside its note); the
+  // runtime reads only these fields, never the source's name. Source 2 is a whole dataset.
+  f.metadata = { one: { topRows: 3, note: 'Top 3 by Spend; raise the top for more.' } };
+  const spend = [{ field: 'spend', agg: 'sum' }];
+  const ranked = { orderBy: { field: 'spend__sum', direction: 'desc' } };
+  f.input.tiles = [
+    { title: 'Top spend', type: 'kpi', datasets: ['source0'], metrics: spend },
+    { title: 'Account spend', type: 'kpi', datasets: ['source1'], metrics: spend },
+    { title: 'Monthly spend', type: 'column', groupBy: ['date'], dateBucket: 'month', metrics: spend },
+    {
+      title: 'Top campaigns',
+      type: 'table',
+      datasets: ['source0'],
+      groupBy: ['campaign'],
+      metrics: spend,
+      ...ranked,
+      limit: 2,
+      highlight: [{ field: 'spend', op: 'gte', value: 15, color: 'red' }],
+    },
+    { title: 'Ranked campaigns', type: 'table', datasets: ['source0'], groupBy: ['campaign'], metrics: spend, ...ranked },
+    { title: 'Second account', type: 'table', datasets: ['source1'], groupBy: ['campaign'], metrics: spend, ...ranked },
+    { title: 'Spend by campaign', type: 'bar', datasets: ['source0'], groupBy: ['campaign'], metrics: spend },
+    { title: 'Campaign mix', type: 'bar', datasets: ['source0'], groupBy: ['campaign'], metrics: spend },
+  ];
+  const saved = f.save();
+  const result = f.run(saved.id);
+  const page = pageOf(f);
+  // Data sources: a note column, the connector's note in full beside its dataset.
+  assert.deepEqual(cardOf(page, 'Data sources'), [
+    ['Dataset', 'Source', 'Connection', 'Report', 'Date range', 'Rows', 'Tab', 'Note'],
+    ['Source 1', 'Fixture source', 'one', 'Daily', '1 Aug – 31 Aug 2026', 3, 'Source 1 data', 'Top 3 by Spend; raise the top for more.'],
+    ['Source 2', 'Fixture source', 'two', 'Daily', '1 Aug – 31 Aug 2026', 1, 'Source 2 data'],
+  ]);
+  assert.match(rowsOf(f, 'Source 1 data')[1][0], /^2026-08-01 to 2026-08-31 · 3 rows · Top 3 by Spend; raise the top for more\. · Refreshed /);
+  assert.match(rowsOf(f, 'Source 2 data')[1][0], /^2026-08-01 to 2026-08-31 · 1 rows · Refreshed /);
+  assert.deepEqual(
+    result.datasets.map((dataset) => [dataset.id, dataset.note]),
+    [['source0', 'Top 3 by Spend; raise the top for more.'], ['source1', undefined]]
+  );
+  // Tiles reading only the cut dataset say so beside their title, before their own cut, and
+  // their totals cover the top rows; scorecards name it beside the currency.
+  assert.deepEqual(page[find(page, 'Top campaigns')], ['Top campaigns', 'top 3 by Spend · top 2 of 3']);
+  assert.deepEqual(noBars(cardOf(page, 'Top campaigns')).slice(1), [['Alpha', 30], ['Beta', 20], ['Total (all 3 of top 3)', 60]]);
+  assert.deepEqual(page[find(page, 'Ranked campaigns')], ['Ranked campaigns', 'top 3 by Spend']);
+  assert.deepEqual(noBars(cardOf(page, 'Ranked campaigns')).at(-1), ['Total (top 3)', 60]);
+  const labels = find(page, 'Spend (EUR, top 3)');
+  assert.deepEqual(page.slice(labels, labels + 2), [['Spend (EUR, top 3)', 'Spend (EUR)'], [60, 7]]);
+  assert.deepEqual(result.scorecards.map((card) => card.label), ['Spend (EUR, top 3)', 'Spend (EUR)']);
+  // A tile over a cut and a whole dataset names the cut one.
+  const note = (title) => result.tiles.find((tile) => tile.title === title).note;
+  assert.equal(note('Monthly spend'), 'Source 1: top 3 by Spend');
+  assert.equal(find(rowsOf(f, 'Dashboard report (chart data)'), 'Monthly spend (Source 1: top 3 by Spend)'), 0);
+  // Rows a rule flags are counted in the top rows, not "in all", and a share or a leader is a
+  // share of the top rows, not of the account's total: these sentences stand apart from the
+  // cards' notes, and Chat quotes them word for word.
+  assert.deepEqual(result.highlights, [
+    'Top campaigns: 2 of 2 rows (2 of 3 in the top 3) have Spend at or above EUR 15.00 (red rows) — Alpha, Beta.',
+    'Spend by campaign: Alpha holds 50.0% of the top 3.',
+    'Campaign mix: Alpha holds 50.0% of Spend in the top 3.',
+    'Alpha leads Top campaigns with EUR 30.00 spend (50.0% of the top 3).',
+    'Alpha leads Ranked campaigns with EUR 30.00 spend (50.0% of the top 3).',
+  ]);
+  assert.ok(result.highlights.every((text) => !/total/.test(text)), 'no share over a cut list is called a share of the total');
+  // A whole dataset reads as before: no note, a plain total.
+  assert.deepEqual(page[find(page, 'Second account')], ['Second account']);
+  assert.deepEqual(noBars(cardOf(page, 'Second account')).at(-1), ['Total', 7]);
+  assert.equal(note('Second account'), undefined);
+
+  // A list shorter than its top is the whole list: no top labels, and without a note no note
+  // column.
+  f.setRows('one', [row('2026-08-01', 'Alpha', 30), row('2026-08-02', 'Beta', 20)]);
+  f.metadata = { one: { topRows: 3 } };
+  const whole = f.run(saved.id);
+  const again = pageOf(f);
+  assert.deepEqual(cardOf(again, 'Data sources')[0], ['Dataset', 'Source', 'Connection', 'Report', 'Date range', 'Rows', 'Tab']);
+  assert.deepEqual(again[find(again, 'Ranked campaigns')], ['Ranked campaigns']);
+  assert.deepEqual(noBars(cardOf(again, 'Ranked campaigns')).at(-1), ['Total', 50]);
+  assert.deepEqual(whole.scorecards.map((card) => card.label), ['Spend (EUR)', 'Spend (EUR)']);
+  assert.equal(whole.tiles.find((tile) => tile.title === 'Monthly spend').note, undefined);
+  assert.ok(whole.highlights.every((text) => !/top/.test(text)), JSON.stringify(whole.highlights));
+  assert.ok(whole.highlights.includes('Spend by campaign: Alpha holds 60.0% of the total.'), JSON.stringify(whole.highlights));
+
+  // A list cut at its other end, or in no order, is named for what it holds, never "top": the
+  // connector's note says which ("Lowest 3 by CTR" after an ascending ORDER BY, "First 3 rows"
+  // after a LIMIT without one), and its first word carries to the totals, cards and highlights.
+  f.setRows('one', [row('2026-08-01', 'Alpha', 30), row('2026-08-02', 'Beta', 20), row('2026-08-03', 'Gamma', 10)]);
+  for (const [text, kept] of [['Lowest 3 by CTR', 'lowest 3'], ['First 3 rows (query LIMIT)', 'first 3']]) {
+    f.metadata = { one: { topRows: 3, note: text } };
+    const cut = f.run(saved.id);
+    const shown = pageOf(f);
+    assert.deepEqual(shown[find(shown, 'Ranked campaigns')], ['Ranked campaigns', text.charAt(0).toLowerCase() + text.slice(1)]);
+    assert.deepEqual(noBars(cardOf(shown, 'Ranked campaigns')).at(-1), [`Total (${kept})`, 60]);
+    assert.deepEqual(noBars(cardOf(shown, 'Top campaigns')).at(-1), [`Total (all 3 of ${kept})`, 60]);
+    assert.deepEqual(cut.scorecards.map((card) => card.label), [`Spend (EUR, ${kept})`, 'Spend (EUR)']);
+    assert.ok(cut.highlights.includes(`Spend by campaign: Alpha holds 50.0% of the ${kept}.`), JSON.stringify(cut.highlights));
+    assert.ok(cut.highlights.includes(`Top campaigns: 2 of 2 rows (2 of 3 in the ${kept}) have Spend at or above EUR 15.00 (red rows) — Alpha, Beta.`), JSON.stringify(cut.highlights));
+    assert.ok(cut.highlights.every((line) => !/\btop 3\b/.test(line)), JSON.stringify(cut.highlights));
+  }
+  // The word comes from the note only when it stands before the cut's own count; any other note,
+  // or none, reads as the top. Lists cut at different ends read together are "kept rows".
+  const topOf = (count, note) => plain(f.api.dmvDashboardTopOf_({ rows: Array(count).fill({}), metadata: { topRows: count, note } }));
+  assert.deepEqual(topOf(10000, 'Top 10,000 rows by spend; raise the row limit for more.'), { rows: 10000, note: 'top 10,000 rows by spend', word: 'top' });
+  assert.deepEqual(topOf(3, 'Lowest 3 by CTR').word, 'lowest');
+  assert.deepEqual(topOf(3, 'Bottom 5 by CTR').word, 'top', 'a count that is not the cut is not read');
+  assert.deepEqual(topOf(3, 'Ranked by spend').word, 'top');
+  assert.deepEqual(topOf(3, undefined), { rows: 3, note: 'top 3 rows', word: 'top' });
+  const tops = { a: { rows: 3, note: 'top 3 by spend', word: 'top' }, b: { rows: 3, note: 'lowest 3 by CTR', word: 'lowest' }, c: { rows: 3, note: 'lowest 3 by CPC', word: 'lowest' } };
+  const tileTop = (datasets) => plain(f.api.dmvDashboardTileTop_({ tops, labels: { a: 'A', b: 'B', c: 'C', d: 'D' } }, { datasets }));
+  assert.deepEqual(tileTop(['a', 'b']), { label: 'kept rows', note: 'A: top 3 by spend, B: lowest 3 by CTR' });
+  assert.equal(tileTop(['b', 'c']).label, 'lowest 3 each');
+  assert.equal(tileTop(['b', 'd']).label, 'lowest rows', 'with a whole dataset beside it');
+});
+
 test('every scorecard is kept, in balanced rows that fill the page', () => {
   const f = fixture();
   f.currency = { one: 'USD', two: 'EUR' };
@@ -2339,12 +2481,92 @@ test('long tables shade and colour a column per request, so they refresh again a
     } else if (JSON.stringify(background) !== JSON.stringify(WHITE)) shaded++;
   }
   assert.ok(tinted > 100 && shaded > 500, tinted + ' tinted, ' + shaded + ' shaded');
-  // A page past one write says what to narrow.
+  // A page past one write names its largest parts and, the page being the largest, its tables
+  // as what to shorten. Parts under a tenth of the largest (both data tabs here) go unnamed.
   const limit = f.api.DMV_LIMITS.maxBytes;
   f.api.DMV_LIMITS.maxBytes = 2000000;
+  const before = f.snapshot(),
+    batches = f.state.batches.length;
   try {
-    assert.throws(() => f.run(saved.id), /^Error: This dashboard is too large for one Sheets write\. Lower the row limit of its longest table tiles/);
+    assert.throws(
+      () => f.run(saved.id),
+      /^Error: This dashboard is too large for one Sheets write\. Largest parts: the dashboard page \(\d[\d,]* rows x 25 columns\)\. Lower the row limit of its longest table tiles, give them fewer metrics and ratios, or narrow its datasets\.$/
+    );
   } finally {
     f.api.DMV_LIMITS.maxBytes = limit;
   }
+  assert.deepEqual(f.snapshot(), before);
+  assert.equal(f.state.batches.length, batches);
+});
+
+test('a refresh past one Sheets write names its largest datasets, rows by columns, and writes nothing', () => {
+  const f = fixture();
+  // Two wide raw lists, as a dump of every keyword and asset would be, behind small tiles.
+  const wide = Array.from({ length: 8 }, (_, i) => ({ key: 'extra' + i, type: 'text' }));
+  f.api.dmvRegisterConnector_({
+    id: 'dump_source',
+    label: 'Dump source',
+    category: 'Test',
+    allowedHosts: ['dump.example'],
+    authFields: [{ key: 'token', label: 'Token', type: 'password', required: true }],
+    reports: [
+      {
+        id: 'items',
+        label: 'Items',
+        fields: [{ key: 'name', type: 'text' }, { key: 'spend', type: 'currency' }, ...wide],
+        dateRange: false,
+        configFields: [{ key: 'count', label: 'Count', type: 'number' }],
+        fetch(ctx) {
+          const columns = [{ key: 'name', type: 'text' }, { key: 'spend', type: 'currency' }, ...wide];
+          const rows = Array.from({ length: ctx.config.count }, (_, i) => {
+            const row = { name: 'Item number ' + i, spend: (i % 97) + 1 };
+            wide.forEach((column, c) => (row[column.key] = 'Detail ' + c + ' of item ' + i));
+            return row;
+          });
+          return { columns, rows, metadata: { complete: true, currency: 'EUR' } };
+        },
+      },
+    ],
+  });
+  const connection = plain(f.api.dmvSaveConnection({ connectorId: 'dump_source', label: 'Dump', credentials: { token: 'private-dump-token' } }));
+  const list = (id, label, count) => ({
+    id,
+    label,
+    sheetName: label + ' Data',
+    connectionId: connection.id,
+    reportType: 'items',
+    fields: ['name', 'spend', ...wide.map((column) => column.key)],
+    config: { count },
+    maxRows: 10000,
+  });
+  f.input.datasets = [list('assets', 'Assets', 4000), list('keywords', 'Keywords', 1500), list('terms', 'Search terms', 20)];
+  f.input.tiles = [
+    { title: 'Spend', type: 'kpi', datasets: ['terms'], metrics: [{ field: 'spend', agg: 'sum' }] },
+    { title: 'Top terms', type: 'bar', datasets: ['terms'], groupBy: ['name'], metrics: [{ field: 'spend', agg: 'sum' }] },
+  ];
+  const saved = f.save();
+  const limit = f.api.DMV_LIMITS.maxBytes;
+  f.api.DMV_LIMITS.maxBytes = 1500000;
+  let message = '';
+  try {
+    assert.throws(
+      () => f.run(saved.id),
+      (error) => {
+        message = error.message;
+        return true;
+      }
+    );
+  } finally {
+    f.api.DMV_LIMITS.maxBytes = limit;
+  }
+  // The datasets are named as the plan names them, the largest first, so Chat narrows the right
+  // one; the small dataset and the page are no part worth naming.
+  assert.match(message, /^This dashboard is too large for one Sheets write\. Largest parts: Assets \(4,000 rows x 10 columns\), Keywords \(1,500 rows x 10 columns\)\. /);
+  assert.doesNotMatch(message, /Search terms|dashboard page/);
+  assert.match(message, /\. Keep only the rows worth acting on in those datasets: a ranked report's Keep the top rows, .* Then shorten the longest table tiles if the page is still too large\.$/);
+  assert.equal(f.state.batches.length, 0, 'nothing is written');
+  for (const name of ['Assets Data', 'Keywords Data', 'Search terms Data', 'Dashboard report']) assert.equal(f.tab(name), null);
+  assert.equal(f.readOutput(saved.id + '-d-assets'), null);
+  assert.equal(f.record(saved.id).status, 'error');
+  assert.match(f.record(saved.id).lastError, /Largest parts: Assets \(4,000 rows x 10 columns\)/);
 });

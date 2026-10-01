@@ -55,6 +55,32 @@ test('YouTube report filters Google Ads video campaigns and converts micros, rat
   assert.equal(f.report('google_ads', 0).fetch.name, 'dmvGoogleAdsFetch_');
 });
 
+test('Keep the top rows on a Google Ads level validates like any number setting and reaches the query', () => {
+  const f = load(['google_ads']);
+  const report = f.api.DMV_CONNECTORS.google_ads.reports.find((item) => item.id === 'search_term');
+  const config = (values) => f.api.dmvFieldsInput_(report.configFields, values);
+  assert.equal(report.configFields[0].max, f.api.DMV_LIMITS.maxRows, 'the form offers up to the row ceiling');
+  // The runtime turns a sent "100" into a number and keeps a blank; the connector refuses the rest.
+  assert.deepEqual(plain(config({ top: '100' })), { top: 100 });
+  assert.deepEqual(plain(config({ top: '' })), { top: '' });
+  assert.deepEqual(plain(config({})), {});
+  assert.throws(() => config({ top: 'many' }), /Keep the top rows must be a number/);
+  const credentials = { customerId: '123-456-7890', authMode: 'token', accessToken: 'offline-token' };
+  const fields = ['search_term_view.search_term', 'metrics.cost_micros'];
+  for (const top of [0, 30001, 1.5])
+    assert.throws(() => report.fetch(f.context('google_ads', credentials, { fields, config: config({ top }) })), /whole number from 1 to 30,000/, String(top));
+  assert.equal(f.state.http.length, 0, 'refused before any request');
+
+  f.state.responses.push(
+    { body: { results: [{ searchTermView: { searchTerm: 'monthly rentals' }, metrics: { costMicros: '9000000' } }, { searchTermView: { searchTerm: 'flats' }, metrics: { costMicros: '4000000' } }] } },
+    { body: { results: [{ customer: { currencyCode: 'EUR', timeZone: 'Europe/Athens' } }] } }
+  );
+  const output = report.fetch(f.context('google_ads', credentials, { fields, config: config({ top: '2' }) }));
+  assert.match(request(f, 0).body.query, /FROM search_term_view WHERE metrics\.impressions > 0 AND segments\.date BETWEEN '2026-09-01' AND '2026-09-02' ORDER BY metrics\.cost_micros DESC LIMIT 2$/);
+  assert.deepEqual([output.metadata.topRows, output.metadata.note], [2, 'Top 2 by spend']);
+  assert.deepEqual(plain(output.rows).map((row) => row['metrics.cost_micros']), [9, 4]);
+});
+
 test('TikTok is kept in the code but not offered anywhere', () => {
   const f = load(['tiktok_ads']);
   assert.equal(f.api.DMV_CONNECTORS.tiktok_ads, undefined);

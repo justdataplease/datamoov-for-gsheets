@@ -22,7 +22,10 @@ network destination is the AI provider you configure.
    editing to keep it. The **Create a key** link opens the provider's key page.
    **Maximum rows per chat report** sets the default and ceiling for each fetched report,
    from 1 to 30,000 rows (initially 10,000). The model can request fewer rows; it cannot exceed
-   your setting. Increase it if a complete report reaches the limit.
+   your setting. Increase it if a complete report reaches the limit. The 30,000-row ceiling is
+   deliberate: each dashboard is written in one all-or-nothing Sheets request, which a few huge
+   tabs would overflow, so a long list keeps its top rows instead (see
+   [Action lists](#action-lists-the-top-rows-labelled)).
    **Time limit per chat request** sets how long one question may work before it answers
    from what it has: 60 to 1,800 seconds (initially 600).
    **Instructions for the assistant** supplies general standing context.
@@ -61,10 +64,11 @@ source fetches; multi-account and period comparisons can require several fetches
 - **Facebook Ads below the campaign**: the **Insights** report answers ad set and ad questions,
   weekly or monthly reach, and splits by age, gender, country, platform or placement; the
   selected fields decide the level, the period and the breakdowns.
-- **Any Google Ads resource**: beyond daily campaign performance, the **Custom query (GAQL)**
-  report lets chat read ad groups, ads, keywords and their quality scores, search terms, negative
-  keywords, ad asset performance (Low, Good and Best labels), asset groups, geography or account
-  totals with one GAQL query. `discover_fields` lists the resources and the
+- **Any Google Ads resource**: beyond daily campaign performance, chat reads keywords with their
+  quality scores, search terms and ad asset performance (Low, Good and Best labels) from their
+  own ranked reports, which can keep only their top rows by spend, and the **Custom query
+  (GAQL)** report lets it read ad groups, ads, negative keywords, asset groups, geography or
+  account totals with one GAQL query. `discover_fields` lists the resources and the
   fields each one supports. The report date range is applied whenever the query selects metrics.
 - **SQL sources**: for PostgreSQL, BigQuery and Snowflake the model first calls `describe_database`,
   which lists the tables and columns of the schemas or datasets you chose on the connection
@@ -161,24 +165,70 @@ months, every week."** Chat saves the plan and runs it once. You get:
     slice would be the red this page keeps for a bad change;
   - **table cards** with an in-cell bar beside the main amount, blue shading on rate and average
     columns (darker is better, so the lowest CPA is the darkest), a **Δ %** column after each
-    metric when the table compares periods, a total row, and whole rows tinted by highlight
-    rules, with a **Row tints** line under the table saying what each tint means;
+    metric when the table compares periods, a total row ("Total (top 300)" over a list cut to its
+    top rows), and whole rows tinted by highlight rules, with a **Row tints** line under the
+    table saying what each tint means;
   - a **Data sources** card listing every dataset with its source, connection, report, date
-    range, rows and tab;
+    range, rows and tab, and the source's note when a list was cut to its top rows ("Top 300 by
+    spend");
   - a footer saying how to refresh the dashboard.
 - **Performance Dashboard (chart data)**, hidden: the small table each chart reads. Every refresh
   rewrites these tables and points each chart at the new range, so a period that grows ("this
   month", "until today") adds points to the chart instead of being cut off. Unhide the tab from
   the Sheets tab menu to check a chart's numbers.
 
-Datasets can be different subjects, not only the same report from several accounts. With the
-Google Ads **Custom query (GAQL)** report one dashboard can hold campaigns, ad groups, keywords
-with their quality scores, search terms, negative keywords and ad asset performance (the Low,
-Good and Best labels), each on its own tab, with charts and tables drawn from any of them. Chat
-builds every section you ask for this way instead of describing how it could be built; when a
-request needs more than eight datasets, it says which section it left out. Charts that compare
-platforms read several datasets together; Chat gives their columns shared names (date, spend,
-clicks) so Google's cost and Facebook's spend line up.
+Datasets can be different subjects, not only the same report from several accounts. One Google
+Ads dashboard can hold campaigns, ad groups, keywords with their quality scores, search terms,
+ads, negative keywords and ad asset performance (each asset's own clicks, conversions and spend), each on its own
+tab, with charts and tables drawn from any of them. Chat takes each subject from the source's
+report for it, or from the **Custom query (GAQL)** report when there is none. It builds every
+section you ask for this way instead of describing how it could be built; when a request needs
+more than eight datasets, it says which section it left out. Charts that compare platforms read
+several datasets together; Chat gives their columns shared names (date, spend, clicks) so
+Google's cost and Facebook's spend line up.
+
+### Action lists: the top rows, labelled
+
+A list of keywords, search terms, ads, assets, placements or landing pages is there to act on,
+not to hold every row an account has. A whole account's ad asset view alone returns one row per
+ad group, ad, asset and field, easily tens of thousands. So Chat builds each list as a ranked
+dataset:
+
+- It uses the source's ranked report for the subject (for Google Ads, **Keyword performance**,
+  **Search terms** and **Ad assets**) with **Keep the top rows** set: 300 unless you ask for
+  another number, 1,000 at most. The report ranks by spend, or by impressions when spend is not
+  selected. For other lists (ads, placements, landing pages) it writes a custom query that keeps
+  the top n where the source's custom query labels the rows it keeps: for Google Ads,
+  `ORDER BY metrics.cost_micros DESC LIMIT 300`. A SQL `LIMIT` carries no such label, so a SQL
+  dataset aggregates instead and never has a `LIMIT`.
+- The condition that makes a row worth acting on goes into the query or a tile filter: spend
+  with no conversions, a low CTR over plenty of impressions.
+- The dataset has no date column, so each row covers the whole period.
+- A top-N dataset never feeds KPI totals or shares; those read complete datasets such as the
+  campaign or account totals.
+
+A list cut to its top rows says so wherever it appears: the **Data sources** card shows the
+source's note ("Top 300 by spend"), a card that reads the list carries "top 300 by spend" beside
+its title, its table's total row reads "Total (top 300)" ("top 300 each" over several such
+lists, "top rows" when their tops differ or the table also reads a complete dataset), and a
+highlight about a share says it is a share of the top rows ("Brand holds 40% of the top 300").
+Should a KPI card read one anyway, its label says so: "Spend (AED, top 300)". A Google Ads
+custom query's own `LIMIT` is labelled the same way when it returns exactly that many rows: "Top
+100 by spend" after `ORDER BY metrics.cost_micros DESC`, "Lowest 100 by CTR" after an ascending
+metric, "First 100 rows (query LIMIT)" without an `ORDER BY`; the totals and cards then read
+"lowest 100" or "first 100", never "top". A list shorter than its top is the whole list and
+carries no label. A cut is never silent: a ranked report left without a top keeps the row
+limit's worth of rows by spend and says so ("Top 10,000 rows by spend"); without spend, or with
+a day, week, month, quarter or year column (a trend, which **Keep the top rows** refuses), it
+fails at the row limit like any other report. A top above the report's row limit is refused
+with both numbers.
+
+A dataset over the row limit fails with its name and what narrows it: the report's **Keep the
+top rows**, a condition or aggregation in the query, or fewer dimensions; raising **Maximum rows
+per chat report** comes last. A dashboard too large for one Sheets write names its largest
+tabs with their rows and columns. A setting Chat puts on a report that does not have it (a top
+on a custom query) is refused with the report's own settings instead of being dropped, so the
+same query is never run again unchanged.
 
 ### Comparing with the previous period
 
@@ -226,8 +276,10 @@ overall CPA in light red and campaigns with more than 50 conversions in light gr
 this into up to four rules per table, each a column, a comparison and either a fixed value or a
 multiple of the table's total (1.5 × the overall CPA), with the color red, green or amber. A rule
 can also match the text of a column the table is grouped by: equal to, not equal to, containing,
-or one of several values, so **"flag low-rated assets"** tints the rows whose performance label is
-Low. The first matching rule tints the whole row. A rule against the total stays meaningful as the
+or one of several values, so **"flag broad match keywords"** tints the rows whose match type is
+Broad. Weak assets are flagged by their numbers (CTR below half the overall, spend without
+conversions): Google no longer fills its performance label for Search and Display assets. The
+first matching rule tints the whole row. A rule against the total stays meaningful as the
 numbers change. The **Row tints** line under the table names each rule with the threshold it
 used on this refresh ("CPA > 1.5× overall (AED 1,734)"), and the Highlights card says how many rows
 each rule matched.
@@ -263,16 +315,27 @@ Limits and guarantees:
   Charts keep up to 12 series; by default 400 dates or 15 categories, tables 50 rows (1,000 at
   most). A shortened tile says so beside its title, for example "top 15 of 129".
 - Datasets together hold at most 30,000 rows, and the whole refresh is one roughly 200-second run
-  written in one Sheets request; there is no continuation for dashboards. Keep datasets lean: a
-  custom query without `segments.date` returns totals for the period instead of one row per day.
+  written in one all-or-nothing Sheets request (at most 8,000,000 characters of values and
+  formats); there is no continuation for dashboards. Keep datasets lean: a dataset without a date
+  column (a custom query without `segments.date`) returns totals for the period instead of one
+  row per day, and a list keeps its top rows.
+- A refresh too large for that one request stops before anything is written: "This dashboard is
+  too large for one Sheets write", followed by its largest parts with their size, for example
+  "Largest parts: Google Ads assets (9,412 rows x 11 columns), Google Ads keywords (2,869 rows x
+  9 columns)", and how to keep only the rows worth acting on in them. Chat narrows the dataset
+  named first (its top rows, fewer fields, no date column) and runs the dashboard again.
 - A dashboard can refresh itself every hour, daily or weekly at a chosen hour (and weekday) of
   the spreadsheet's day: pick them on its card under **Reports > Dashboards**, or ask Chat for it
   when creating the dashboard ("refresh it daily at 8"). Scheduled refreshes run in the background
   from your own account within the hour after the chosen time, one dashboard per hourly tick, and
   never call AI.
 - Each dataset uses the higher of its saved row limit and your current **Maximum rows per chat
-  report**, so raising the setting also fixes dashboards saved earlier. A dataset that fails is
-  named in the error, with the limit it used.
+  report**, so raising the setting also fixes dashboards saved earlier. A dataset over its limit
+  is named in the error, with the limit it used and what to try first: keep only the rows worth
+  acting on (a ranked report's **Keep the top rows**, or a query that orders by a metric and keeps
+  the top n), put conditions in the query, or use fewer dimensions; the row limit comes after
+  that. Chat does the same when it meets the error: it narrows the named dataset and runs the
+  dashboard again, and suggests a higher limit only when the narrowed dataset still needs one.
 - Every dataset and every tab must pass validation before anything is written. A failed source
   or an occupied destination leaves all previous tabs and charts unchanged.
 - A dashboard writes to tabs of its own. A tab name that already holds content is refused when
@@ -324,8 +387,10 @@ the card. Chat-created cards say "from Chat" in their subtitle.
 ## What the model sees
 
 - The catalog: your connection labels and ids, non-secret connection values (account or
-  property ids, chat schemas or datasets), the reports with their fields, the spreadsheet's
-  tab names and timezone, and your saved instructions.
+  property ids, chat schemas or datasets), the reports with their fields (listed once per source;
+  its other connections refer to the first), the spreadsheet's tab names and timezone, and your
+  saved instructions. The tools' `config` lists only the settings of the selected sources'
+  reports, each wording once with the reports that share it.
 - A fixed description of what the sidebar and the chat can and cannot do, with your connection
   labels and the current row limit filled in.
 - Tool results: column descriptors, row counts, per-column statistics and a few sample rows
@@ -347,7 +412,10 @@ Values that come back from providers are framed as data, not instructions.
 
 - Every fetch goes through the report runtime: your configured chat row cap (initially 10,000,
   at most 30,000), column caps, deadline and host allowlists. Reports fail instead
-  of truncating.
+  of truncating. The only cuts are a ranked report's top rows (its **Keep the top rows**, or the
+  row limit's worth by spend when that is blank) and the `LIMIT` of a custom query whose source
+  labels it (Google Ads), each labelled wherever its rows appear. A SQL query has a `LIMIT` only
+  for a top N you asked for, and a dashboard never puts one on a SQL dataset.
 - Report writes go through the report writer: only empty cells, or cells the chat wrote earlier at
   the same anchor and that were not edited since, are ever replaced. Formulas and manual edits
   stop a rewrite.

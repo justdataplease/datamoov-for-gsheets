@@ -83,17 +83,30 @@ function dmvWriteReportsUnlocked_(spreadsheet, outputs, beforeCommit, extra) {
     receipts: [],
     requests: [],
   };
-  outputs.forEach(function (output) {
+  // Where each output's requests start, so a batch past the size limit can say what grew.
+  var starts = outputs.map(function (output) {
     dmvSheetName_(output.report.target.sheetName);
+    var start = plan.requests.length;
     dmvPrepareReportWrite_(spreadsheet, output.report, output.result, plan);
+    return start;
   });
+  starts.push(plan.requests.length);
   if (extra) plan.requests = plan.requests.concat(extra(plan.areas) || []);
   if (JSON.stringify(plan.requests).length > DMV_LIMITS.maxBytes) {
-    // Marked, so a caller that knows what grew (a dashboard page) can say so instead.
+    // Marked, with each output's area and share of the batch in output order, so a caller that
+    // knows what its outputs hold (a dashboard's datasets and page) can name what to narrow.
     var large = new Error(
       'These reports are too large for one Sheets write. Select fewer fields or rows.'
     );
     large.tooLarge = true;
+    large.parts = outputs.map(function (output, index) {
+      return {
+        id: output.report.id,
+        rows: plan.areas[index].rows,
+        columns: plan.areas[index].columns,
+        size: JSON.stringify(plan.requests.slice(starts[index], starts[index + 1])).length,
+      };
+    });
     throw large;
   }
   if (beforeCommit) beforeCommit();

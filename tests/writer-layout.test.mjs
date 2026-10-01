@@ -269,6 +269,32 @@ test('one write takes up to ten outputs and journal recovery accepts ten receipt
   for (let i = 0; i < 10; i++) assert.ok(f.readOutput('out' + i), 'out' + i);
 });
 
+test('a batch past the size limit names each output with its area and share, and writes nothing', () => {
+  const f = fixture();
+  const wide = grid(2000, 6, (r, c) => 'row ' + r + ' column ' + c);
+  const outputs = [f.output('big', wide, undefined, 'Big'), f.output('small', grid(3, 2), undefined, 'Small'), f.output('page', grid(40, 5), { columnWidths: [30] }, 'Page')];
+  outputs.forEach((output) => (output.result.columns = output.result.matrix[0].map(() => ({ type: 'text' }))));
+  const limit = f.api.DMV_LIMITS.maxBytes;
+  f.api.DMV_LIMITS.maxBytes = 100000;
+  let error;
+  try {
+    f.api.dmvWriteReports_(f.book, outputs, () => assert.fail('nothing commits'), () => [{ extra: 'x'.repeat(50000) }]);
+  } catch (caught) {
+    error = caught;
+  } finally {
+    f.api.DMV_LIMITS.maxBytes = limit;
+  }
+  assert.match(error.message, /too large for one Sheets write/);
+  assert.equal(error.tooLarge, true);
+  // In output order, whatever their size; the extra requests belong to no output.
+  const parts = JSON.parse(JSON.stringify(error.parts));
+  assert.deepEqual(parts.map(({ id, rows, columns }) => [id, rows, columns]), [['big', 2000, 6], ['small', 3, 2], ['page', 40, 5]]);
+  assert.ok(parts[0].size > 100000 && parts[1].size < 5000 && parts[2].size < 20000, JSON.stringify(parts.map((part) => part.size)));
+  assert.equal(f.state.batches.length, 0);
+  for (const name of ['Big', 'Small', 'Page']) assert.equal(f.tab(name), null);
+  assert.deepEqual(Object.keys(f.state.user.getProperties()), [], 'no journal and no receipts');
+});
+
 test('the Sheets sandbox publishes merges, formats and sizes only when the whole batch succeeds', () => {
   const f = fixture(),
     sheet = f.tab('Output');

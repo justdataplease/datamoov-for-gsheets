@@ -84,28 +84,49 @@ and dashboards never sum them. The daily campaign report is unchanged.
 ### Google Ads report levels
 
 Beside the daily campaign report, the report builder lists one report per Google Ads level:
-account, campaign, ad group, ad, keyword, search term, negative keywords (campaign and ad group),
-conversion action, geography, age, gender, audience, landing page, placement, Performance Max
-asset group and Shopping product. Each level starts with its usual dimensions and the core
-metrics selected. **Load columns** asks `GoogleAdsFieldService` for every attribute, segment and
-metric compatible with that level's resource and appends them unselected; the search box above
-the list finds a field by label or GAQL name. The builder keeps choices already made when columns
-are loaded again.
+account, campaign, ad group, ad, ad assets, keyword, search term, negative keywords (campaign and
+ad group), conversion action, geography, age, gender, audience, landing page, placement,
+Performance Max asset group and Shopping product. Each level starts with its usual dimensions
+and the core metrics selected. **Load columns** asks `GoogleAdsFieldService` for every attribute,
+segment and metric compatible with that level's resource and appends them unselected; the search
+box above the list finds a field by label or GAQL name. The builder keeps choices already made
+when columns are loaded again.
 
 - Levels are built on the custom query path, so typing, micros conversion, currency and the date
   range behave the same way. Rows without impressions are left out.
-- Choosing **Date** (or week, month) makes the report a trend, ordered by date; it must fit the
-  row limit. Without a date column the report is a ranking ordered by spend, and the row limit
-  keeps the top rows ("Top 10,000 rows by spend" appears in the report notes).
+- Choosing a period (**Date**, **Week**, **Month**, **Quarter** or **Year**) makes the report a
+  trend, ordered by that period; it must fit the row limit. Without one the report is a ranking:
+  with spend selected the row limit keeps the top rows by spend ("Top 10,000 rows by spend; raise
+  the row limit for more." appears in the report notes); without spend it fails over the row
+  limit.
+- **Keep the top rows** (every ranked level except account) keeps only that many rows of the
+  ranking, by spend or by impressions when spend is not selected, from 1 to the report's row
+  limit; blank keeps every row up to the row limit. It is how a dashboard lists what needs
+  action, the top 100 keywords by spend, instead of every keyword in the account. When the list
+  was cut, the result carries `metadata.topRows` and the note "Top 100 by spend", so dashboards
+  label totals over it "Total (top 100)". It ranks totals, so it cannot be combined with a
+  period, and it needs spend or impressions selected. A value above the row limit is refused
+  with both numbers instead of failing on the limit.
+- **Ad assets** (`ad_group_ad_asset_view`) has one row per asset of each ad: campaign, ad group,
+  asset type (the field it fills: HEADLINE, DESCRIPTION, MARKETING_IMAGE...), asset text and
+  name, with impressions, clicks, conversions and spend; asset format, CTR and Google's
+  performance label can be added. Google no longer fills the performance label for Search and
+  Display assets (it returns UNSPECIFIED or NOT_APPLICABLE), so it is not selected by default and
+  weak assets are judged by their metrics. Only assets in the latest version of enabled ads, ad
+  groups and campaigns are listed (`ad_group_ad_asset_view.enabled = TRUE` and the three
+  statuses), the ones a change can act on.
 - Negative keyword levels have no metrics or period; their notes say "No date range".
 - A few metrics are not offered at levels where Google rejects them (for example average CPM on
   Shopping products). These were found by running every curated field against the live API.
-- The levels are for the manual builder. Chat uses the custom query instead, which can express
-  any of them.
+- Chat sees the keyword, search term and ad asset levels, the lists dashboards rank, and reaches
+  every other level through the custom query, which can express any of them.
 
 One request returns at most the row limit plus one row: Google Ads pages hold 10,000 rows
 whatever the client asks, and a response is capped at 8 MB, so the query carries a `LIMIT`
-rather than downloading a report that would be refused anyway.
+rather than downloading a report that would be refused anyway. A custom query's own `LIMIT n`
+that returns exactly n rows is a top-N list, not the whole report: the result carries
+`metadata.topRows` and the note "Top n by <ORDER BY field>" ("Lowest" for an ascending metric,
+"First n rows (query LIMIT)" without an order). Fewer rows than the limit are the whole list.
 
 YouTube Ads has no API of its own: video campaigns are bought and reported through Google Ads, so the YouTube report uses the Google Ads connection and adds `campaign.advertising_channel_type = 'VIDEO'` to the same daily campaign query. View rate and quartile rates are ratios; CPV is converted from micros.
 
