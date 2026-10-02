@@ -1689,7 +1689,7 @@ export function createDatamoovSandbox(settings = {}) {
   // The memo shared by the cells read inside reading(); each other read has its own.
   let sharedMemo = null;
   const context = vm.createContext(fakeServices, { codeGeneration: { strings: false, wasm: false } });
-  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_welcome.js', 'dmv_credentials.js', 'dmv_connections.js', 'dmv_credential_import.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js', 'dmv_continuation.js', 'dmv_ai.js', 'dmv_formulas.js', 'dmv_chat_tools.js', 'dmv_chat_sheets.js', 'dmv_chat_pivots.js', 'dmv_chat_sheet_actions.js', 'dmv_chat_sheet_conditions.js', 'dmv_chat_sheet_formulas.js', 'dmv_chat_sheet_safety.js', 'dmv_dashboards.js', 'dmv_dashboard_cells.js', 'dmv_chat_dashboards.js', 'dmv_chat_reports.js', 'dmv_chat.js']) {
+  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_welcome.js', 'dmv_credentials.js', 'dmv_connections.js', 'dmv_credential_import.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js', 'dmv_continuation.js', 'dmv_ai.js', 'dmv_formulas.js', 'dmv_chat_tools.js', 'dmv_chat_sheets.js', 'dmv_chat_pivots.js', 'dmv_chat_sheet_actions.js', 'dmv_chat_sheet_conditions.js', 'dmv_chat_sheet_formulas.js', 'dmv_chat_sheet_safety.js', 'dmv_dashboards.js', 'dmv_dashboard_run.js', 'dmv_dashboard_page.js', 'dmv_dashboard_charts.js', 'dmv_dashboard_cells.js', 'dmv_chat_dashboards.js', 'dmv_chat_reports.js', 'dmv_chat.js']) {
     new vm.Script(readFileSync(new URL(`../../src/${filename}`, import.meta.url), 'utf8'), { filename }).runInContext(context, { timeout: 1000 });
   }
   const book = addSpreadsheet();

@@ -8,8 +8,11 @@
              checked against the inspection before plan runs.
              'sheet': needs only sheetName (tab-level actions such as delete_sheet).
              'none': needs neither (actions that create something new).
+             Or a function of the input that returns one of these.
      fields  input keys the action takes besides action, sheetName, range, editToken and
              confirmToken; any other key is refused.
+     builtIn  true for the built-in actions (dmv_chat_sheets.js): a refusal of other keys names
+             none, a tab-level one takes no confirmToken and a result without undo has no undoId.
      plan(context)  validates the input and returns what to do. context holds session, input,
              sheet (the target tab or null), area (dmvChatSheetArea_ of the range or null) and
              snapshot (the inspected cells, from dmvChatSheetRead_, or null). It returns:
@@ -20,11 +23,12 @@
                   { sheetId } guards a whole tab and { sheetId, startRowIndex: 9 } every row
                   from row 10 (what an insert or delete there moves)
        overwrite  true when touches are replaced: more than 200 non-empty cells asks first,
-                  counting the earlier edits of the request
+                  counting the earlier edits of the request; or the name of the cells (Tab!A1:B2),
+                  which the question then gives
        replaced   for an action that counts what it replaces itself: that count, which joins
                   the request's total the same way (without confirm, passing 200 asks; with
                   confirm, the summary names the count once it passes 200 alone, and the yes
-                  covers it)
+                  covers it); with overwrite, the count when undo cannot count touches
        confirm    a summary that makes the user confirm first (delete, dedupe, whole-tab
                   find/replace)
        undo       omit for a cell snapshot of touches; null when there is nothing to restore;
@@ -43,8 +47,12 @@
                   holds then) as they were before the edit; note is what the undo result says
                   undo could not put back. Undo also refuses once rows or columns of the tabs of
                   snapshot and verify were inserted or deleted
+       readBack   true to read the inspected range back once written, as context.written: undo
+                  checks against it, keeping no entry without it, and the fresh token reuses it
+       retoken    false when no fresh editToken follows an edit of the inspected range
        text, details, sheetName, sheetId, range   the write event and result links
-       result     extra result fields; after(response, context) may return more once written
+       result     extra result fields; after(response, context) may return more once written,
+                  and set context.sheet to a tab the batch created, for the output link
    Built-in action names win over these. Helpers: dmvChatSheetGuard_, dmvChatSheetCells_,
    dmvChatSheetNonEmpty_, dmvChatGridA1_ and, for tools of their own,
    dmvChatConfirmFind_, dmvChatConfirmIssue_ and dmvChatConfirmSpend_.

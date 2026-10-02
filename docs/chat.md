@@ -759,7 +759,8 @@ the loop in `src/dmv_chat.js`. Tool implementations live in `src/dmv_chat_tools.
 `src/dmv_chat_sheet_safety.js`, `src/dmv_chat_sheet_actions.js`, `src/dmv_chat_sheet_conditions.js`, `src/dmv_chat_sheet_formulas.js`, `src/dmv_chat_pivots.js`, `src/dmv_chat_dashboards.js` and `src/dmv_chat_reports.js`. The capability
 description the model answers "what can you do?" from is `dmvChatCapabilities_` in `src/dmv_chat.js`;
 keep it in step with this document and the README. Saved dashboard plans execute in
-`src/dmv_dashboards.js`, which lays out the dashboard tab and builds its charts itself.
+`src/dmv_dashboard_run.js`, which lays out the dashboard tab (`src/dmv_dashboard_page.js`) and builds its
+charts (`src/dmv_dashboard_charts.js`) itself.
 
 Offline tests (`tests/chat.test.mjs`) drive the loop with scripted provider replies through an
 arbitrary test connector and assert that provider secrets and the AI key never appear in a
