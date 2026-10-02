@@ -42,7 +42,6 @@ const ACTIONS = [
 
 function fixture() {
   const f = chatSheetFixture({
-    tabTitles: true,
     orchard: {
       rows: [
         { date: '2026-08-01', campaign: 'Brand', spend: 10.5, clicks: 100 },
@@ -280,8 +279,40 @@ test('insert_rows and insert_columns add space, stay clear of report output and 
       JSON.stringify(extra)
     );
   assert.throws(
-    () => f.tabAction('insert_rows', { sheetName: 'Output', start: 2, range: 'A1' }),
+    () => f.tabAction('insert_rows', { sheetName: 'Output', start: 2, rows: 1 }),
     /documented fields/
+  );
+});
+
+test('tab and row or column actions ignore an inspected range and editToken, and name fields they do not take', () => {
+  const f = fixture();
+  f.book.insertSheet('Notes');
+  f.book.insertSheet('Old Q2');
+  const inspected = f.inspect('A1:B5');
+  // What the prompt says to pass for an existing sheet: the inspected sheetName, range and token.
+  const asInspected = (action, extra, sheetName = 'Output') =>
+    f.tabAction(action, {
+      sheetName,
+      range: inspected.range,
+      editToken: inspected.editToken,
+      ...extra,
+    });
+  assert.equal(asInspected('insert_rows', { start: 2, count: 1 }).ok, true);
+  assert.equal(asInspected('group_rows', { start: 2, count: 1 }).ok, true);
+  assert.equal(asInspected('delete_rows', { start: 2, count: 1 }).needsConfirmation, true);
+  assert.equal(asInspected('hide_sheet', {}, 'Notes').ok, true);
+  assert.equal(asInspected('duplicate_sheet', { newName: 'Notes copy' }, 'Notes').ok, true);
+  assert.equal(asInspected('delete_sheet', {}, 'Old Q2').needsConfirmation, true);
+  // A yes to the delete covers the call with or without the ignored fields.
+  const yes = f.answer('Yes');
+  assert.equal(
+    plain(f.api.dmvChatEditSheet_(yes, { action: 'delete_sheet', sheetName: 'Old Q2' })).ok,
+    true
+  );
+  // A field no action takes is named, with the ones this action does take.
+  assert.throws(
+    () => asInspected('insert_rows', { start: 2, rows: 1 }),
+    /Not allowed here: rows\. Allowed: action, sheetName, confirmToken, start, count\./
   );
 });
 
@@ -320,7 +351,7 @@ test('delete_rows and delete_columns ask first, and undo puts the cells back whe
   const { asked, done } = f.confirm(call);
   assert.equal(
     asked.summary,
-    'Delete rows 2-3 of tab "Output", with everything in them? Formulas elsewhere that point at them will show #REF!.'
+    'Delete rows 2-3 of tab "Output", with everything in them? Formulas elsewhere that point at them will show #REF!, and undoing the delete does not repair those formulas.'
   );
   assert.equal(done.ok, true);
   assert.equal(done.at, 'rows 2-3');
@@ -595,7 +626,7 @@ test('remove_duplicates keeps the first or the last of each key, asks first and 
   assert.deepEqual(f.format(f.sheet, 6, 2), {});
   assert.equal(
     f.requests()[0].updateCells.fields,
-    'userEnteredValue,userEnteredFormat,note,dataValidation,textFormatRuns'
+    'userEnteredValue,userEnteredFormat,note,dataValidation,textFormatRuns,chipRuns'
   );
   f.undo();
   assert.deepEqual(f.cellState(f.sheet, 1, 1, 6, 2), before);
@@ -664,6 +695,128 @@ test('highlight_duplicates adds one live rule, allowed over report output, and u
   const g = fixture();
   g.report();
   assert.equal(g.edit('highlight_duplicates', { keyColumns: [2] }, g.inspect('A1:D3')).ok, true);
+});
+
+test('remove_ and highlight_duplicates take a whole table larger than one inspection', () => {
+  const f = fixture();
+  // 300 rows of 10 columns, more than one inspection holds; each email repeats every 120 rows,
+  // so most repeats lie further apart than an inspected range reaches.
+  f.sheet.maxRows = 400;
+  for (let column = 1; column <= 10; column++) f.setCell(f.sheet, 1, column, 'H' + column);
+  for (let row = 2; row <= 301; row++) {
+    f.setCell(f.sheet, row, 1, 'u' + ((row - 2) % 120) + '@x.com');
+    for (let column = 2; column <= 10; column++)
+      f.setCell(f.sheet, row, column, `v${row}_${column}`);
+  }
+  assert.throws(() => f.inspect('A1:J301'), /at most 1,000 cells/);
+  const before = f.cellState(f.sheet, 1, 1, 301, 10);
+  const anchor = f.inspect('A1:J5');
+  const reads = f.state.gets.length;
+  const call = (session, extra) =>
+    f.edit('remove_duplicates', { keyColumns: [1], wholeSheet: true, ...extra }, anchor, session);
+  const { asked, done } = f.confirm(call);
+  assert.equal(
+    asked.summary,
+    'Remove 180 duplicate rows from Output!A2:J301 (the whole tab), compared on column A, keeping the first of each? Rows below move up inside the range.'
+  );
+  // The duplicate scan reads the key column only; undo keeps the whole table.
+  const scan = f.state.gets
+    .slice(reads)
+    .find((get) => JSON.stringify(get.options.ranges) === `["'Output'!A2:A301"]`);
+  assert.match(scan.options.fields, /values\(userEnteredValue,effectiveValue\)/);
+  assert.deepEqual(f.requests(), [
+    {
+      deleteDuplicates: {
+        range: gridOf(f.sheet, 1, 301, 0, 10),
+        comparisonColumns: [
+          { sheetId: f.sheet.id, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 },
+        ],
+      },
+    },
+  ]);
+  assert.equal(done.removed, 180);
+  assert.equal(done.kept, 120);
+  assert.equal(done.range, 'A2:J301');
+  // The kept rows close up for the whole table: no blank rows are left between them.
+  assert.deepEqual(
+    [2, 121, 122, 301].map((row) => [f.value(f.sheet, row, 1), f.value(f.sheet, row, 2)]),
+    [
+      ['u0@x.com', 'v2_2'],
+      ['u119@x.com', 'v121_2'],
+      ['', ''],
+      ['', ''],
+    ]
+  );
+  f.undo();
+  assert.deepEqual(f.cellState(f.sheet, 1, 1, 301, 10), before);
+  // Keeping the last rewrites the table with the last row of each key moved up.
+  const last = (session, extra) =>
+    f.edit(
+      'remove_duplicates',
+      { keyColumns: [1], keep: 'last', wholeSheet: true, ...extra },
+      f.inspect('A1:J5', 'Output', session),
+      session
+    );
+  assert.equal(f.confirm(last).done.removed, 180);
+  assert.deepEqual(
+    [2, 61, 62, 121, 122].map((row) => [f.value(f.sheet, row, 1), f.value(f.sheet, row, 2)]),
+    [
+      ['u60@x.com', 'v182_2'],
+      ['u119@x.com', 'v241_2'],
+      ['u0@x.com', 'v242_2'],
+      ['u59@x.com', 'v301_2'],
+      ['', ''],
+    ]
+  );
+  f.undo();
+  assert.deepEqual(f.cellState(f.sheet, 1, 1, 301, 10), before);
+  // The highlight rule covers every data row, comparing each key with the whole column.
+  const reads2 = f.state.gets.length;
+  const marked = f.edit('highlight_duplicates', { keyColumns: [1], wholeSheet: true });
+  assert.equal(marked.range, 'A2:J301');
+  assert.equal(
+    marked.rule,
+    '=AND(IFERROR(LEN($A2)>0,FALSE),SUMPRODUCT(IFERROR(($A$2:$A$301=$A2)*1,0))>1)'
+  );
+  assert.deepEqual(f.requests()[0].addConditionalFormatRule.rule.ranges, [
+    gridOf(f.sheet, 1, 301, 0, 10),
+  ]);
+  assert.ok(
+    f.state.gets
+      .slice(reads2)
+      .every((get) => !(get.options.ranges || []).includes("'Output'!A2:J301")),
+    'a highlight reads no table cells'
+  );
+  f.undo();
+  for (const [action, extra, message] of [
+    ['remove_duplicates', { keyColumns: [11] }, /Key column must be between 1 and 10/],
+    ['highlight_duplicates', { wholeSheet: 'yes' }, /wholeSheet must be true or false/],
+    [
+      'remove_duplicates',
+      { keyColumns: [2] },
+      /No duplicate rows in Output!A2:J301 \(the whole tab\)/,
+    ],
+  ])
+    assert.throws(
+      () => f.edit(action, { wholeSheet: extra.wholeSheet ?? true, ...extra }, f.inspect('A1:B2')),
+      message,
+      JSON.stringify(extra)
+    );
+  // A table larger than undo keeps (50,000 cells) is refused whole rather than changed for good.
+  f.sheet.maxColumns = 200;
+  f.setCell(f.sheet, 301, 200, 'far');
+  for (const action of ['remove_duplicates', 'highlight_duplicates'])
+    assert.throws(
+      () => f.edit(action, { keyColumns: [1], wholeSheet: true }, f.inspect('A1:B2')),
+      /The data of tab "Output" spans more than 50,000 cells/
+    );
+  // A tab holding only its header has no rows to compare.
+  const g = fixture();
+  g.column(g.sheet, 1, ['Email']);
+  assert.throws(
+    () => g.edit('remove_duplicates', { wholeSheet: true }, g.inspect('A1')),
+    /The data of tab "Output" must include a data row below its header/
+  );
 });
 
 test('trim_whitespace trims text only where needed and undo restores it', () => {
@@ -770,7 +923,7 @@ test('data_validation sets dropdowns, checkboxes and number or date rules, clear
       {
         condition: {
           type: 'NUMBER_BETWEEN',
-          values: [{ userEnteredValue: '1' }, { userEnteredValue: '10.5' }],
+          values: [{ userEnteredValue: '1' }, { userEnteredValue: '=10.5' }],
         },
         strict: true,
       },
@@ -778,7 +931,11 @@ test('data_validation sets dropdowns, checkboxes and number or date rules, clear
     [
       { type: 'date', condition: 'on_or_after', value: '2026-01-31' },
       {
-        condition: { type: 'DATE_ON_OR_AFTER', values: [{ userEnteredValue: '2026-01-31' }] },
+        // A DATE formula reads the same in every spreadsheet locale; text dates do not.
+        condition: {
+          type: 'DATE_ON_OR_AFTER',
+          values: [{ userEnteredValue: '=DATE(2026,1,31)' }],
+        },
         strict: true,
       },
     ],
@@ -819,6 +976,111 @@ test('data_validation sets dropdowns, checkboxes and number or date rules, clear
     [{ type: 'list', values: ['a'], extra: 1 }, /documented fields/],
   ])
     assert.throws(() => set(validation), message, JSON.stringify(validation));
+});
+
+test('data_validation sends decimal bounds as formulas, which read the same in every locale', () => {
+  // ConditionValue.userEnteredValue is parsed as typed: in a de_DE sheet '1.5' is no number.
+  const f = fixture();
+  const result = f.edit(
+    'data_validation',
+    { validation: { type: 'number', condition: 'between', value: 0.5, value2: '1.5' } },
+    f.inspect('A1:B2')
+  );
+  assert.deepEqual(f.requests()[0].setDataValidation.rule.condition, {
+    type: 'NUMBER_BETWEEN',
+    values: [{ userEnteredValue: '=0.5' }, { userEnteredValue: '=1.5' }],
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(plain(f.session.events.at(-1)).details.at(-1), {
+    label: 'Validation',
+    value: 'number between 0.5 and 1.5',
+  });
+  f.edit(
+    'data_validation',
+    { validation: { type: 'number', condition: 'gte', value: '-2' } },
+    f.inspect('A1:B2')
+  );
+  assert.deepEqual(f.requests()[0].setDataValidation.rule.condition.values, [
+    { userEnteredValue: '-2' },
+  ]);
+});
+
+test('data_validation and named_range take whole or open columns, which grow with the data', () => {
+  const f = fixture();
+  const lists = f.book.insertSheet('Lists');
+  for (const [source, reference] of [
+    ["'Lists'!A:A", "='Lists'!A:A"],
+    ['Lists!A2:A', "='Lists'!A2:A"],
+    ["'Lists'!a2:b", "='Lists'!A2:B"],
+  ]) {
+    f.edit('data_validation', { validation: { type: 'range', source } }, f.inspect('A1:B2'));
+    assert.deepEqual(
+      f.requests()[0].setDataValidation.rule.condition,
+      { type: 'ONE_OF_RANGE', values: [{ userEnteredValue: reference }] },
+      source
+    );
+  }
+  const added = f.tabAction('named_range', {
+    namedRange: { operation: 'add', name: 'Spend', range: "'Output'!C2:C" },
+  });
+  assert.equal(added.refersTo, "'Output'!C2:C");
+  const id = f.requests()[0].addNamedRange.namedRange.namedRangeId;
+  assert.deepEqual(f.requests()[0].addNamedRange.namedRange.range, {
+    sheetId: f.sheet.id,
+    startRowIndex: 1,
+    startColumnIndex: 2,
+    endColumnIndex: 3,
+  });
+  const moved = f.tabAction('named_range', {
+    namedRange: { operation: 'update', name: 'Spend', range: 'Lists!B:B' },
+  });
+  assert.equal(moved.refersTo, "'Lists'!B:B");
+  assert.deepEqual(f.requests()[0].updateNamedRange.namedRange.range, {
+    sheetId: lists.id,
+    startColumnIndex: 1,
+    endColumnIndex: 2,
+  });
+  const renamed = f.tabAction('named_range', {
+    namedRange: { operation: 'update', name: 'Spend', newName: 'Cost' },
+  });
+  assert.equal(renamed.refersTo, "'Lists'!B:B");
+  f.undo();
+  f.undo();
+  assert.equal(f.namedRanges()[0].namedRangeId, id);
+  assert.equal(f.namedRanges()[0].range.endRowIndex, undefined, 'still open after undo');
+  // Open ranges still start inside the grid, and a destination stays one bounded place.
+  for (const [call, message] of [
+    [
+      () =>
+        f.edit(
+          'data_validation',
+          { validation: { type: 'range', source: "'Lists'!A:" } },
+          f.inspect('A1:B2')
+        ),
+      /source must be an A1 cell or range such as B2, 'Tab name'!A1:C9 or 'Tab name'!A:A/,
+    ],
+    [
+      () =>
+        f.edit(
+          'data_validation',
+          { validation: { type: 'range', source: "'Lists'!B:A" } },
+          f.inspect('A1:B2')
+        ),
+      /must run forward and fit inside the existing sheet grid/,
+    ],
+    [
+      () =>
+        f.tabAction('named_range', {
+          namedRange: { operation: 'add', name: 'Far', range: "'Lists'!A99999:A" },
+        }),
+      /must run forward and fit inside the existing sheet grid/,
+    ],
+    [
+      () => f.edit('copy_range', { destination: 'Lists!A:A' }, f.inspect('A1:B2')),
+      /destination must be an A1 cell or range such as B2 or 'Tab name'!A1:C9/,
+    ],
+  ])
+    assert.throws(call, message);
 });
 
 test('set_notes and set_links write notes and https links only, and undo restores the cells', () => {

@@ -62,23 +62,46 @@ function dmvChatPivotColumn_(column, width) {
   return column - 1;
 }
 
-// Every source column needs a distinct, nonempty text header.
-function dmvChatPivotHeaders_(source, area) {
-  var headers = source.getRange(area.row, area.column, 1, area.columns).getValues()[0];
+// The source headers as text: a number as it is written, a date as YYYY-MM-DD in the spreadsheet's
+// time zone. Columns the pivot does not use may have any header, even none.
+function dmvChatPivotHeaders_(session, source, area) {
+  var timezone = null;
+  return source
+    .getRange(area.row, area.column, 1, area.columns)
+    .getValues()[0]
+    .map(function (header) {
+      if (Object.prototype.toString.call(header) !== '[object Date]') return String(header);
+      if (!timezone) timezone = session.spreadsheet.getSpreadsheetTimeZone();
+      return Utilities.formatDate(header, timezone, 'yyyy-MM-dd');
+    });
+}
+
+// Each column a group, value or filter uses (objects with sourceColumnOffset or
+// columnOffsetIndex) needs a distinct, nonempty header, so the pivot and its result name it.
+function dmvChatPivotNamed_(headers, used) {
   var names = Object.create(null);
-  headers.forEach(function (header) {
-    if (
-      typeof header !== 'string' ||
-      !header.trim() ||
-      header.length > 200 ||
-      names[header.trim().toLowerCase()]
-    )
+  used.forEach(function (item) {
+    var offset =
+        item.sourceColumnOffset !== undefined ? item.sourceColumnOffset : item.columnOffsetIndex,
+      header = headers[offset],
+      key = header.trim().toLowerCase();
+    var problem = !key
+      ? 'has no header'
+      : header.length > 200
+        ? 'has a header longer than 200 characters'
+        : key in names && names[key] !== offset
+          ? 'has the same header as column ' + (names[key] + 1)
+          : '';
+    if (problem)
       throw new Error(
-        'Each source column needs a distinct, nonempty text header of at most 200 characters.'
+        'Each source column the pivot uses needs a distinct, nonempty header of at most 200 characters; column ' +
+          (offset + 1) +
+          ' of the source range ' +
+          problem +
+          '.'
       );
-    names[header.trim().toLowerCase()] = true;
+    names[key] = offset;
   });
-  return headers;
 }
 
 // Row or column groups. extended allows the analyst options: order, sortByValue and quarters.
@@ -268,7 +291,7 @@ function dmvChatCreatePivot_(session, input) {
     )
       throw new Error('The pivot output tab already exists. Choose a new tab name.');
     var area = dmvChatPivotArea_(source, input.sourceRange);
-    var headers = dmvChatPivotHeaders_(source, area);
+    var headers = dmvChatPivotHeaders_(session, source, area);
     var grouped = Object.create(null);
     var rows = dmvChatPivotGroups_(input.rows, area.columns, grouped, true, false);
     var columns = dmvChatPivotGroups_(
@@ -292,6 +315,7 @@ function dmvChatCreatePivot_(session, input) {
       selectedValues[key] = true;
       return { sourceColumnOffset: offset, summarizeFunction: value.summarize };
     });
+    dmvChatPivotNamed_(headers, rows.concat(columns, values));
     // Empty future rows remain part of the native source range.
     var data = dmvChatPivotReader_(session, source, area);
     var numeric = values.filter(function (value) {
@@ -502,8 +526,11 @@ function dmvChatPivotTotals_(input, rows, columns, values, mixed, headers) {
   return withheld;
 }
 
-// filterSpecs from { column, values } or { column, condition }. In a text column a value no
-// cell holds would quietly empty the pivot, so it is refused.
+// filterSpecs from { column, values } or { column, condition }. A value no text cell holds would
+// quietly empty the pivot, so it is refused: a pivot lists number and date cells as it displays
+// them ('8/1/2026', '1,000'), which only a condition filter matches reliably. A condition shows
+// every value meeting it only with visibleByDefault; otherwise a value must also be listed in
+// visibleValues, and none is.
 function dmvChatPivotFilters_(filters, area, headers, data) {
   if (filters === undefined) filters = [];
   if (!Array.isArray(filters) || filters.length > DMV_CHAT_PIVOT.maxFilters)
@@ -521,6 +548,7 @@ function dmvChatPivotFilters_(filters, area, headers, data) {
         columnOffsetIndex: offset,
         filterCriteria: {
           condition: dmvChatSheetCondition_(filter.condition, { formatting: false }),
+          visibleByDefault: true,
         },
       };
     if (
@@ -537,28 +565,30 @@ function dmvChatPivotFilters_(filters, area, headers, data) {
         );
       return value;
     });
-    var cells = data(offset).filter(dmvChatPivotFilled_);
-    if (
-      cells.length &&
-      cells.every(function (entry) {
-        return typeof entry === 'string';
-      })
-    ) {
-      var present = Object.create(null);
-      cells.forEach(function (entry) {
-        present[entry] = true;
-      });
-      shown.forEach(function (value) {
-        if (!present[value])
-          throw new Error(
-            'No cell under "' +
+    var present = Object.create(null),
+      other = false;
+    data(offset).forEach(function (entry) {
+      if (typeof entry === 'string') present[entry] = true;
+      else if (dmvChatPivotFilled_(entry)) other = true;
+    });
+    shown.forEach(function (value) {
+      if (present[value]) return;
+      throw new Error(
+        other
+          ? 'No text cell under "' +
+              headers[offset] +
+              '" is exactly "' +
+              value.slice(0, 100) +
+              '", and "' +
+              headers[offset] +
+              '" holds numbers or dates, which a pivot lists as it displays them. Use a condition filter such as number_eq, number_between, date_eq, date_after or date_before.'
+          : 'No cell under "' +
               headers[offset] +
               '" is exactly "' +
               value.slice(0, 100) +
               '". Filter values match the cells exactly, including case.'
-          );
-      });
-    }
+      );
+    });
     return { columnOffsetIndex: offset, filterCriteria: { visibleValues: shown } };
   });
 }
@@ -618,7 +648,7 @@ function dmvChatPivotPlan_(session, input) {
       'The pivot output tab already exists. Choose a new tab name, or give targetCell to place the pivot on that tab.'
     );
   var area = dmvChatPivotArea_(source, input.sourceRange);
-  var headers = dmvChatPivotHeaders_(source, area);
+  var headers = dmvChatPivotHeaders_(session, source, area);
   var used = Object.create(null);
   var rows = dmvChatPivotGroups_(input.rows, area.columns, used, true, true);
   var columns = dmvChatPivotGroups_(
@@ -638,13 +668,14 @@ function dmvChatPivotPlan_(session, input) {
     group.valueBucket = { valuesIndex: index - 1 };
   });
   var data = dmvChatPivotReader_(session, source, area);
+  var filterSpecs = dmvChatPivotFilters_(input.filters, area, headers, data);
+  dmvChatPivotNamed_(headers, rows.concat(columns, values, filterSpecs));
   var numeric = values.filter(function (value) {
     return DMV_CHAT_PIVOT.numeric.indexOf(value.summarizeFunction) >= 0;
   });
   dmvChatPivotCheckTypes_(data, numeric, rows.concat(columns));
   var mixed = dmvChatPivotCurrencies_(headers, numeric, used, data);
   var withheld = dmvChatPivotTotals_(input, rows, columns, values, mixed, headers);
-  var filterSpecs = dmvChatPivotFilters_(input.filters, area, headers, data);
   // Row groups are only read when a placed pivot or subtotals need their size.
   var labels = Object.create(null);
   var down =
@@ -988,7 +1019,8 @@ function dmvChatPivotTools_() {
                   type: 'array',
                   maxItems: 100,
                   items: { type: 'string' },
-                  description: 'Show only rows whose cell is exactly one of these.',
+                  description:
+                    'Show only rows whose text cell is exactly one of these. Filter numbers and dates with a condition.',
                 },
                 condition: dmvChatSheetConditionSchema_(false),
               },

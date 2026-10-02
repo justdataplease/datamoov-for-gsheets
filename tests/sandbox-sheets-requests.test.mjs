@@ -447,6 +447,28 @@ test('a pivot table written through updateCells is checked, kept and read back l
   assert.deepEqual(f.meta(pivots, 1, 1), {}, 'an update without a pivot removes it');
 });
 
+test('smart chips read back with their plain runs, write only as chips and go when a value is written', () => {
+  const f = fixture(), sheet = f.sheet;
+  const person = { personProperties: { email: 'ana@example.com' } };
+  const write = (value, fields = 'userEnteredValue,chipRuns') =>
+    f.batch([{ updateCells: { range: f.grid(sheet, 0, 1, 0, 1), rows: [{ values: [value] }], fields } }]);
+  write({ userEnteredValue: { stringValue: 'Owner @ today' }, chipRuns: [{ startIndex: 6, chip: person }] });
+  const read = () => f.get({ ranges: ['Output!A1'], fields: 'sheets.data.rowData.values(userEnteredValue,chipRuns)' })
+    .sheets[0].data[0].rowData[0].values[0];
+  // Reads include the runs without a chip, with an empty chip.
+  assert.deepEqual(read().chipRuns, [{ chip: {} }, { startIndex: 6, chip: person }, { startIndex: 7, chip: {} }]);
+  for (const [runs, message] of [
+    [[{ startIndex: 0, chip: {} }], /A chip run needs a person or a rich link chip/],
+    [[{ startIndex: 0, chip: person }], /A chip run must start at an @ placeholder/],
+    [[{ startIndex: 6, chip: { richLinkProperties: { uri: 'https://www.youtube.com/watch?v=x' } } }], /Only Drive files can be written as chips/],
+  ]) assert.throws(() => write({ userEnteredValue: { stringValue: 'Owner @ today' }, chipRuns: runs }), message);
+  write({ userEnteredValue: { stringValue: 'Owner @ today' }, chipRuns: [{ startIndex: 6, chip: { richLinkProperties: { uri: 'https://docs.google.com/document/d/abc/edit' } } }] });
+  assert.equal(read().chipRuns.length, 3, 'a Drive file is written as a chip');
+  // Writing a new userEnteredValue erases the runs.
+  write({ userEnteredValue: { stringValue: 'Owner @ today' } }, 'userEnteredValue');
+  assert.equal(read().chipRuns, undefined);
+});
+
 test('formula errors read back with their type and Sheets message; values and formats read back typed', () => {
   const f = fixture(), sheet = f.sheet;
   f.setError(sheet, 1, 1, { type: 'REF', message: 'Reference does not exist.' }, "=VLOOKUP(A2,'Old'!A:B,2,FALSE)");
@@ -515,4 +537,35 @@ test('one invalid request fails the whole batch and nothing earlier in it is app
   assert.deepEqual(f.get({ includeGridData: true }), before);
   assert.deepEqual([f.value(sheet, 1, 1), f.formula(sheet, 1, 2), sheet.maxRows, f.namedRanges(), f.conditionalFormats(sheet), f.groups(sheet)],
     [' keep ', '=A1', 100, [], [], []]);
+});
+
+test('developer metadata on a tab is created, read back by field mask, deleted by lookup and goes with its tab', () => {
+  for (const settings of [{ gridData: true }, {}]) {
+    const f = fixture(settings), sheet = f.sheet;
+    const other = f.book.insertSheet('Other');
+    const create = (sheetId, metadataValue, extra = {}) =>
+      ({ createDeveloperMetadata: { developerMetadata: { metadataKey: 'k', metadataValue, location: { sheetId }, visibility: 'PROJECT', ...extra } } });
+    assert.deepEqual(f.batch([create(sheet.id, 'one'), create(other.id, 'two')]).replies.map((reply) => reply.createDeveloperMetadata.developerMetadata),
+      [{ metadataId: 1, metadataKey: 'k', metadataValue: 'one', location: { locationType: 'SHEET', sheetId: sheet.id }, visibility: 'PROJECT' },
+        { metadataId: 2, metadataKey: 'k', metadataValue: 'two', location: { locationType: 'SHEET', sheetId: other.id }, visibility: 'PROJECT' }]);
+    const read = () => f.get({ fields: 'sheets(properties.sheetId,developerMetadata(metadataId,metadataValue))' }).sheets
+      .map((item) => (item.developerMetadata || []).map((metadata) => metadata.metadataValue));
+    assert.deepEqual(read(), [['one'], ['two']]);
+    assert.equal(f.get({ fields: 'sheets.properties' }).sheets[0].developerMetadata, undefined, 'only when the mask asks');
+    assert.throws(() => f.batch([create(sheet.id, 'x', { visibility: undefined })]), /requests\[0\]\.createDeveloperMetadata: Invalid visibility/);
+    assert.throws(() => f.batch([create(sheet.id, 'x', { metadataId: 1 })]), /duplicate metadata ID 1/);
+    assert.throws(() => f.batch([create(sheet.id, 'x'.repeat(30000))]), /at most 30,000 characters/);
+    const deleted = f.batch([{ deleteDeveloperMetadata: { dataFilter: { developerMetadataLookup: { metadataId: 1 } } } }]);
+    assert.deepEqual(deleted.replies[0].deleteDeveloperMetadata.deletedDeveloperMetadata.map((item) => item.metadataId), [1]);
+    assert.deepEqual(read(), [[], ['two']]);
+    f.batch([{ deleteSheet: { sheetId: other.id } }]);
+    assert.deepEqual(read(), [[]], 'metadata on a tab is deleted with it');
+  }
+});
+
+test('getSheetByName finds a tab without regard to case, as Apps Script does', () => {
+  const f = fixture();
+  assert.equal(f.book.getSheetByName('output'), f.sheet);
+  assert.equal(f.book.getSheetByName('OUTPUT'), f.sheet);
+  assert.equal(f.book.getSheetByName('Outputs'), null);
 });

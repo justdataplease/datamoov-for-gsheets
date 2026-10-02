@@ -167,3 +167,26 @@ test('answers without a valid confirmation keep the ordinary option chips', asyn
   await expect(page.locator('#chat-working')).toBeHidden();
   await expect(page.locator('.chat-message.assistant').last()).toContainText('Done.');
 });
+
+test('every message of a conversation carries its id, and New chat starts another', async ({
+  page,
+}) => {
+  await configuredChat(page);
+  await controlledChat(page);
+  await ask(page, 'Clean this export', question('Delete these rows?', [TOKEN], null));
+  await page.locator('.chat-confirm .chip', { hasText: 'Yes' }).click();
+  await page.waitForFunction(() => window.chatProbe.chats.length === 2);
+  await page.evaluate(() =>
+    window.chatProbe.chats[1].succeed({ text: 'Deleted.', events: [], transcriptAppend: [] })
+  );
+  await expect(page.locator('#chat-working')).toBeHidden();
+  await page.locator('#chat-new').click();
+  await ask(page, 'Start over', { text: 'Sure.', events: [], transcriptAppend: [] });
+  const ids = await page.evaluate(() =>
+    window.chatProbe.chats.map((chat) => chat.input.conversationId)
+  );
+  expect(ids[0]).toMatch(/^[A-Za-z0-9][A-Za-z0-9-]{31,79}$/);
+  expect(ids[1]).toBe(ids[0]);
+  expect(ids[2]).toMatch(/^[A-Za-z0-9][A-Za-z0-9-]{31,79}$/);
+  expect(ids[2]).not.toBe(ids[0]);
+});

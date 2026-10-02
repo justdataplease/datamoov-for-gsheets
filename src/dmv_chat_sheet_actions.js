@@ -19,7 +19,12 @@
        guard      more GridRanges to guard; a missing end index means the rest of the tab, so
                   { sheetId } guards a whole tab and { sheetId, startRowIndex: 9 } every row
                   from row 10 (what an insert or delete there moves)
-       overwrite  true when touches are replaced: more than 200 non-empty cells asks first
+       overwrite  true when touches are replaced: more than 200 non-empty cells asks first,
+                  counting the earlier edits of the request
+       replaced   for an action that counts what it replaces itself: that count, which joins
+                  the request's total the same way (without confirm, passing 200 asks; with
+                  confirm, the summary names the count once it passes 200 alone, and the yes
+                  covers it)
        confirm    a summary that makes the user confirm first (delete, dedupe, whole-tab
                   find/replace)
        undo       omit for a cell snapshot of touches; null when there is nothing to restore
@@ -29,8 +34,15 @@
                   after checking that verify (in after-edit coordinates) is unchanged; rules
                   (a sheetId) also checks that tab's conditional format rules, for a reverse
                   that names a rule by its position; extent (a sheetId) also checks that the
-                  tab's data reaches as far as after the edit; named ({ id, name, after })
-                  checks a named range (dmvChatActionNamedUnchanged_); dims (sheetIds) adds
+                  tab's data reaches as far as after the edit and that its charts, filters,
+                  protected ranges and conditional formats are as the edit left them; named
+                  ({ id, name, after }) checks a named range (dmvChatActionNamedUnchanged_);
+                  restore ({ rules, named }) puts back, after the reverse, the conditional
+                  format rules of the rules tab (replacing those it holds then) and named
+                  ranges (as dmvChatActionNamedRanges_ lists them, each checked unchanged since
+                  the edit), as they were before the edit; after lists requests sent once the
+                  snapshot cells are back; note is what the undo result says undo could not put
+                  back; dims (sheetIds) adds
                   tabs to the row and column check below for a reverse with no cells; delete_sheet
                   puts dmvChatUndoSheetCopy_(session, sheet).requests before its deleteSheet
                   and uses its undo. Undo also refuses once rows or columns of the tabs of
@@ -43,13 +55,26 @@
    dmvChatConfirmFind_, dmvChatConfirmIssue_ and dmvChatConfirmSpend_.
 
    Range actions work on the inspected range (at most 1,000 cells, 200 rows and 30 columns), so
-   the model has read what it changes; find_replace can widen to the tab's data (at most 50,000
-   cells, always asked first). Row and column actions take start and count on a tab: at most 500
+   the model has read what it changes; find_replace, remove_duplicates and highlight_duplicates
+   can widen to the tab's data (at most 50,000 cells, what undo keeps; a replace or removal there
+   is always asked first). Row and column actions take start and count on a tab: at most 500
    inserted or deleted per call, deletions always asked first. */
 var DMV_SHEET_ACTIONS = {
   dimensionCount: 500,
   findCells: 50000,
   regexText: 5000,
+  // Characters on which find_replace's ., $, \s and \b mean different things in JavaScript, Java
+  // and RE2: line ends (Java's . also stops at U+0085, and its $ matches before a last line end),
+  // spaces only some count in \s, and letters and digits beyond A to Z, which Java's \b counts
+  // as word characters.
+  regexUnsure: {
+    dot: '[\\r\\u0085\\u2028\\u2029]',
+    end: '[\\n\\r\\u0085\\u2028\\u2029]',
+    space: '[\\v\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]',
+    word: '(?![\\x00-\\x7f])[\\p{L}\\p{Nd}\\p{Mn}]',
+  },
+  // The separators split_columns auto looks for, in order; the first any cell holds is used.
+  autoDelimiters: [',', ';', '\t', '|', ' '],
   listValues: 500,
   paste: {
     all: 'PASTE_NORMAL',
@@ -137,11 +162,11 @@ function dmvChatSheetActions_() {
       plan: dmvChatActionFindReplace_,
     },
     remove_duplicates: {
-      fields: ['keyColumns', 'keep', 'headerRows'],
+      fields: ['keyColumns', 'keep', 'headerRows', 'wholeSheet'],
       plan: dmvChatActionRemoveDuplicates_,
     },
     highlight_duplicates: {
-      fields: ['keyColumns', 'headerRows', 'color'],
+      fields: ['keyColumns', 'headerRows', 'color', 'wholeSheet'],
       plan: dmvChatActionHighlightDuplicates_,
     },
     trim_whitespace: { plan: dmvChatActionTrim_ },
@@ -203,13 +228,14 @@ function dmvChatSheetActionSchema_() {
       useRegex: { type: 'boolean' },
       wholeSheet: {
         type: 'boolean',
-        description: "find_replace: search the whole tab's data, not just the inspected range.",
+        description:
+          "find_replace: search the whole tab's data, not just the inspected range. remove_/highlight_duplicates: compare the rows of the whole tab's data (from row 1, at most 50,000 cells), for tables larger than one inspection; never dedupe such a table range by range.",
       },
       keyColumns: {
         type: 'array',
         items: { type: 'integer', minimum: 1 },
         description:
-          'remove_/highlight_duplicates: one-based columns within the range that must match; default all.',
+          'remove_/highlight_duplicates: one-based columns within the range (with wholeSheet, of the tab: A=1) that must match; default all.',
       },
       keep: { type: 'string', enum: ['first', 'last'] },
       color: { type: 'string', description: 'highlight_duplicates background, #RRGGBB.' },
@@ -226,7 +252,10 @@ function dmvChatSheetActionSchema_() {
             enum: ['list', 'range', 'checkbox', 'number', 'date', 'clear'],
           },
           values: { type: 'array', items: text(), description: 'list: the dropdown values.' },
-          source: { type: 'string', description: "range: the dropdown cells, 'Tab'!A2:A20." },
+          source: {
+            type: 'string',
+            description: "range: the dropdown cells, 'Tab'!A2:A20, or 'Tab'!A2:A to the last row.",
+          },
           condition: {
             type: 'string',
             enum: [
@@ -276,7 +305,10 @@ function dmvChatSheetActionSchema_() {
           operation: { type: 'string', enum: ['add', 'update', 'delete'] },
           name: text(),
           newName: text(),
-          range: { type: 'string', description: "'Tab'!A1:B9 (add, or update to move it)." },
+          range: {
+            type: 'string',
+            description: "'Tab'!A1:B9 or 'Tab'!A2:A to the last row (add, or update to move it).",
+          },
         },
         required: ['operation', 'name'],
       },
@@ -305,18 +337,31 @@ function dmvChatActionNoun_(dimension, count) {
 }
 
 // "B2", "Tab!B2:C9" or "'Tab name'!B2:C9" as { sheet, grid, a1, rows, columns }: a bounded range
-// inside the tab's grid. Without a tab name the range is on defaultSheet, when one is given.
-function dmvChatActionA1_(session, text, defaultSheet, label) {
-  var usage = label + " must be an A1 cell or range such as B2 or 'Tab name'!A1:C9.";
+// inside the tab's grid. Without a tab name the range is on defaultSheet, when one is given. open
+// also takes columns to the last row (A2:A) or whole columns (A:A), as { sheet, grid, a1 }, for
+// the inputs that should grow with the data: dropdown sources and named ranges.
+function dmvChatActionA1_(session, text, defaultSheet, label, open) {
+  var usage =
+    label +
+    (open
+      ? " must be an A1 cell or range such as B2, 'Tab name'!A1:C9 or 'Tab name'!A:A."
+      : " must be an A1 cell or range such as B2 or 'Tab name'!A1:C9.");
   if (typeof text !== 'string' || text.length > 200) throw new Error(usage);
   var match =
-    /^(?:'((?:[^']|'')+)'!|([^'!]+)!)?([A-Za-z]{1,3}[1-9][0-9]{0,6}(?::[A-Za-z]{1,3}[1-9][0-9]{0,6})?)$/.exec(
+    /^(?:'((?:[^']|'')+)'!|([^'!]+)!)?([A-Za-z]{1,3}[0-9]{0,7}(?::[A-Za-z]{1,3}[0-9]{0,7})?)$/.exec(
       text.trim()
     );
-  if (!match) throw new Error(usage);
+  var bounded =
+    match && /^[A-Za-z]{1,3}[1-9][0-9]{0,6}(?::[A-Za-z]{1,3}[1-9][0-9]{0,6})?$/.test(match[3]);
+  if (!match || (!bounded && !open)) throw new Error(usage);
   var name = match[1] !== undefined ? match[1].replace(/''/g, "'") : match[2];
   var sheet = name !== undefined ? dmvChatSheetTarget_(session, name) : defaultSheet;
   if (!sheet) throw new Error(label + " must name its tab, such as 'Tab name'!A1:C9.");
+  if (!bounded) {
+    var range = dmvChatSheetOpenRange_(sheet, match[3]);
+    if (!range) throw new Error(usage);
+    return { sheet: sheet, grid: range.grid, a1: range.a1 };
+  }
   var parts = match[3].toUpperCase().split(':'),
     start = dmvCell_(parts[0]),
     end = dmvCell_(parts[1] || parts[0]);
@@ -352,20 +397,71 @@ function dmvChatActionUsed_(sheet) {
   };
 }
 
-// The inspected range without its header rows (0 or 1, default 1, as for sort).
+// The rows remove_ and highlight_duplicates compare: the inspected range or, with wholeSheet, the
+// tab's data (at most the 50,000 cells undo keeps), without its header rows (0 or 1, default 1,
+// as for sort). keys are the one-based key columns within it and letters their column letters;
+// cells holds the inspected rows, or null for the whole tab, whose cells are not read here.
 function dmvChatActionBody_(context) {
   var input = context.input,
-    area = context.area;
+    sheet = context.sheet,
+    whole = dmvChatActionFlag_(input, 'wholeSheet'),
+    area = whole ? dmvChatActionUsed_(sheet) : context.area.grid;
   var headers = dmvChatSheetInteger_(
     input.headerRows === undefined ? 1 : input.headerRows,
     0,
     1,
     'Header rows'
   );
-  if (headers >= area.rows) throw new Error('The range must include a data row below its header.');
-  var grid = Object.assign({}, area.grid);
+  if (whole && dmvChatGridCells_(area) > DMV_SHEET_UNDO.maxCells)
+    throw new Error(
+      'The data of tab "' +
+        sheet.getName() +
+        '" spans more than 50,000 cells, more than chat can compare and undo in one edit; Sheets\' Data > Data cleanup can remove duplicates by hand.'
+    );
+  if (headers >= area.endRowIndex - area.startRowIndex)
+    throw new Error(
+      whole
+        ? 'The data of tab "' + sheet.getName() + '" must include a data row below its header.'
+        : 'The range must include a data row below its header.'
+    );
+  var grid = Object.assign({}, area);
   grid.startRowIndex += headers;
-  return { grid: grid, headers: headers, cells: context.snapshot.cells.slice(headers) };
+  var keys = dmvChatActionKeyColumns_(input, area.endColumnIndex - area.startColumnIndex);
+  return {
+    grid: grid,
+    headers: headers,
+    whole: whole,
+    keys: keys,
+    letters: keys.map(function (column) {
+      return dmvChatActionColumn_(area.startColumnIndex + column);
+    }),
+    cells: whole ? null : context.snapshot.cells.slice(headers),
+    where: sheet.getName() + '!' + dmvChatGridA1_(grid) + (whole ? ' (the whole tab)' : ''),
+  };
+}
+
+// The key cells of each compared row, in key order. For the whole tab only the key columns are
+// read, each by its value, unless the rows were read in full already.
+function dmvChatActionKeyRows_(session, body) {
+  if (body.cells)
+    return body.cells.map(function (row) {
+      return body.keys.map(function (column) {
+        return row[column - 1];
+      });
+    });
+  var columns = dmvChatSheetCells_(
+    session,
+    body.keys.map(function (column) {
+      var index = body.grid.startColumnIndex + column - 1;
+      return Object.assign({}, body.grid, { startColumnIndex: index, endColumnIndex: index + 1 });
+    }),
+    'userEnteredValue,effectiveValue'
+  );
+  return Array.from({ length: body.grid.endRowIndex - body.grid.startRowIndex }, function (_, r) {
+    return columns.map(function (read) {
+      return read.cells[r][0];
+    });
+  });
 }
 
 // One-based columns within the range, sorted and unique; all of them when none are given.
@@ -404,34 +500,98 @@ function dmvChatActionHasFormula_(cells) {
   });
 }
 
-// A saved report or dashboard that writes to this tab, by kind, or ''.
-function dmvChatActionTabUser_(session, sheet) {
-  var name = sheet.getName();
-  if (
-    dmvList_('dashboard').some(function (dashboard) {
-      return (
-        dashboard.spreadsheetId === session.spreadsheetId &&
-        [dashboard.target, dashboard.dataTarget]
-          .concat(dashboard.outputs || [])
-          .concat(dashboard.plan ? [{ sheetName: dmvDashboardChartTab_(dashboard.target) }] : [])
-          .some(function (target) {
-            return target && target.sheetName === name;
-          })
-      );
-    })
-  )
-    return 'dashboard';
-  if (
-    dmvList_('report').some(function (report) {
-      return (
-        report.spreadsheetId === session.spreadsheetId &&
-        report.target &&
-        report.target.sheetName === name
-      );
-    })
-  )
-    return 'report';
-  return '';
+// What refers to this tab by its sheet id and so stays broken once it is deleted, even after undo
+// brings back its copy under a new id: pivot tables and charts on other tabs, and named ranges.
+// One phrase, such as 'the pivot table at Pivots!A1 and the named range Targets', or ''; it names
+// at most three, with names cut short, so the question stays within what the sidebar shows.
+// Pivot tables sit in cells, so they are looked for in the data of the other tabs but hidden undo
+// copies up to the search_sheets cell cap; the phrase names the tabs left out for it.
+function dmvChatActionTabDependents_(session, sheet) {
+  var id = sheet.getSheetId(),
+    pivots = [],
+    charts = [],
+    named = [];
+  // True when value holds a GridRange on this tab; the API leaves out a sheetId of 0.
+  function uses(value) {
+    if (!value || typeof value !== 'object') return false;
+    if (
+      ['sheetId', 'startRowIndex', 'endRowIndex', 'startColumnIndex', 'endColumnIndex'].some(
+        function (key) {
+          return value[key] !== undefined;
+        }
+      )
+    )
+      return (value.sheetId || 0) === id;
+    return Object.keys(value).some(function (key) {
+      return uses(value[key]);
+    });
+  }
+  dmvChatSheetDeadline_(session);
+  var result = Sheets.Spreadsheets.get(session.spreadsheetId, {
+    fields: 'namedRanges(name,range),sheets(properties(sheetId,title),charts(spec))',
+  });
+  ((result && result.sheets) || []).forEach(function (entry) {
+    var tab = String((entry.properties || {}).title).slice(0, 40);
+    if ((entry.properties || {}).sheetId === id) return;
+    (entry.charts || []).forEach(function (chart) {
+      if (!uses(chart.spec)) return;
+      var title = String((chart.spec && chart.spec.title) || '').slice(0, 40);
+      charts.push((title ? 'the chart "' + title + '"' : 'a chart') + ' on ' + tab);
+    });
+  });
+  ((result && result.namedRanges) || []).forEach(function (item) {
+    if (item.range && (item.range.sheetId || 0) === id)
+      named.push('the named range ' + String(item.name).slice(0, 40));
+  });
+  var others = session.spreadsheet.getSheets().filter(function (item) {
+      return item.getSheetId() !== id && !dmvChatUndoCopy_(item);
+    }),
+    planned = { plan: [], skipped: [] };
+  try {
+    if (others.length) planned = dmvChatSearchPlan_(others, {});
+  } catch (tooLarge) {
+    planned.skipped = others.map(function (item) {
+      return { sheetName: item.getName() };
+    });
+  }
+  if (planned.plan.length)
+    dmvChatSearchRead_(
+      session,
+      planned.plan,
+      function (number, row, column, cell) {
+        if (cell.pivotTable && uses(cell.pivotTable.source))
+          pivots.push(
+            'the pivot table at ' +
+              planned.plan[number].sheet.getName().slice(0, 40) +
+              '!' +
+              dmvChatA1_(row + 1, column + 1)
+          );
+      },
+      'pivotTable(source)'
+    );
+  var phrase = dmvChatActionListed_(pivots.concat(charts, named));
+  if (!planned.skipped.length) return phrase;
+  return (
+    (phrase ? phrase + ', and ' : '') +
+    'any pivot tables on ' +
+    dmvChatActionListed_(
+      planned.skipped.map(function (item) {
+        return String(item.sheetName).slice(0, 40);
+      })
+    ) +
+    ' built on it, which chat could not check (too many cells)'
+  );
+}
+
+// The first three items as one phrase, such as 'A1, B2 and 4 more', or '' for none. total counts
+// them all when items holds only the first ones.
+function dmvChatActionListed_(items, total) {
+  var shown = items.slice(0, 3),
+    more = (total === undefined ? items.length : total) - shown.length;
+  if (more > 0) shown.push(more + ' more');
+  return shown.length > 1
+    ? shown.slice(0, -1).join(', ') + ' and ' + shown[shown.length - 1]
+    : shown.join('');
 }
 
 /* Copy and move */
@@ -514,6 +674,8 @@ function dmvChatActionPaste_(context, move) {
     ];
     plan.touches = [destination];
     plan.overwrite = true;
+    if (type === 'all' || type === 'formats')
+      plan.undo = dmvChatActionCopyUndo_(context.session, area.grid, destination, type === 'all');
     return plan;
   }
   // A move empties the source, so only destination cells outside it count as replaced.
@@ -526,7 +688,7 @@ function dmvChatActionPaste_(context, move) {
         top + r < area.grid.endRowIndex &&
         left + c >= area.grid.startColumnIndex &&
         left + c < area.grid.endColumnIndex;
-      if (!inside && cell.userEnteredValue && Object.keys(cell.userEnteredValue).length) replaced++;
+      if (!inside && dmvChatSheetNonEmpty_([[cell]])) replaced++;
     });
   });
   plan.requests = [
@@ -539,8 +701,28 @@ function dmvChatActionPaste_(context, move) {
     },
   ];
   plan.touches = [area.grid, destination];
+  plan.replaced = replaced;
+  var reasons = [];
   if (replaced > DMV_SHEET_UNDO.overwriteCells)
-    plan.confirm = 'Moving ' + from + ' replaces ' + replaced + ' non-empty cells in ' + to + '.';
+    reasons.push('Moving ' + from + ' replaces ' + replaced + ' non-empty cells in ' + to + '.');
+  // Sheets turns references to the cells a move pastes over into #REF!, which undo cannot repair,
+  // so a move over cells formulas use, or one chat could not fully check, always asks.
+  var referrers = dmvChatActionReferrers_(context.session, destination, area.grid);
+  if (referrers.count) {
+    reasons.push(
+      'Formulas at ' +
+        dmvChatActionListed_(referrers.cells, referrers.count) +
+        ' refer to cells in ' +
+        to +
+        ' that this move pastes over; Sheets turns those references into #REF!, and undo does not repair them.'
+    );
+  } else if (referrers.unchecked)
+    reasons.push(
+      'Chat could not check every formula of this spreadsheet for references to cells in ' +
+        to +
+        ' that this move pastes over (too many cells, or formulas it cannot read); any that refer to them will show #REF!, and undo does not repair them.'
+    );
+  if (reasons.length) plan.confirm = reasons.join(' ');
   // Undo moves the block back, so formulas that followed it follow it home, then restores both
   // areas as they were.
   plan.undo = {
@@ -560,7 +742,168 @@ function dmvChatActionPaste_(context, move) {
     ],
     verify: [area.grid, destination],
   };
+  if (referrers.count || referrers.unchecked)
+    plan.undo.note =
+      'The block is back where it was. Formulas that referred to cells the move pasted over still show #REF!; fix them by hand.';
   return plan;
+}
+
+// The undo of a copy of everything or of formats: besides the destination's cells, the copy
+// brings the source's conditional formats to the destination tab, and a copy of everything
+// (merges) its merges, replacing those it pastes over. When it does, undo puts the destination
+// tab's rules back as they are now (refusing once they changed since), and unmerges the
+// destination and merges again what was merged wholly inside it.
+function dmvChatActionCopyUndo_(session, source, destination, merges) {
+  dmvChatSheetDeadline_(session);
+  var result = Sheets.Spreadsheets.get(session.spreadsheetId, {
+    fields: 'sheets(properties(sheetId),conditionalFormats,merges)',
+  });
+  function tab(sheetId) {
+    return (
+      ((result && result.sheets) || []).filter(function (entry) {
+        return ((entry.properties && entry.properties.sheetId) || 0) === sheetId;
+      })[0] || {}
+    );
+  }
+  function overlapping(list, grid) {
+    return (list || []).filter(function (range) {
+      return dmvChatSheetRuleOverlap_(range, grid);
+    });
+  }
+  var from = tab(source.sheetId),
+    to = tab(destination.sheetId),
+    undo = { snapshot: [destination] };
+  if (
+    (from.conditionalFormats || []).some(function (rule) {
+      return overlapping(rule.ranges, source).length;
+    })
+  ) {
+    undo.rules = destination.sheetId;
+    undo.restore = { rules: to.conditionalFormats || [] };
+  }
+  var replaced = overlapping(to.merges, destination);
+  if (merges && (overlapping(from.merges, source).length || replaced.length))
+    undo.reverse = [{ unmergeCells: { range: destination } }].concat(
+      replaced
+        .filter(function (merge) {
+          return (
+            (merge.startRowIndex || 0) >= destination.startRowIndex &&
+            merge.endRowIndex <= destination.endRowIndex &&
+            (merge.startColumnIndex || 0) >= destination.startColumnIndex &&
+            merge.endColumnIndex <= destination.endColumnIndex
+          );
+        })
+        .map(function (merge) {
+          return { mergeCells: { range: merge, mergeType: 'MERGE_ALL' } };
+        })
+    );
+  return undo;
+}
+
+// The formulas that refer to cells of a move's destination outside its source (references to the
+// source follow the block), read from every tab but hidden undo copies up to the search_sheets
+// cell cap, as { count, cells (the first three, as 'Tab!B2'), unchecked }. unchecked is true when
+// tabs were left out for the cap, a formula that may name the destination's tab could not be
+// read, or one uses a table reference. Cells the move pastes over are left out, since their
+// formulas are replaced. References through named ranges are not followed.
+function dmvChatActionReferrers_(session, destination, source) {
+  var target = dmvChatSheetById_(session, destination.sheetId).getName().toLowerCase(),
+    found = { count: 0, cells: [], unchecked: false };
+  function within(grid, rows, columns) {
+    return (
+      grid.sheetId === destination.sheetId &&
+      rows[0] >= grid.startRowIndex &&
+      rows[1] <= grid.endRowIndex &&
+      columns[0] >= grid.startColumnIndex &&
+      columns[1] <= grid.endColumnIndex
+    );
+  }
+  // The part of the destination a reference covers, as 0-based end-exclusive [rows, columns], or
+  // null; an open side (A:A, 2:5, A2:A) runs to the end of the tab.
+  function covered(text) {
+    var ends = text
+      .replace(/\$/g, '')
+      .toUpperCase()
+      .split(':')
+      .map(function (part) {
+        var match = /^([A-Z]*)([0-9]*)$/.exec(part);
+        return {
+          row: match[2] ? Number(match[2]) : null,
+          column: match[1] ? dmvCell_(match[1] + '1').column : null,
+        };
+      });
+    var last = ends[ends.length - 1];
+    function side(low, high, start, end) {
+      var known = [low, high].filter(function (value) {
+        return value !== null;
+      });
+      var from = known.length ? Math.min.apply(null, known) - 1 : 0,
+        to = known.length === 2 ? Math.max(low, high) : Infinity;
+      return [Math.max(from, start), Math.min(to, end)];
+    }
+    var rows = side(ends[0].row, last.row, destination.startRowIndex, destination.endRowIndex),
+      columns = side(
+        ends[0].column,
+        last.column,
+        destination.startColumnIndex,
+        destination.endColumnIndex
+      );
+    return rows[0] < rows[1] && columns[0] < columns[1] ? [rows, columns] : null;
+  }
+  var sheets = session.spreadsheet.getSheets().filter(function (sheet) {
+    return !dmvChatUndoCopy_(sheet);
+  });
+  var planned;
+  try {
+    planned = dmvChatSearchPlan_(sheets, {});
+  } catch (tooLarge) {
+    found.unchecked = true;
+    return found;
+  }
+  found.unchecked = planned.skipped.length > 0;
+  dmvChatSearchRead_(
+    session,
+    planned.plan,
+    function (number, row, column, cell) {
+      var formula = cell.userEnteredValue && cell.userEnteredValue.formulaValue,
+        tab = planned.plan[number].sheet;
+      if (typeof formula !== 'string') return;
+      var at = tab.getSheetId() === destination.sheetId ? [row, row + 1] : null;
+      if (
+        at &&
+        within(destination, at, [column, column + 1]) &&
+        !within(source, at, [column, column + 1])
+      )
+        return;
+      var tokens;
+      try {
+        tokens = dmvChatFormulaTokens_(formula, function () {
+          throw new Error('unreadable');
+        });
+      } catch (unreadable) {
+        if (at || formula.toLowerCase().indexOf(target) >= 0) found.unchecked = true;
+        return;
+      }
+      var refers = tokens.some(function (token) {
+        if (token.type !== 'ref') return false;
+        // A table reference names no cells chat can place.
+        if (token.table) {
+          found.unchecked = true;
+          return false;
+        }
+        if ((token.sheet === null ? tab.getName() : token.sheet).toLowerCase() !== target)
+          return false;
+        var part = covered(token.text.slice(token.text.lastIndexOf('!') + 1));
+        return !!part && !within(source, part[0], part[1]);
+      });
+      if (!refers) return;
+      if (found.cells.length < 3)
+        found.cells.push(tab.getName().slice(0, 40) + '!' + dmvChatA1_(row + 1, column + 1));
+      found.count++;
+    },
+    'userEnteredValue'
+  );
+  return found;
 }
 
 /* Rows and columns */
@@ -717,17 +1060,8 @@ function dmvChatActionDelete_(context, dimension) {
     Math.max(0, span.startIndex - 1),
     Math.min(span.startIndex + 1, limit - count)
   );
-  return {
-    requests: [{ deleteDimension: { range: span } }],
-    touches: [],
-    guard: [dmvChatActionSpanGuard_(span)],
-    confirm:
-      'Delete ' +
-      label +
-      ' of tab "' +
-      sheet.getName() +
-      '", with everything in them? Formulas elsewhere that point at them will show #REF!.',
-    undo: {
+  var noun = dmvChatActionNoun_(dimension, 2),
+    undo = {
       snapshot: [removed],
       // Sheets refuses inheritFromBefore false when the rows go back at the end of the tab.
       reverse: [
@@ -739,11 +1073,93 @@ function dmvChatActionDelete_(context, dimension) {
         },
       ],
       verify: [seam],
-    },
+      note:
+        'The ' +
+        noun +
+        ' are back. Formulas elsewhere that pointed at cells in them still show #REF!, and formulas, charts, pivot tables and filters whose ranges started or ended in them still leave them out; check those and fix them by hand.',
+    };
+  var pivots = dmvChatActionSpanUndo_(context.session, sheet, span, removed, undo);
+  return {
+    requests: [{ deleteDimension: { range: span } }],
+    touches: [],
+    guard: [dmvChatActionSpanGuard_(span)],
+    confirm:
+      'Delete ' +
+      label +
+      ' of tab "' +
+      sheet.getName() +
+      '", with everything in them' +
+      (pivots.length
+        ? ', including the pivot table' +
+          (pivots.length > 1 ? 's' : '') +
+          ' at ' +
+          dmvChatActionListed_(pivots)
+        : '') +
+      // Worded without promising undo, which can still be unavailable for its size.
+      '? Formulas elsewhere that point at them will show #REF!' +
+      (dmvChatGridCells_(removed) > DMV_SHEET_UNDO.maxCells
+        ? '.'
+        : ', and undoing the delete does not repair those formulas.'),
+    undo: undo,
     text: 'Deleted ' + label + ' of ' + sheet.getName(),
     details: [['Deleted', label]],
     result: { deleted: count, at: label },
   };
+}
+
+// Sheets moves conditional formats and named ranges that start or end in a deleted span, and
+// drops pivot tables anchored there; re-inserting the span does not bring them back. Adds to the
+// delete's undo the tab's rules and the named ranges that touch the span, as they are now, and
+// a request per pivot anchor that writes its pivot again once the cells are back. Returns the
+// pivot anchors in A1 notation. A span too large to undo reads nothing, since the delete then
+// cannot be undone here anyway.
+function dmvChatActionSpanUndo_(session, sheet, span, removed, undo) {
+  if (dmvChatGridCells_(removed) > DMV_SHEET_UNDO.maxCells) return [];
+  // The span across the whole tab, open on its other dimension.
+  var band = { sheetId: span.sheetId };
+  band[span.dimension === 'ROWS' ? 'startRowIndex' : 'startColumnIndex'] = span.startIndex;
+  band[span.dimension === 'ROWS' ? 'endRowIndex' : 'endColumnIndex'] = span.endIndex;
+  function touches(grid) {
+    return dmvChatSheetRuleOverlap_(grid, band);
+  }
+  var rules = dmvChatSheetRules_(session, sheet),
+    named = dmvChatActionNamedRanges_(session).filter(function (item) {
+      return touches(item.range);
+    });
+  var restore = {};
+  if (
+    rules.some(function (rule) {
+      return (rule.ranges || []).some(touches);
+    })
+  ) {
+    undo.rules = span.sheetId;
+    restore.rules = rules;
+  }
+  if (named.length) restore.named = named;
+  if (restore.rules || restore.named) undo.restore = restore;
+  var pivots = [];
+  undo.after = [];
+  dmvChatSheetCells_(session, [removed], 'pivotTable')[0].cells.forEach(function (row, r) {
+    row.forEach(function (cell, c) {
+      if (!cell.pivotTable) return;
+      var anchor = {
+        sheetId: span.sheetId,
+        startRowIndex: removed.startRowIndex + r,
+        endRowIndex: removed.startRowIndex + r + 1,
+        startColumnIndex: removed.startColumnIndex + c,
+        endColumnIndex: removed.startColumnIndex + c + 1,
+      };
+      pivots.push(dmvChatGridA1_(anchor));
+      undo.after.push({
+        updateCells: {
+          range: anchor,
+          rows: [{ values: [{ pivotTable: cell.pivotTable }] }],
+          fields: 'pivotTable',
+        },
+      });
+    });
+  });
+  return pivots;
 }
 
 // How many rows or columns of the tab are frozen.
@@ -846,6 +1262,18 @@ function dmvChatActionText_(cell) {
   return null;
 }
 
+// True when text that Sheets enters as typed (a find_replace result, a split piece) would read
+// as a formula: it starts with =, or with a + or - that starts an expression. A lone + or - and
+// plain signed numbers and amounts (-5, -1.5%, -$3, -1,234) stay text or numbers.
+function dmvChatActionFormulaLike_(text) {
+  var typed = text.trim();
+  return (
+    /^[=+-]/.test(typed) &&
+    !/^[+-]$/.test(typed) &&
+    !/^[+-][$€£]?(?:\d[\d,]*(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?%?$/i.test(typed)
+  );
+}
+
 // What the number and date cells of a grid show (3/15/2023, $1,200.00), as a matrix of text
 // beside cells, or null when the grid holds no typed numbers. Sheets finds and splits such cells
 // by that text, not by the number behind it.
@@ -876,13 +1304,14 @@ function dmvChatActionTexts_(cell, shown) {
 }
 
 // A JavaScript pattern that matches like the Sheets request, to count matches and check results
-// before anything is written. Regular expressions that can take very long are refused.
+// before anything is written, with the characters around which it cannot predict Sheets (see
+// dmvChatActionRegexSyntax_). Regular expressions that can take very long are refused.
 function dmvChatActionPattern_(find, regex, matchCase, entire) {
-  var source = find;
+  var source = find,
+    unsure = null;
   if (regex) {
     if (find.length > 200) throw new Error('Keep the regular expression under 200 characters.');
-    if (/\\[1-9]|\(\?<?[=!]/.test(find))
-      throw new Error('Sheets regular expressions have no back-references or lookarounds.');
+    unsure = dmvChatActionRegexSyntax_(find, matchCase);
     if (dmvChatRegexNested_(find))
       throw new Error(
         'Use a simpler regular expression, without a repeated group that repeats or has alternatives.'
@@ -897,7 +1326,103 @@ function dmvChatActionPattern_(find, regex, matchCase, entire) {
   pattern.lastIndex = 0;
   if (pattern.test('')) throw new Error('The text to find must not match an empty cell.');
   pattern.lastIndex = 0;
-  return pattern;
+  return { pattern: pattern, unsure: unsure };
+}
+
+// Sheets runs a find_replace expression by Java's rules (RE2's are close), while the count and
+// the formula check here run JavaScript's. Only syntax that means the same in all three is taken,
+// so the cells checked are the cells Sheets changes: \A, \Q..\E or \p{L} read as plain letters
+// here would let a cell Sheets changes go unchecked. ., $, \s and \b still differ around line
+// breaks, unusual spaces and letters beyond A to Z; the result finds the characters the
+// expression differs on, for cells holding them to be refused, or is null.
+function dmvChatActionRegexSyntax_(find, matchCase) {
+  var unsure = Object.create(null);
+  function refuse(message) {
+    throw new Error(message);
+  }
+  // The escape whose letter is at find[at]; true when it is a class such as \d.
+  function escape(at, inClass) {
+    var letter = find.charAt(at);
+    if (/[1-9]/.test(letter))
+      refuse('Sheets regular expressions have no back-references or lookarounds.');
+    if (/[sS]/.test(letter)) unsure.space = true;
+    else if (!inClass && /[bB]/.test(letter)) unsure.word = true;
+    else if (!/[dDwWtnrf!-\/:-@[-`{-~]/.test(letter))
+      refuse(
+        'In a regular expression use only \\d, \\w, \\s, their capitals, \\b and \\B outside [ ], \\t, \\n, \\r, \\f or a backslash before punctuation: Sheets reads \\' +
+          letter +
+          ' differently.'
+      );
+    return /[dDwWsS]/.test(letter);
+  }
+  // The character class opening at find[at]; returns where it closes.
+  function klass(at) {
+    var i = at + 1,
+      set = false;
+    if (find.charAt(i) === '^') i++;
+    var first = i;
+    for (; i < find.length; i++) {
+      var ch = find.charAt(i);
+      if (ch === ']' && i > first) return i;
+      if (ch === ']' || ch === '[' || (ch === '&' && find.charAt(i + 1) === '&'))
+        refuse(
+          'Inside [ ] write [, ] and && as \\[, \\] and \\&\\&: Sheets reads them differently, as nested classes and intersections.'
+        );
+      if (
+        ch === '-' &&
+        i > first &&
+        find.charAt(i + 1) !== ']' &&
+        (set || /^\\[dDwWsS]/.test(find.slice(i + 1)))
+      )
+        refuse(
+          'Put a - first or last inside [ ], or write \\-: Sheets reads it differently next to \\d, \\w or \\s.'
+        );
+      set = ch === '\\' && escape(++i, true);
+    }
+    refuse('That regular expression is not valid.');
+  }
+  for (var i = 0; i < find.length; i++) {
+    var ch = find.charAt(i),
+      repeat = /[*+?]/.test(ch);
+    if (ch === '\\') escape(++i, false);
+    else if (ch === '[') i = klass(i);
+    else if (ch === '(' && find.charAt(i + 1) === '?') {
+      if (/^\?<?[=!]/.test(find.slice(i + 1)))
+        refuse('Sheets regular expressions have no back-references or lookarounds.');
+      if (find.charAt(i + 2) !== ':')
+        refuse(
+          'Use ( ) or (?: ) for groups: Sheets reads named groups, inline flags and other (? forms differently.'
+        );
+      i += 2;
+    } else if (ch === '.') unsure.dot = true;
+    else if (ch === '$') unsure.end = true;
+    else if (ch === '{') {
+      var count = /^\{\d+(?:,\d*)?\}/.exec(find.slice(i));
+      if (!count)
+        refuse(
+          'Write a literal { as \\{: Sheets reads it differently outside a repeat like {2,5}.'
+        );
+      i += count[0].length - 1;
+      repeat = true;
+    }
+    if (repeat && find.charAt(i + 1) === '+')
+      refuse(
+        'Leave out the + after a repeat: Sheets reads it differently, as a possessive repeat.'
+      );
+  }
+  if (
+    !matchCase &&
+    find.split('').some(function (ch) {
+      return ch > '\x7f' && ch.toLowerCase() !== ch.toUpperCase();
+    })
+  )
+    throw new Error(
+      'A regular expression with letters beyond A to Z needs matchCase: set matchCase true, as Sheets may compare their case differently.'
+    );
+  var parts = Object.keys(unsure).map(function (key) {
+    return DMV_SHEET_ACTIONS.regexUnsure[key];
+  });
+  return parts.length ? new RegExp(parts.join('|'), 'u') : null;
 }
 
 // Sheets applies a regular-expression replacement by Java's rules, where \x is a literal x and
@@ -935,7 +1460,8 @@ function dmvChatActionFindReplace_(context) {
     entire = dmvChatActionFlag_(input, 'matchEntireCell'),
     regex = dmvChatActionFlag_(input, 'useRegex'),
     whole = dmvChatActionFlag_(input, 'wholeSheet');
-  var pattern = dmvChatActionPattern_(input.find, regex, matchCase, entire);
+  var matcher = dmvChatActionPattern_(input.find, regex, matchCase, entire),
+    pattern = matcher.pattern;
   if (regex) dmvChatActionReplacement_(replacement, pattern);
   var grid = context.area.grid,
     cells = context.snapshot.cells,
@@ -954,6 +1480,11 @@ function dmvChatActionFindReplace_(context) {
   var changed = 0,
     occurrences = 0,
     shown = dmvChatActionShown_(session, grid, cells);
+  function cellName(r, c) {
+    return (
+      sheet.getName() + '!' + dmvChatA1_(grid.startRowIndex + r + 1, grid.startColumnIndex + c + 1)
+    );
+  }
   cells.forEach(function (row, r) {
     row.forEach(function (cell, c) {
       var most = 0;
@@ -961,6 +1492,12 @@ function dmvChatActionFindReplace_(context) {
         if (regex && text.length > DMV_SHEET_ACTIONS.regexText)
           throw new Error(
             'A cell holds more than 5,000 characters; find it without useRegex instead.'
+          );
+        // Checked in every cell, matched here or not: Sheets may match where this check does not.
+        if (matcher.unsure && matcher.unsure.test(text))
+          throw new Error(
+            cellName(r, c) +
+              ' holds a line break, an unusual space or a letter beyond A to Z, around which Sheets reads ., $, \\s and \\b differently. Leave those out of the expression or find without useRegex.'
           );
         pattern.lastIndex = 0;
         var found = text.match(pattern);
@@ -972,14 +1509,12 @@ function dmvChatActionFindReplace_(context) {
               return replacement;
             });
         // Sheets enters the result again; text that would read as a formula is never produced.
-        if (/^[=+-]/.test(next) && !(next.trim() !== '' && Number.isFinite(Number(next))))
+        if (dmvChatActionFormulaLike_(next))
           throw new Error(
             'The replacement would turn ' +
-              sheet.getName() +
-              '!' +
-              dmvChatA1_(grid.startRowIndex + r + 1, grid.startColumnIndex + c + 1) +
+              cellName(r, c) +
               ' into text starting with ' +
-              next.charAt(0) +
+              next.trim().charAt(0) +
               ', which Sheets reads as a formula. Choose another replacement.'
           );
         most = Math.max(most, found.length);
@@ -1028,6 +1563,7 @@ function dmvChatActionFindReplace_(context) {
     ],
     touches: [grid],
     confirm: whole || changed > DMV_SHEET_UNDO.overwriteCells ? summary : '',
+    replaced: changed,
     range: dmvChatGridA1_(grid),
     text: 'Replaced "' + input.find + '" in ' + where,
     details: [
@@ -1046,33 +1582,31 @@ function dmvChatActionFindReplace_(context) {
 
 function dmvChatActionRemoveDuplicates_(context) {
   var input = context.input,
-    sheet = context.sheet,
     body = dmvChatActionBody_(context);
   var keep = input.keep === undefined ? 'first' : input.keep;
   if (keep !== 'first' && keep !== 'last') throw new Error('Choose keep first or last.');
-  var keys = dmvChatActionKeyColumns_(input, context.area.columns);
-  var rows = body.cells.map(function (row) {
-    return JSON.stringify(
-      keys.map(function (column) {
-        return dmvChatActionKey_(row[column - 1]);
-      })
-    );
+  var keys = body.keys;
+  // Keeping the last rewrites every column, so the whole tab's rows are then read in full.
+  if (keep === 'last' && !body.cells)
+    body.cells = dmvChatSheetCells_(context.session, [body.grid])[0].cells;
+  var rows = dmvChatActionKeyRows_(context.session, body).map(function (row) {
+    return JSON.stringify(row.map(dmvChatActionKey_));
   });
   // Rows to keep: the first (or last) of each key, in their original order.
+  var chosen = Object.create(null);
+  rows.forEach(function (key, index) {
+    if (keep === 'last' || !(key in chosen)) chosen[key] = index;
+  });
   var kept = rows
     .map(function (key, index) {
-      return (keep === 'first' ? rows.indexOf(key) : rows.lastIndexOf(key)) === index ? index : -1;
+      return chosen[key] === index ? index : -1;
     })
     .filter(function (index) {
       return index >= 0;
     });
   var removed = rows.length - kept.length,
-    where = sheet.getName() + '!' + dmvChatGridA1_(body.grid),
-    on = keys
-      .map(function (column) {
-        return dmvChatActionColumn_(context.area.grid.startColumnIndex + column);
-      })
-      .join(', ');
+    where = body.where,
+    on = body.letters.join(', ');
   if (!removed) throw new Error('No duplicate rows in ' + where + ' compared on ' + on + '.');
   var plan = {
     touches: [body.grid],
@@ -1096,13 +1630,14 @@ function dmvChatActionRemoveDuplicates_(context) {
     ],
     result: { removed: removed, kept: kept.length },
   };
+  if (body.whole) plan.range = dmvChatGridA1_(body.grid);
   if (keep === 'first') {
     plan.requests = [
       {
         deleteDuplicates: {
           range: body.grid,
           comparisonColumns: keys.map(function (column) {
-            var index = context.area.grid.startColumnIndex + column - 1;
+            var index = body.grid.startColumnIndex + column - 1;
             return {
               sheetId: body.grid.sheetId,
               dimension: 'COLUMNS',
@@ -1148,13 +1683,10 @@ function dmvChatActionHighlightDuplicates_(context) {
   var input = context.input,
     sheet = context.sheet,
     body = dmvChatActionBody_(context);
-  var keys = dmvChatActionKeyColumns_(input, context.area.columns);
   var color = dmvChatSheetColor_(input.color === undefined ? '#F4CCCC' : input.color);
   var first = body.grid.startRowIndex + 1,
-    last = body.grid.endRowIndex;
-  var letters = keys.map(function (column) {
-    return dmvChatActionColumn_(context.area.grid.startColumnIndex + column);
-  });
+    last = body.grid.endRowIndex,
+    letters = body.letters;
   // Rows count as equal when every key cell is equal (= ignores case), and blank keys never match.
   // SUMPRODUCT rather than COUNTIF, so text such as * or >5 is not read as a pattern. Each
   // comparison counts an error cell (#N/A from a lookup) as no match; otherwise one error in a key
@@ -1186,7 +1718,6 @@ function dmvChatActionHighlightDuplicates_(context) {
       })
       .join('*') +
     ')>1)';
-  var where = sheet.getName() + '!' + dmvChatGridA1_(body.grid);
   return {
     requests: [
       {
@@ -1210,7 +1741,7 @@ function dmvChatActionHighlightDuplicates_(context) {
       rules: sheet.getSheetId(),
     },
     range: dmvChatGridA1_(body.grid),
-    text: 'Highlighted duplicate rows in ' + where,
+    text: 'Highlighted duplicate rows in ' + body.where,
     details: [['Compared on', letters.join(', ')]],
     result: { rule: formula },
   };
@@ -1247,51 +1778,58 @@ function dmvChatActionSplit_(context) {
   var delimiter = input.delimiter === undefined ? 'auto' : input.delimiter;
   if (typeof delimiter !== 'string' || !delimiter || delimiter.length > 20)
     throw new Error('delimiter is comma, semicolon, period, space, auto or up to 20 characters.');
-  var known = DMV_SHEET_ACTIONS.delimiters[delimiter.toLowerCase()],
-    request = { source: area.grid };
-  if (delimiter.toLowerCase() === 'auto') request.delimiterType = 'AUTODETECT';
-  else if (known) request.delimiterType = known[0];
-  else {
-    request.delimiterType = 'CUSTOM';
-    request.delimiter = delimiter;
-  }
+  var auto = delimiter.toLowerCase() === 'auto',
+    known = DMV_SHEET_ACTIONS.delimiters[delimiter.toLowerCase()];
   if (dmvChatActionHasFormula_(context.snapshot.cells))
     throw new Error('split_columns splits typed text, not formulas.');
-  // The widest split decides how many columns to the right are written; with auto, the widest
-  // any likely separator would give.
-  var separators =
-    request.delimiterType === 'AUTODETECT'
-      ? [',', ';', '.', ' ', '|', '\t']
-      : [known ? known[1] : delimiter];
-  var widest = 1;
   var where = sheet.getName() + '!' + area.a1;
   // Number and date cells split by the text they show, so 1/5/2024 split on / gives 3 pieces.
   var shown = dmvChatActionShown_(context.session, area.grid, context.snapshot.cells);
-  context.snapshot.cells.forEach(function (row, r) {
-    var value = row[0].userEnteredValue,
-      text = null;
-    if (value && value.stringValue !== undefined) text = String(value.stringValue);
-    else if (value && value.numberValue !== undefined)
-      text = shown && shown[r][0] !== null ? shown[r][0] : String(value.numberValue);
-    if (text === null) return;
-    separators.forEach(function (separator) {
-      var pieces = text.split(separator);
-      widest = Math.max(widest, pieces.length);
-      // Sheets enters each piece as if typed, so a piece that reads as a formula is refused,
-      // as find_replace refuses such a result. A lone - and negative numbers stay text or numbers.
-      pieces.forEach(function (piece) {
-        var text = piece.trim();
-        if (/^(?:[=+]|-[^\d.$€£])/.test(text))
-          throw new Error(
-            'Splitting ' +
-              sheet.getName() +
-              '!' +
-              dmvChatA1_(area.grid.startRowIndex + r + 1, area.grid.startColumnIndex + 1) +
-              ' would give a piece starting with ' +
-              text.charAt(0) +
-              ', which Sheets reads as a formula. Change that cell first or choose another delimiter.'
-          );
+  var texts = context.snapshot.cells.map(function (row, r) {
+    var value = row[0].userEnteredValue;
+    if (value && value.stringValue !== undefined) return String(value.stringValue);
+    if (value && value.numberValue !== undefined)
+      return shown && shown[r][0] !== null ? shown[r][0] : String(value.numberValue);
+    return null;
+  });
+  // How Sheets' own detection picks a separator is not documented, so auto is settled here on
+  // the first usual one any cell holds and sent as that one: the split checked is the split made.
+  var separator = known ? known[1] : delimiter;
+  if (auto) {
+    separator = DMV_SHEET_ACTIONS.autoDelimiters.filter(function (candidate) {
+      return texts.some(function (text) {
+        return text !== null && text.indexOf(candidate) >= 0;
       });
+    })[0];
+    if (separator === undefined)
+      throw new Error('No text in ' + where + ' contains that separator.');
+    Object.keys(DMV_SHEET_ACTIONS.delimiters).forEach(function (name) {
+      if (DMV_SHEET_ACTIONS.delimiters[name][1] === separator)
+        known = DMV_SHEET_ACTIONS.delimiters[name];
+    });
+  }
+  var request = known
+    ? { source: area.grid, delimiterType: known[0] }
+    : { source: area.grid, delimiterType: 'CUSTOM', delimiter: separator };
+  // The widest split decides how many columns to the right are written.
+  var widest = 1;
+  texts.forEach(function (text, r) {
+    if (text === null) return;
+    var pieces = text.split(separator);
+    widest = Math.max(widest, pieces.length);
+    // Sheets enters each piece as if typed, so a piece that reads as a formula is refused, by
+    // the rule find_replace refuses such a result with.
+    pieces.forEach(function (piece) {
+      if (dmvChatActionFormulaLike_(piece))
+        throw new Error(
+          'Splitting ' +
+            sheet.getName() +
+            '!' +
+            dmvChatA1_(area.grid.startRowIndex + r + 1, area.grid.startColumnIndex + 1) +
+            ' would give a piece starting with ' +
+            piece.trim().charAt(0) +
+            ', which Sheets reads as a formula. Change that cell first or choose another delimiter.'
+        );
     });
   });
   if (widest < 2) throw new Error('No text in ' + where + ' contains that separator.');
@@ -1334,7 +1872,7 @@ function dmvChatActionSplit_(context) {
       endColumnIndex: right.endColumnIndex,
     }),
     text: 'Split ' + where + ' into columns',
-    details: [['Separator', delimiter]],
+    details: [['Separator', auto ? 'auto: ' + JSON.stringify(separator) : delimiter]],
   };
 }
 
@@ -1364,32 +1902,34 @@ function dmvChatActionValidation_(context) {
       !Number.isFinite(Number(text))
     )
       throw new Error('Number conditions need finite numbers.');
-    return String(Number(text));
+    return Number(text);
   }
   function date(value) {
-    var match = typeof value === 'string' && /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
-    var parsed = match && new Date(Date.UTC(+match[1], +match[2] - 1, +match[3]));
-    if (!parsed || parsed.getUTCMonth() !== +match[2] - 1 || parsed.getUTCDate() !== +match[3])
+    var text = typeof value === 'string' ? value.trim() : '';
+    if (!dmvChatSheetDateFormula_(text))
       throw new Error('Date conditions need dates as YYYY-MM-DD.');
-    return match[0];
+    return text;
   }
+  // Numbers go as dmvChatSheetNumberValue_ makes them and dates as DATE formulas, which read the
+  // same in every spreadsheet locale; the label keeps the values as given.
   function bounds(names, read) {
     var type = names[rule.condition];
     if (!type) throw new Error('Choose a condition: ' + Object.keys(names).join(', ') + '.');
-    var values = [{ userEnteredValue: read(rule.value) }];
-    if (/BETWEEN$/.test(type)) values.push({ userEnteredValue: read(rule.value2) });
+    var shown = [read(rule.value)];
+    if (/BETWEEN$/.test(type)) shown.push(read(rule.value2));
     else if (rule.value2 !== undefined) throw new Error('value2 is only for between.');
-    label =
-      rule.type +
-      ' ' +
-      rule.condition +
-      ' ' +
-      values
-        .map(function (item) {
-          return item.userEnteredValue;
-        })
-        .join(' and ');
-    return { type: type, values: values };
+    label = rule.type + ' ' + rule.condition + ' ' + shown.join(' and ');
+    return {
+      type: type,
+      values: shown.map(function (value) {
+        return {
+          userEnteredValue:
+            typeof value === 'number'
+              ? dmvChatSheetNumberValue_(value)
+              : '=' + dmvChatSheetDateFormula_(value),
+        };
+      }),
+    };
   }
   if (rule.type === 'list') {
     if (
@@ -1406,7 +1946,7 @@ function dmvChatActionValidation_(context) {
     };
     label = 'list of ' + rule.values.length;
   } else if (rule.type === 'range') {
-    var source = dmvChatActionA1_(session, rule.source, sheet, 'source');
+    var source = dmvChatActionA1_(session, rule.source, sheet, 'source', true);
     var reference = dmvChatActionTab_(source.sheet.getName()) + source.a1;
     condition = { type: 'ONE_OF_RANGE', values: [{ userEnteredValue: '=' + reference }] };
     label = 'list from ' + reference;
@@ -1577,9 +2117,10 @@ function dmvChatActionNamedKey_(named) {
 
 // Before undoing a named_range edit: the name is still as the edit left it (after), or, for a
 // deletion (after null), nothing has taken its name or id since. Otherwise undo would overwrite
-// or delete a later change, and the formulas that use the name would read other cells.
-function dmvChatActionNamedUnchanged_(session, named) {
-  var all = dmvChatActionNamedRanges_(session);
+// or delete a later change, and the formulas that use the name would read other cells. all is
+// dmvChatActionNamedRanges_, when already read.
+function dmvChatActionNamedUnchanged_(session, named, all) {
+  all = all || dmvChatActionNamedRanges_(session);
   if (named.after === null) {
     if (
       all.some(function (item) {
@@ -1628,11 +2169,11 @@ function dmvChatActionNamed_(context) {
     target =
       spec.range === undefined
         ? null
-        : dmvChatActionA1_(session, spec.range, defaultSheet, 'range');
+        : dmvChatActionA1_(session, spec.range, defaultSheet, 'range', true);
   var plan = { touches: [], details: [['Name', name]] };
   function described(named) {
     var tab = dmvChatSheetById_(session, named.range.sheetId);
-    return (tab ? dmvChatActionTab_(tab.getName()) : '') + dmvChatGridA1_(named.range);
+    return (tab ? dmvChatActionTab_(tab.getName()) : '') + dmvChatSheetRuleA1_(named.range);
   }
   if (operation === 'add') {
     if (existing)
@@ -1773,13 +2314,21 @@ function dmvChatActionDuplicateSheet_(context) {
 function dmvChatActionDeleteSheet_(context) {
   var session = context.session,
     sheet = context.sheet;
-  var user = dmvChatActionTabUser_(session, sheet);
+  var user = dmvChatTabUser_(session, sheet);
+  if (user && user.collaborator)
+    throw new Error(
+      'This tab holds the output of ' +
+        dmvChatOwnerText_(user) +
+        '. Ask them to remove the ' +
+        user.kind +
+        ' before deleting its tab.'
+    );
   if (user)
     throw new Error(
       'This tab is used by a saved ' +
-        user +
+        user.kind +
         '. Change or remove the ' +
-        user +
+        user.kind +
         ' instead of deleting its tab.'
     );
   var sheets = dmvChatSeeNewTabs_(session).getSheets();
@@ -1814,12 +2363,17 @@ function dmvChatActionDeleteSheet_(context) {
     return plan;
   }
   var copy = dmvChatUndoSheetCopy_(session, sheet);
+  var broken = [copy.undo.sheet.broken, dmvChatActionTabDependents_(session, sheet)]
+    .filter(Boolean)
+    .join(', and ');
+  copy.undo.sheet.broken = broken;
+  if (broken) plan.confirm += ' Undo brings the tab back, but these stay broken: ' + broken + '.';
   plan.requests = copy.requests.concat(plan.requests);
   plan.undo = copy.undo;
   plan.result.note =
     'For undo, a hidden copy "' +
     copy.undo.sheet.copyName +
-    '" stays in the spreadsheet for 6 hours and is deleted by the first chat request after that. Editors can show hidden tabs, so tell the user to delete that copy by hand before sharing the file if the data is private.';
+    '" stays in the spreadsheet for 6 hours; this user\'s first chat request in this spreadsheet after that deletes it. Editors can show hidden tabs, so tell the user to delete that copy by hand before sharing the file if the data is private.';
   return plan;
 }
 

@@ -193,20 +193,20 @@ ignoring case and surrounding spaces unless asked.
 | --- | --- | --- |
 | `set_values` | Literal values; text beginning with = stays text | Inspected range |
 | `set_formulas` | Formulas (see [Formulas](#formulas)) | Inspected range, 8,000 characters each |
-| `format`, `sort`, `filter`, `freeze` | Number format, bold, colours, alignment and wrap; sort by columns; a basic filter; frozen rows and columns | Inspected range |
+| `format`, `sort`, `filter`, `freeze` | Number format (currency shows a code only when given one, such as EUR), bold, colours, alignment and wrap; sort by columns; a basic filter; frozen rows and columns | Inspected range |
 | `create_sheet`, `rename_sheet` | A new tab, or a new name for one | A tab a saved report or dashboard uses must have its destination updated before it is renamed |
-| `copy_range`, `move_range` | Copy or move the inspected range to a top-left cell on this tab or another; a copy pastes all, values, formats or formulas, while a move always takes everything, because Sheets empties the whole source, and takes the formulas that point at it along | Inspected range |
+| `copy_range`, `move_range` | Copy or move the inspected range to a top-left cell on this tab or another; a copy pastes all, values, formats or formulas, while a move always takes everything, because Sheets empties the whole source, and takes the formulas that point at it along; a move over cells that formulas refer to by address (checked across the spreadsheet's formulas, up to 200,000 cells, or when that check cannot finish) always asks first, since Sheets turns those references into #REF! and undo cannot repair them | Inspected range |
 | `insert_rows`, `insert_columns` | Insert before a 1-based `start` | 500 per call |
 | `delete_rows`, `delete_columns` | Delete from `start`; always asks first, and refuses to delete every row or column that is not frozen, as Sheets does | 500 per call; undoable up to 50,000 cells |
 | `group_rows`, `group_columns`, `ungroup_rows`, `ungroup_columns` | Outline groups, at most 8 levels; ungroup only where every row or column is grouped | The tab's grid |
-| `find_replace` | Text or a regular expression, match case and whole cell, in the inspected range or the whole tab's data; never touches formulas and never makes one; dates and numbers are checked both by their number and by what they show (3/15/2023), so the count and the checks never undercount what Sheets changes; a regular-expression replacement refers to groups as $1 to $9 and has no backslashes or other $ signs, so the text checked is the text Sheets writes | 50,000 cells; the whole tab or more than 200 changed cells asks first |
-| `remove_duplicates` | Keep the first or last row of each key (`keyColumns`), below `headerRows`; always asks first | Inspected range |
-| `highlight_duplicates` | One live conditional-format rule that colours repeated keys; an error cell (#N/A) counts as no match, so it never turns the rule off for every row | Inspected range |
+| `find_replace` | Text or a regular expression, match case and whole cell, in the inspected range or the whole tab's data; never touches formulas and never makes one; dates and numbers are checked both by their number and by what they show (3/15/2023), so the count and the checks never undercount what Sheets changes; a regular expression uses only syntax that Java (which Sheets follows), RE2 and JavaScript read alike: classes, `(?:)` groups, repeats, `\d \w \s \b` and their capitals, `\t \n \r \f` and escaped punctuation; a range holding line breaks, unusual spaces or letters beyond A to Z is refused when the expression uses `.`, `$`, `\s` or `\b`, which differ there, and letters beyond A to Z in the expression need match case; a regular-expression replacement refers to groups as $1 to $9 and has no backslashes or other $ signs, so the text checked is the text Sheets writes; a result is refused when it starts with = or with a + or - that starts an expression, while a lone dash and plain signed numbers (-5, -5%, -$3) are fine | 50,000 cells; the whole tab or more than 200 changed cells asks first |
+| `remove_duplicates` | Keep the first or last row of each key (`keyColumns`), below `headerRows`; always asks first; with `wholeSheet` it compares every row of the tab's data (key columns counted from A) after reading only the key columns, and the kept rows close up for the whole table, so a large export is never deduped range by range | Inspected range, or the whole tab's data up to 50,000 cells (what undo keeps; a larger tab is refused) |
+| `highlight_duplicates` | One live conditional-format rule that colours repeated keys; an error cell (#N/A) counts as no match, so it never turns the rule off for every row; with `wholeSheet` the rule covers every data row of the tab and compares each key with the whole column | Inspected range, or the whole tab's data up to 50,000 cells |
 | `trim_whitespace` | Trims spaces in text cells | Inspected range |
-| `split_columns` | Splits one column to the right by comma, semicolon, period, space, a custom separator or auto; dates and numbers split by what they show; asks before writing over filled cells, and refuses when a piece would start with =, + or - followed by text, which Sheets would enter as a formula | Inspected range |
-| `data_validation` | Dropdown from a list (up to 500 values) or a range of this spreadsheet, checkbox, number or date conditions, strict or not; `clear` removes it; rows a filter hides are included | Inspected range |
+| `split_columns` | Splits one column to the right by comma, semicolon, period, space, a custom separator or auto, which takes the first of comma, semicolon, tab, pipe and space that any cell holds and sends that separator, so the split checked is the split made; dates and numbers split by what they show; asks before writing over filled cells, and refuses a piece by the same rule as a `find_replace` result | Inspected range |
+| `data_validation` | Dropdown from a list (up to 500 values) or a range of this spreadsheet (which may run to the last row, as `A2:A`, or be whole columns), checkbox, number or date conditions, strict or not; `clear` removes it; rows a filter hides are included | Inspected range |
 | `set_notes`, `set_links` | Notes, or rich-text links on literal text (https only; an empty URL removes the link) | Inspected range |
-| `named_range` | Add, update (rename or move) or delete a named range | One name per call |
+| `named_range` | Add, update (rename or move) or delete a named range, bounded or open (`C2:C`, `C:C`) | One name per call |
 | `duplicate_sheet`, `delete_sheet`, `hide_sheet`, `show_sheet` | Tab operations; delete always asks, and never removes a tab a saved report or dashboard uses or the last visible tab; a tab too large to copy within the spreadsheet's 10 million cells is deleted without an undo copy, and the question says so | One tab per call |
 
 `create_pivot` makes a real Sheets pivot, by default in a new tab (see
@@ -214,7 +214,7 @@ ignoring case and surrounding spaces unless asked.
 conditional-format rules on a cell, a range, a column to its last row (`D2:D`) or whole columns
 (`D:F`): number comparisons (greater, less, equal, between and their opposites), text contains,
 does not contain, starts with, ends with or equals (text starting with = or + is refused, since Sheets reads it as a formula; pivot filters follow the same rule), dates before, after, on or between (as YYYY-MM-DD or relative
-dates), blank or not blank, a custom formula under the same rules as `set_formulas` but on cells of its own tab only (Sheets does not allow other tabs there), and 2- or 3-point colour scales by min, max, number, percent or percentile. A rule sets a
+dates), blank or not blank, a custom formula under the same rules as `set_formulas` but on cells of its own tab only (Sheets does not allow other tabs there), and 2- or 3-point colour scales by min, max, number, percent or percentile. Thresholds that are not whole numbers go as formulas (`=1.5`), as dates go as `DATE()`, so they read the same in every spreadsheet locale. Data validation and basic filters send numbers that are not whole as formulas the same way, and data validation sends its date bounds as `DATE()`. A rule sets a
 background colour, text colour, bold, italic or strikethrough. A new rule goes after the
 existing ones, as in the Sheets editor, and the result says when an earlier rule covers the same
 cells. `list` returns each rule with a `ruleId`; `delete` removes the rule with that id.
@@ -227,15 +227,24 @@ dashboard's page or chart data tab): set values, formulas, sorting, copy or move
 inserting or deleting rows and columns through it, find and replace, deduplicating, trimming,
 splitting, validation, notes or links on it, deleting its tab, or placing a pivot or an array
 result of known size over it. The error names the report or dashboard to change
-instead. Formatting, conditional formats, filters and frozen panes stay allowed, because a
-refresh keeps them, and report output may be the source of a pivot. Tables chat wrote with
+instead. This holds for every collaborator's reports and dashboards, not only your own: each
+refresh records where its output lies as developer metadata on the output tab, visible only to
+DataMoov, so a colleague's chat refuses the same edits (and renaming the tab) and says another
+collaborator saved the output, without naming it. Removing the report or dashboard, or the
+dataset, removes the record; output written before records existed gets one at its next
+refresh. Renaming a tab is refused while report or dashboard output lies on it, or while one of
+your reports or dashboards names it as a destination in any capitals; a rename that only
+changes capitals is allowed. Formatting, conditional formats, filters and frozen panes stay
+allowed, because a refresh keeps them, and report output may be the source of a pivot. Tables chat wrote with
 write_to_sheet remain yours to edit. Editing report values by hand still makes the next refresh
 stop until the report is moved to a fresh output area.
 
 ### Confirmation
 
 Destructive or wide changes return a question instead of acting, for example replacing more than 200
-non-empty cells, deleting rows, columns or a tab, removing duplicates, find and replace over a
+non-empty cells (counting values a spilled array formula or a pivot table shows, and adding up
+the edits of one request, so an overwrite split into smaller calls still asks; a yes to that
+question covers every cell replaced so far, so the count starts again after it), deleting rows, columns or a tab, removing duplicates, find and replace over a
 whole tab or more than 200 cells, and anything that cannot be undone here. The tool answers
 `{needsConfirmation, confirmToken, summary}` and changes nothing; chat asks you, and the sidebar
 shows **Yes** and **No** under the question, above them DataMoov's own summary of each change
@@ -244,33 +253,59 @@ a yes, typed or sent with the Yes button (which carries the offered token, so on
 is approved), for that exact change, once, within that request. If the cells it would change
 are no longer as they were when chat asked, the yes does not cover it and chat asks again. A token the model passes on its
 own, for other input, a second time or after 30 minutes is refused. A typed yes approves every
-change offered in the previous answer, and only a plain one counts: it starts with yes, ok,
-sure, confirm, go ahead or similar and has no question mark and no word such as no, not, don't,
-wait, hold, stop, cancel or but. Any other answer, or pressing No, drops the question.
+change offered in the previous answer, and only a plain one counts: yes, ok, sure, confirm, go
+ahead or similar, with at most please or "go ahead and delete it" after it; "ok, now chart
+revenue" is a new request, not a yes. Any other answer, or pressing No, drops the question. A
+question belongs to its conversation: a message in another sidebar, or after **New chat**, neither
+answers nor drops it. The approval matches the call however the model spells out a default
+(such as `keep: first`) or orders `keyColumns`; a different call is told which call was approved,
+so the model can repeat it exactly.
 
 ### Undo
 
 Chat keeps what each cell edit replaced (values with formulas as formulas, formats, notes,
-validation) in your private cache for six hours, the last ten edits per spreadsheet. Ask "undo
+validation, rich text and smart chips) in your private cache for six hours, the last ten edits per spreadsheet (and every
+edit of the current request, however many it makes). Ask "undo
 that" and `undo_sheet_edit` restores the latest edit, or one named from its list, in one batch;
 it refuses when those cells changed since, naming the range, and when rows or columns of their tab
 were inserted or deleted since or a later chat edit moved cells there (undo that one first), since
 the cells are then no longer where they were; group and ungroup undo follow the same rows and
 columns rule. Undoing a named range edit is refused once the name
-was changed since, and undoing `duplicate_sheet` once the copy's data grew or shrank. Structural changes are reversed
+was changed since, and undoing `duplicate_sheet` once the copy's data grew or shrank or its charts,
+filters, protected ranges or conditional formats changed. Structural changes are reversed
 where feasible: inserted rows and columns are deleted while untouched, deleted ones are
-re-inserted with their cells, a move is moved back, groups, validation, notes, links, named
-ranges, conditional-format rules, hidden tabs and a pivot placed on an existing tab are put back.
+re-inserted with their cells, the conditional-format rules and named ranges that touched them
+and the pivot tables anchored in them (the question before the delete names those pivots), a
+move is moved back, a copy's conditional formats and merges are removed and the merges it
+pasted over come back, groups, validation, notes, links, named ranges, conditional-format rules,
+hidden tabs and a pivot placed on an existing tab are put back. Undo cannot repair formulas
+elsewhere: those that pointed at deleted cells, or at cells a move pasted over, stay #REF!, and
+formulas, charts, pivot tables and filters whose ranges started or ended in deleted rows or
+columns still leave them out; the delete and move questions and the undo result say so.
+Undoing a delete or a copy that puts conditional-format rules or named ranges back is refused
+once those changed since.
 Undoing a conditional-format change is refused once the tab's rules changed since, because the
 rule is found by its position. Undoing `format` is allowed over report output, like the edit.
 Undoing an insert or delete is refused, like the edit itself, when report or dashboard output
 now sits in the rows or columns it would move.
 A deleted tab is kept as a hidden "DataMoov undo · <name>" copy for its six-hour undo window;
-the first chat request after that deletes it, and the delete result says so, since editors can
-show hidden tabs. Formulas elsewhere that pointed at it stay #REF!. A snapshot too large to keep
+the deleting user's first chat request in the spreadsheet after that deletes it (unless report or
+dashboard output now uses it), and the delete result says so, since editors can show hidden tabs.
+Chat leaves such copies out of its tab list and the report form's tab suggestions, whoever deleted
+the tab, and refuses to read or change them. Formulas and dropdowns on the tab that name the tab
+itself point at the copy, so they come back with it. Formulas elsewhere that pointed at it stay
+#REF!, and pivot tables, charts and named ranges that used it stay broken, since they refer to the
+tab by an id the copy does not have: the question before the delete and the undo result name them.
+Each undo entry keeps its cells and checks under cache keys of its own, so the list of entries
+stays well under the 100 KB a cache value holds: past about 30,000 characters its oldest entries
+are dropped, but never those of the current request, whose ids chat already gave out. Should a
+request make so many edits that their list no longer fits, its next edit stands without an undo
+entry, and the earlier ones stay undoable. A snapshot too large to keep
 (over 50,000 cells or about 900,000 characters packed) is not undoable here, so chat asks first and says so;
-Sheets version history can still restore it. Undo does not restore row heights, merges or
-basic filters, and a pivot on a new tab is removed by deleting its tab.
+Sheets version history can still restore it. Undo does not restore row heights, other merges,
+basic filters or in-cell images, and a pivot on a new tab is removed by deleting its tab. Of smart
+chips, Sheets lets chat write back people and Drive files only; links to YouTube, Maps or Calendar
+come back as @ text, and the undo result says how many cells held them.
 
 ### Formulas
 
@@ -284,7 +319,9 @@ GOOGLEFINANCE, GOOGLETRANSLATE, DETECTLANGUAGE, INDIRECT and AI, which fetch fro
 outside the spreadsheet or hide what a formula reads. A function that is not a Sheets built-in
 (custom, Apps Script and named functions) is refused by name, as are unknown names and tabs. A
 LET name counts as defined only after its value, so `LET(F, F(A1), F)` calls the global `F` and is
-refused like it.
+refused like it. A LET or LAMBDA name is called only when it is set to `LAMBDA(...)` and is not
+named like a built-in, since whether Sheets then runs the name or a function of that name is not
+documented.
 HYPERLINK takes a literal https address. The built-in list is kept in
 `src/dmv_chat_sheet_formulas.js`.
 
@@ -302,15 +339,17 @@ Literal values beginning with = stay text. Internal report settings remain exclu
 
 Ask, for example: "Create a pivot of Marketing data with campaign as rows and summed clicks as values."
 Chat creates a real Sheets pivot in a new tab, using an explicit source range with headers, up to
-30,000 data rows and 80 columns. It validates the requested fields and numeric aggregates first.
+30,000 data rows and 80 columns. Each column the pivot uses needs a header of its own; other
+columns in the range may have any header or none, and a number or date header counts as its text. It validates the requested fields and numeric aggregates first.
 The range may include future blank rows within the existing sheet grid, so later values inside
 that range participate automatically. Data outside it requires a larger source range.
 Native date grouping requires actual Sheets date cells; ISO dates written as text cannot be
 passed as native date groups. An already prepared month column can be an ordinary pivot group.
 
 Pivots also take MEDIAN, values shown as a percent of the row, column or grand total, quarter
-buckets, a sort per group (by its labels or by a value), up to 6 filters (chosen values or a
-condition), totals, and a `targetCell` on an existing tab whose cells the pivot could fill are
+buckets, a sort per group (by its labels or by a value), up to 6 filters (chosen text values, or a
+condition that shows every value meeting it; number and date columns take a condition, since a
+pivot lists their values as it displays them), totals, and a `targetCell` on an existing tab whose cells the pivot could fill are
 empty and not report output (at most 50,000 cells; undo removes it). Money needs a currency-code
 column to group by; with several currencies, totals that would add them up are left out (the
 result says which) and percentages that would mix them are refused. Calls with only the original

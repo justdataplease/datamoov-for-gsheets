@@ -71,10 +71,15 @@ var DMV_CHAT_PROGRESS_LABELS = {
   failure: 'The request could not be completed',
 };
 
-function dmvChatProgressId_(value) {
+// Ids the sidebar makes for a request and for a conversation (crypto.randomUUID or hex).
+function dmvChatId_(value, label) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{31,79}$/.test(value))
-    throw new Error('Choose a valid chat request ID.');
+    throw new Error('Choose a valid chat ' + label + ' ID.');
   return value;
+}
+
+function dmvChatProgressId_(value) {
+  return dmvChatId_(value, 'request');
 }
 
 function dmvChatProgressKey_(spreadsheetId, requestId) {
@@ -149,6 +154,14 @@ function dmvChatProgress(input) {
     var labels = Object.keys(DMV_CHAT_PROGRESS_LABELS).map(function (name) {
       return DMV_CHAT_PROGRESS_LABELS[name];
     });
+    // The analyst tools declare fixed labels of their own (dmvChatProgressStep_).
+    try {
+      dmvChatSheetExtraTools_().forEach(function (tool) {
+        if (tool.label) labels.push(tool.label);
+      });
+    } catch (ignored) {
+      /* Without them, a step they labelled is simply not shown. */
+    }
     if (
       snapshot.steps.some(function (step) {
         return (
@@ -227,9 +240,7 @@ function dmvChatSession_(spreadsheet, selectedIds) {
     spreadsheetId: spreadsheet.getId(),
     timezone: timezone,
     today: Utilities.formatDate(new Date(), timezone, 'yyyy-MM-dd'),
-    sheetNames: spreadsheet.getSheets().map(function (sheet) {
-      return sheet.getName();
-    }),
+    sheetNames: dmvChatTabNames_(spreadsheet),
     catalog: catalog,
     connections: connections,
     results: {},
@@ -402,7 +413,7 @@ function dmvChatSystemPrompt_(session) {
     '- DRAFTS. Reports and dashboards you save land under Reports > Drafts unless the user asked for a schedule; a draft can be refreshed by hand but not scheduled until the user saves it. Never set a schedule the user did not ask for. The sidebar adds the draft location and its Save and Remove steps under your answer, so state only that it was saved as a draft (or saved with its schedule) and what it holds.',
     "- GUIDANCE. When the user asks what you or DataMoov can do, or how to do something in the sidebar, answer from the CAPABILITIES section and the catalog only, in two to four sentences with the next click, naming the user's actual selected sources; suggest one or two example requests. Never describe a feature that is not listed there. To point to a place in the sidebar, write a link whose address is sidebar:<place> with place one of reports, drafts, dashboards, chat, connections or settings, for example [Reports > Drafts](sidebar:drafts).",
     '- When the user requests a pivot table, use create_pivot to create a native pivot in a new tab. Keep currencies separate when aggregating money from mixed currencies; use supported date grouping for monthly, weekly or other date summaries.',
-    '- Both creating reports and editing existing sheets are supported. Only change existing sheets when the user specifically requests that change. Use list_sheets (search_sheets to locate data) and inspect_sheet before edit_sheet; pass its exact fresh editToken, sheetName and range, and reinspect after each edit. Report fetches still use run_report and write_to_sheet. Work like an analyst: lookups across tabs, pivots, conditional_format and cleanup actions, preferring formulas over pasted numbers when the user wants a live sheet, and fix the formula errors edit_sheet reports. Never edit report or dashboard output (change the report instead), except to format it, add conditional formats or a filter, or freeze panes, which a refresh keeps; a needsConfirmation result changed nothing, so ask and repeat the call only after a yes. Range edits are bounded to 1000 cells, 200 rows and 30 columns; never sort independent subranges and claim a whole-sheet sort. Explain the limit and ask for a narrower range when necessary.',
+    '- Both creating reports and editing existing sheets are supported. Only change existing sheets when the user specifically requests that change. Use list_sheets (search_sheets to locate data) and inspect_sheet before edit_sheet; pass its exact fresh editToken, sheetName and range (tab, row and column actions take sheetName only), and reinspect after each edit. Report fetches still use run_report and write_to_sheet. Work like an analyst: lookups across tabs, pivots, conditional_format and cleanup actions, preferring formulas over pasted numbers when the user wants a live sheet, and fix the formula errors edit_sheet reports. Never edit report or dashboard output (change the report instead), except to format it, add conditional formats or a filter, or freeze panes, which a refresh keeps; a needsConfirmation result changed nothing, so ask and repeat the call only after a yes. Range edits are bounded to 1000 cells, 200 rows and 30 columns; never sort independent subranges and claim a whole-sheet sort. Explain the limit and ask for a narrower range when necessary.',
     '- Earlier turns list their results as [Actions taken: … [rXXXXXXXX]]. Reuse such a resultId with summarize, write_to_sheet or create_chart instead of running the same report again; if it has expired the tool says so.',
     '- Columns marked additive:false (user counts, reach, rates, averages) must not be summed; use avg, min or max, or compute the rate as a ratio of the summed underlying counts.',
     '',
@@ -892,7 +903,16 @@ function dmvChatTools_(session) {
   );
 }
 
+// One replayed action, at most 200 characters of text. The ref at its end (a result id or a
+// confirmToken, see dmvChatExecute_) is kept whole, since a follow-up turn needs it exactly.
+function dmvChatTranscriptAction_(action) {
+  var text = String(action),
+    ref = /^([\s\S]*?)( \[[^\[\]]{1,120}\])$/.exec(text);
+  return ref ? ref[1].slice(0, 200) + ref[2] : text.slice(0, 200);
+}
+
 // The sidebar keeps a bounded transcript of plain text turns; tool activity is replayed as text.
+// A turn replays its first 10 actions, and up to 10 more questions waiting for the user's yes.
 function dmvChatTranscript_(transcript) {
   if (!Array.isArray(transcript)) return [];
   var turns = [];
@@ -903,10 +923,11 @@ function dmvChatTranscript_(transcript) {
       text +=
         '\n[Actions taken: ' +
         turn.actions
-          .slice(0, 10)
-          .map(function (action) {
-            return String(action).slice(0, 200);
+          .filter(function (action, index) {
+            return index < 10 || / \[confirmToken c[a-f0-9]{32}\]$/.test(String(action));
           })
+          .slice(0, 20)
+          .map(dmvChatTranscriptAction_)
           .join('; ') +
         ']';
     if (!text.trim()) return;
@@ -1010,7 +1031,10 @@ function dmvChatRunTool_(session, tools, call) {
     )
       session.events.push({ kind: 'write', text: 'The spreadsheet was updated. ' + message });
     session.events.push({ kind: 'error', tool: call.name, text: call.name + ': ' + message });
-    return { content: JSON.stringify({ error: message }), isError: true };
+    // A refused confirmToken names the calls the user did approve (dmvChatConfirmFind_).
+    var refused = { error: message };
+    if (error && Array.isArray(error.approvedCalls)) refused.approvedCalls = error.approvedCalls;
+    return { content: dmvChatToolResult_(refused), isError: true };
   }
 }
 
@@ -1114,6 +1138,12 @@ function dmvChatExecute_(input, progress, spreadsheet) {
   if (!settings) throw new Error('Add an AI provider and API key under Settings first.');
   var state = input.resume === true ? dmvChatLoadTurn_(progress) : null;
   var text = state ? state.text : dmvText_(input.text, 'Message', DMV_CHAT.maxMessageChars, true);
+  // Confirmations wait for an answer in their own conversation; a caller without one shares the
+  // spreadsheet's.
+  var conversation =
+    state || input.conversationId === undefined
+      ? ''
+      : dmvChatId_(input.conversationId, 'conversation');
   // Each execution has the usual tool budget. The request's own time limit spans executions,
   // which only a request with an id (and so a place to save its state) can use; a continued
   // request keeps the limit it started with.
@@ -1148,15 +1178,16 @@ function dmvChatExecute_(input, progress, spreadsheet) {
     session.written = state.written;
     session.reportResults = state.reportResults || undefined;
     session.confirm = state.confirm || null;
+    session.undoIds = state.undoIds || [];
     // Replies of another provider or model are replayed from their neutral content.
     if (state.model !== model)
       state.messages.forEach(function (message) {
         delete message.raw;
       });
   } else {
-    // A new request is the user's answer to confirmations the previous one asked for. It also
-    // deletes hidden undo copies of deleted tabs whose undo window ended.
-    dmvChatConfirmBegin_(session, text, input.confirmToken);
+    // A new request is the user's answer to confirmations the previous one in this conversation
+    // asked for. It also deletes hidden undo copies of deleted tabs whose undo window ended.
+    dmvChatConfirmBegin_(session, text, input.confirmToken, conversation);
     dmvChatUndoSweep_(session);
   }
   var system = dmvChatSystemPrompt_(session);
@@ -1284,6 +1315,7 @@ function dmvChatExecute_(input, progress, spreadsheet) {
             written: session.written,
             reportResults: session.reportResults || null,
             confirm: session.confirm || null,
+            undoIds: session.undoIds || [],
             selectedConnectionIds: session.connections.map(function (connection) {
               return connection.id;
             }),

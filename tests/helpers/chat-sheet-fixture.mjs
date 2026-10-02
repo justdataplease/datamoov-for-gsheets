@@ -15,13 +15,12 @@ export const ORCHARD_COLUMNS = [
 
 // options.orchard registers the source and a connection before the session starts:
 //   { columns, rows (f.rows, read on every fetch), label, metadata, token }
-// options.tabTitles and options.sortRange add stand-ins the shared sandbox leaves to each test.
+// options.sortRange adds a stand-in the shared sandbox leaves to each test.
 // options.setup(f) prepares tabs before the session starts, since a session keeps the tab names.
 export function chatSheetFixture(options = {}) {
   const f = createDatamoovSandbox({ gridData: true });
   f.sheet = f.book.sheets[0];
   if (options.setup) options.setup(f);
-  if (options.tabTitles) renameTabsOnTitleUpdate(f);
   if (options.sortRange) sortRanges(f);
   if (options.orchard) connectOrchard(f, options.orchard);
   f.session = f.api.dmvChatSession_(f.book);
@@ -155,23 +154,6 @@ function connectOrchard(
     label: 'Orchard main',
     credentials: { token },
   });
-}
-
-// The shared sandbox keeps a tab's title on updateSheetProperties; here a title update renames
-// the tab, as undoing delete_sheet needs when it renames the hidden copy back.
-function renameTabsOnTitleUpdate(f) {
-  const sheets = f.api.Sheets.Spreadsheets,
-    batch = sheets.batchUpdate;
-  sheets.batchUpdate = (body, id) => {
-    const result = batch(body, id);
-    for (const request of plain(body.requests)) {
-      const update = request.updateSheetProperties;
-      if (!update || !String(update.fields).split(',').includes('title')) continue;
-      f.state.books.get(id).sheets.find((s) => s.id === update.properties.sheetId).name =
-        update.properties.title;
-    }
-    return result;
-  };
 }
 
 // A batch of one sortRange moves whole cells within its range, as Sheets does.

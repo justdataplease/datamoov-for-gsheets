@@ -30,6 +30,9 @@
       settingsOpen: false,
       settingsDirty: false,
       generation: 0,
+      // The server keeps a confirmation for the conversation that asked it, so another sidebar
+      // or a New chat never answers it. Made with the first request, cleared by a reset.
+      conversationId: null,
       active: null,
       selectedSourceIds: null,
       availableSourceIds: [],
@@ -779,6 +782,7 @@
           steps: [],
           updatedAt: 0,
         };
+        chat.conversationId = chat.conversationId || requestId();
         chat.active = turn;
         startProgress(turn);
         let reply = await api('dmvChat', {
@@ -786,6 +790,7 @@
           transcript: chat.transcript,
           connectionIds: selectedSourceIds(),
           requestId: turn.requestId,
+          conversationId: chat.conversationId,
           ...(answer.confirmToken ? { confirmToken: answer.confirmToken } : {}),
         });
         // A request longer than one Apps Script execution continues in the next one.
@@ -848,6 +853,7 @@
       stopProgress();
       chat.generation++;
       chat.transcript = [];
+      chat.conversationId = null;
       $('chat-messages').replaceChildren();
       setBusy(false);
     }

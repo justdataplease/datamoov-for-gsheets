@@ -137,7 +137,7 @@ test('source ranges must be explicit, bounded and inside the existing grid', () 
   );
 });
 
-test('all source headers and selected one-based offsets are validated before batching', () => {
+test('used source headers and selected one-based offsets are validated before batching', () => {
   for (const patch of [
     { rows: [{ column: 0 }] },
     { rows: [{ column: 6 }] },
@@ -154,12 +154,16 @@ test('all source headers and selected one-based offsets are validated before bat
     );
     assert.equal(f.state.batches.length, 0);
   }
-  for (const header of ['', 'Campaign', 123]) {
+  // The Campaign and Currency columns are row groups, so each needs a header of its own.
+  for (const [column, header] of [
+    [3, ''],
+    [4, 'Campaign'],
+  ]) {
     const f = fixture();
-    f.setCell(f.source, 3, 2, header);
+    f.setCell(f.source, 3, column, header);
     assert.throws(
       () => f.api.dmvChatCreatePivot_(f.session, f.input),
-      /distinct, nonempty text header/
+      /distinct, nonempty header/
     );
     assert.equal(f.state.batches.length, 0);
   }

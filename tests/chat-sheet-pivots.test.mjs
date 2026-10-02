@@ -175,6 +175,7 @@ test('an analyst pivot sends the exact native pivot: filters, sort by value, tot
                     columnOffsetIndex: 4,
                     filterCriteria: {
                       condition: { type: 'NUMBER_GREATER', values: [{ userEnteredValue: '10' }] },
+                      visibleByDefault: true,
                     },
                   },
                   {
@@ -184,6 +185,7 @@ test('an analyst pivot sends the exact native pivot: filters, sort by value, tot
                         type: 'DATE_AFTER',
                         values: [{ userEnteredValue: '=DATE(2026,7,31)' }],
                       },
+                      visibleByDefault: true,
                     },
                   },
                 ],
@@ -389,6 +391,130 @@ test('analyst pivot options are validated before any batch', () => {
   assert.equal(f.pivot({ values: [{ column: 2, summarize: 'COUNTA' }], totals: true }).ok, true);
 });
 
+test('a condition filter shows every value that meets it, so it sets visibleByDefault', () => {
+  // PivotFilterCriteria: with visibleByDefault false (the default) only values both listed in
+  // visibleValues and meeting the condition show, so a condition alone would hide every row.
+  const f = fixture();
+  f.pivot({
+    filters: [
+      { column: 2, values: ['Brand'] },
+      { column: 5, condition: { type: 'number_gt', value: 10 } },
+      { column: 1, condition: { type: 'date_after', value: '2026-07-31' } },
+    ],
+  });
+  assert.deepEqual(f.requests()[1].updateCells.rows[0].values[0].pivotTable.filterSpecs, [
+    { columnOffsetIndex: 1, filterCriteria: { visibleValues: ['Brand'] } },
+    {
+      columnOffsetIndex: 4,
+      filterCriteria: {
+        condition: { type: 'NUMBER_GREATER', values: [{ userEnteredValue: '10' }] },
+        visibleByDefault: true,
+      },
+    },
+    {
+      columnOffsetIndex: 0,
+      filterCriteria: {
+        condition: { type: 'DATE_AFTER', values: [{ userEnteredValue: '=DATE(2026,7,31)' }] },
+        visibleByDefault: true,
+      },
+    },
+  ]);
+});
+
+test('a values filter matches text cells; number and date cells take a condition filter', () => {
+  // A pivot lists number and date cells as it displays them ('8/1/2026', '1,000'), so a value in
+  // another form would quietly empty it.
+  for (const [filter, message] of [
+    [{ column: 1, values: ['2026-08-01'] }, /"Date" holds numbers or dates/],
+    [{ column: 4, values: [10.5] }, /"Spend" holds numbers or dates/],
+    [{ column: 5, values: ['100'] }, /Use a condition filter such as number_eq/],
+  ]) {
+    const f = fixture();
+    assert.throws(() => f.pivot({ filters: [filter] }), message, JSON.stringify(filter));
+    assert.equal(f.state.batches.length, 0);
+  }
+  // A text cell among dates can still be listed; a date in it cannot.
+  const f = fixture();
+  f.setCell(f.source, 6, 2, 'n/a');
+  f.pivot({ filters: [{ column: 1, values: ['n/a'] }] });
+  assert.deepEqual(f.requests()[1].updateCells.rows[0].values[0].pivotTable.filterSpecs, [
+    { columnOffsetIndex: 0, filterCriteria: { visibleValues: ['n/a'] } },
+  ]);
+  assert.throws(
+    () => f.pivot({ targetSheet: 'Second', filters: [{ column: 1, values: ['n/a', '8/1/2026'] }] }),
+    /No text cell under "Date" is exactly "8\/1\/2026"/
+  );
+});
+
+test('only the columns a pivot uses need a distinct, nonempty header; numbers and dates are their text', () => {
+  // A blank spacer or a year typed as a number between the needed columns no longer blocks it.
+  for (const header of ['', 2025, new Date('2026-08-01T12:00:00Z'), 'Campaign'])
+    for (const patch of [{}, { totals: true }]) {
+      const f = fixture();
+      f.setCell(f.source, 3, 2, header);
+      assert.equal(f.pivot(patch).ok, true, JSON.stringify([header, patch]));
+    }
+  const f = fixture();
+  f.setCell(f.source, 3, 6, 2025);
+  const result = f.pivot({ totals: true });
+  assert.deepEqual(result.valuesShown, ['SUM of Spend', 'SUM of 2025']);
+  // A used column, as a group, a value or a filter, still needs its own header.
+  for (const [cell, header, patch] of [
+    [3, '', {}],
+    [5, ' ', { totals: true }],
+    [4, 'campaign', {}],
+    [2, '', { filters: [{ column: 1, condition: { type: 'not_blank' } }] }],
+  ]) {
+    const g = fixture();
+    g.setCell(g.source, 3, cell, header);
+    assert.throws(
+      () => g.pivot(patch),
+      /Each source column the pivot uses needs a distinct, nonempty header/,
+      JSON.stringify([cell, header, patch])
+    );
+    assert.equal(g.state.batches.length, 0);
+  }
+});
+
+test('decimal thresholds go as formulas, which read the same in every spreadsheet locale', () => {
+  // ConditionValue.userEnteredValue is parsed as typed, so '1.5' is no number in a de_DE sheet;
+  // formulas always take a dot. Whole numbers read the same everywhere and stay as they are.
+  const f = fixture();
+  f.pivot({
+    filters: [{ column: 4, condition: { type: 'number_between', value: 0.5, value2: '2.5' } }],
+  });
+  assert.deepEqual(
+    f.requests()[1].updateCells.rows[0].values[0].pivotTable.filterSpecs[0].filterCriteria
+      .condition,
+    { type: 'NUMBER_BETWEEN', values: [{ userEnteredValue: '=0.5' }, { userEnteredValue: '=2.5' }] }
+  );
+  f.rule({
+    action: 'add',
+    range: 'E4:E8',
+    condition: { type: 'number_gt', value: -1.5 },
+    format: { bold: true },
+  });
+  assert.deepEqual(f.requests()[0].addConditionalFormatRule.rule.booleanRule.condition, {
+    type: 'NUMBER_GREATER',
+    values: [{ userEnteredValue: '=-1.5' }],
+  });
+  f.rule({
+    action: 'add',
+    range: 'E4:E8',
+    scale: {
+      min: { type: 'number', value: 0.25, color: '#ffffff' },
+      mid: { type: 'percentile', value: 12.5, color: '#ffffff' },
+      max: { type: 'number', value: 3, color: '#000000' },
+    },
+  });
+  const scale = f.requests()[0].addConditionalFormatRule.rule.gradientRule;
+  assert.deepEqual(
+    [scale.minpoint.value, scale.midpoint.value, scale.maxpoint.value],
+    ['=0.25', '=12.5', '3']
+  );
+  assert.equal(f.conditionalFormats(f.source).length, 2, 'the sandbox accepted both rules');
+});
+
 test('a pivot placed on an existing tab needs empty cells there, and undo removes it', () => {
   const f = fixture();
   const summary = f.book.insertSheet('Summary');
@@ -523,7 +649,7 @@ test('each condition kind becomes the BooleanCondition the API documents', () =>
   const cases = [
     [
       { type: 'number_gte', value: '2.5' },
-      { type: 'NUMBER_GREATER_THAN_EQ', values: [{ userEnteredValue: '2.5' }] },
+      { type: 'NUMBER_GREATER_THAN_EQ', values: [{ userEnteredValue: '=2.5' }] },
     ],
     [
       { type: 'number_lt', value: -1 },
@@ -543,7 +669,7 @@ test('each condition kind becomes the BooleanCondition the API documents', () =>
     ],
     [
       { type: 'number_between', value: 1, value2: '2.5' },
-      { type: 'NUMBER_BETWEEN', values: [{ userEnteredValue: '1' }, { userEnteredValue: '2.5' }] },
+      { type: 'NUMBER_BETWEEN', values: [{ userEnteredValue: '1' }, { userEnteredValue: '=2.5' }] },
     ],
     [
       { type: 'number_not_between', value: 1, value2: 1 },

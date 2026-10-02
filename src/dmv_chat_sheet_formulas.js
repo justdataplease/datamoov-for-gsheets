@@ -4,12 +4,13 @@
    nesting, LET and LAMBDA with its helpers, array literals, references to other tabs of this
    spreadsheet, whole and open ranges (A:A, 2:2, A2:A), named ranges of this spreadsheet and
    formulas up to 8,000 characters. A function that is not a built-in (custom, Apps Script and
-   named functions) is refused by name. Text inside string literals is data: a QUERY string that
-   says IMPORTRANGE is not a call. When the size of a formula's result can be worked out from the
-   formula alone (an array literal, a bounded range, SEQUENCE or MAKEARRAY with literal sizes,
-   TRANSPOSE or ARRAYFORMULA over those), its spill area is guarded, kept for undo and refused
-   when it holds data; other array results are left to Sheets, which never spills over data and
-   shows #REF! instead, and the read-back reports it.
+   named functions) is refused by name, and a LET or LAMBDA name is called only when it is set
+   to LAMBDA(...) and named unlike any built-in. Text inside string literals is data: a QUERY
+   string that says IMPORTRANGE is not a call. When the size of a formula's result can be worked
+   out from the formula alone (an array literal, a bounded range, SEQUENCE or MAKEARRAY with
+   literal sizes, TRANSPOSE or ARRAYFORMULA over those), its spill area is guarded, kept for undo
+   and refused when it holds data; other array results are left to Sheets, which never spills
+   over data and shows #REF! instead, and the read-back reports it.
 
    dmvChatSheetFormulaCheck_(session, formula, options) is the same policy for one formula, for
    other formulas chat writes, such as custom conditional-format rules: it throws a message
@@ -64,11 +65,11 @@ var DMV_FORMULA_BUILTINS = [
   // Google
   'ARRAYFORMULA QUERY SPARKLINE',
   // Info
-  'CELL ERROR.TYPE ISBLANK ISDATE ISEMAIL ISERR ISERROR ISFORMULA ISLOGICAL ISNA ISNONTEXT ISNUMBER ISREF ISTEXT N NA TYPE',
+  'CELL ERROR.TYPE ISBLANK ISDATE ISEMAIL ISERR ISERROR ISFORMULA ISLOGICAL ISNA ISNONTEXT ISNUMBER ISREF ISTEXT N NA SHEETS TYPE',
   // Logical
   'AND FALSE IF IFERROR IFNA IFS LAMBDA LET NOT OR SWITCH TRUE XOR',
   // Lookup
-  'ADDRESS CHOOSE COLUMN COLUMNS FORMULATEXT GETPIVOTDATA HLOOKUP INDEX LOOKUP MATCH OFFSET ROW ROWS VLOOKUP XLOOKUP XMATCH',
+  'ADDRESS CHOOSE COLUMN COLUMNS FORMULATEXT GETPIVOTDATA HLOOKUP INDEX LOOKUP MATCH OFFSET ROW ROWS SHEET VLOOKUP XLOOKUP XMATCH',
   // Math
   'ABS ACOS ACOSH ACOT ACOTH ASIN ASINH ATAN ATAN2 ATANH BASE CEILING CEILING.MATH CEILING.PRECISE COMBIN COMBINA COS COSH COT COTH COUNTBLANK COUNTIF COUNTIFS COUNTUNIQUE COUNTUNIQUEIFS CSC CSCH DECIMAL DEGREES EVEN EXP FACT FACTDOUBLE FLOOR FLOOR.MATH FLOOR.PRECISE GAMMALN GAMMALN.PRECISE GCD INT ISEVEN ISO.CEILING ISODD LCM LN LOG LOG10 MOD MROUND MULTINOMIAL MUNIT ODD PI POWER PRODUCT QUOTIENT RADIANS RAND RANDARRAY RANDBETWEEN ROUND ROUNDDOWN ROUNDUP SEC SECH SEQUENCE SERIESSUM SIGN SIN SINH SQRT SQRTPI SUBTOTAL SUM SUMIF SUMIFS SUMSQ TAN TANH TRUNC',
   // Operator
@@ -350,7 +351,7 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
         if (
           !cache.tabs[key] &&
           !session.spreadsheet.getSheets().some(function (sheet) {
-            return sheet.getName().toLowerCase() === key;
+            return !dmvChatUndoCopy_(sheet) && sheet.getName().toLowerCase() === key;
           })
         ) {
           try {
@@ -423,6 +424,15 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
   }
   function call(token, scope, arrays) {
     var upper = deny(token);
+    // Whether Sheets runs a bound name's value or a function of that name (a custom function,
+    // HYPERLINK) is not documented, so only names that hold a LAMBDA and no function's name are
+    // called.
+    if (scope[upper] && (scope[upper] !== 'lambda' || dmvChatFormulaBuiltin_(upper)))
+      fail(
+        token.text +
+          '(...) calls a LET or LAMBDA name; only a LET name set to LAMBDA(...) can be called, and not one named like a Sheets function',
+        token.at
+      );
     if (!scope[upper] && !dmvChatFormulaBuiltin_(upper))
       fail(
         'unknown function ' +
@@ -443,10 +453,22 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
     depth--;
     return shape;
   }
-  function bind(scope, token) {
+  // A bound name holds 'lambda' when its value is exactly LAMBDA(...), so it may be called, or
+  // 'value' otherwise.
+  function bind(scope, token, kind) {
     var upper = deny(token);
     if (upper === 'TRUE' || upper === 'FALSE') fail(upper + ' cannot be a name', token.at);
-    scope[upper] = true;
+    scope[upper] = kind;
+  }
+  // True when tokens from..to are one LAMBDA(...) and nothing more, not a call of its result.
+  function lambdaOnly(from, to) {
+    if (!tokens[from] || tokens[from].type !== 'function') return false;
+    if (tokens[from].text.toUpperCase() !== 'LAMBDA') return false;
+    for (var i = from + 1, open = 0; i < to; i++) {
+      if (is(tokens[i], '(')) open++;
+      else if (is(tokens[i], ')') && --open === 0) return i === to - 1;
+    }
+    return false;
   }
   function letCall(token, scope, arrays) {
     var inner = Object.assign(Object.create(null), scope),
@@ -456,8 +478,9 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
     while (peek() && peek().type === 'name' && is(tokens[index + 1], ',')) {
       var name = tokens[index];
       index += 2;
+      var from = index;
       expression(inner, arrays);
-      bind(inner, name);
+      bind(inner, name, lambdaOnly(from, index) ? 'lambda' : 'value');
       expect(',');
       bindings++;
     }
@@ -470,7 +493,7 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
   function lambdaCall(token, scope) {
     var inner = Object.assign(Object.create(null), scope);
     while (peek() && peek().type === 'name' && is(tokens[index + 1], ',')) {
-      bind(inner, tokens[index]);
+      bind(inner, tokens[index], 'value');
       index += 2;
     }
     expression(inner, false);
@@ -971,14 +994,17 @@ function dmvChatSearchArea_(sheet, text, data) {
 
 // The cells of whole tabs or ranges in one request, lean: shown value, typed value and, for
 // formulas, the formula. Calls visit(sheetIndex, row, column, cell) with 0-based positions.
-function dmvChatSearchRead_(session, plan, visit) {
+// values names other cell fields to read instead.
+function dmvChatSearchRead_(session, plan, visit, values) {
   dmvChatSheetDeadline_(session);
   var result = Sheets.Spreadsheets.get(session.spreadsheetId, {
     ranges: plan.map(function (item) {
       return "'" + item.sheet.getName().replace(/'/g, "''") + "'!" + dmvChatGridA1_(item.grid);
     }),
     fields:
-      'sheets(properties(sheetId),data(startRow,startColumn,rowData(values(formattedValue,effectiveValue,userEnteredValue))))',
+      'sheets(properties(sheetId),data(startRow,startColumn,rowData(values(' +
+      (values || 'formattedValue,effectiveValue,userEnteredValue') +
+      '))))',
   });
   var used = Object.create(null),
     count = 0;

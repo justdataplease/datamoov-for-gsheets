@@ -1224,6 +1224,18 @@ function dmvDashboardSave_(input, legacy) {
     } catch (ignored) {
       throw new Error('This dashboard is too large to save. Use fewer datasets, fields or tiles.');
     }
+    // A dataset dropped from the plan no longer owns its tab. Its record in the spreadsheet goes
+    // first, so a failure leaves the plan as it was.
+    var dropped = ((previous && previous.outputs) || [])
+      .filter(function (output) {
+        return !dashboard.outputs.some(function (kept) {
+          return kept.id === output.id;
+        });
+      })
+      .map(function (output) {
+        return dmvDashboardOutputId_(dashboard, output);
+      });
+    if (dropped.length) dmvForgetOutputs_(dashboard.spreadsheetId, dropped);
     dmvSave_('dashboard', dashboard);
     try {
       dmvEnsureSchedule_();
@@ -1234,16 +1246,8 @@ function dmvDashboardSave_(input, legacy) {
         'The refresh schedule could not be created. Check Google authorization and try again.'
       );
     }
-    // A dataset dropped from the plan no longer owns its tab.
-    ((previous && previous.outputs) || []).forEach(function (output) {
-      if (
-        !dashboard.outputs.some(function (kept) {
-          return kept.id === output.id;
-        })
-      )
-        dmvStore_().deleteProperty(
-          dmvOutputKey_(dashboard.spreadsheetId, dmvDashboardOutputId_(dashboard, output))
-        );
+    dropped.forEach(function (outputId) {
+      dmvStore_().deleteProperty(dmvOutputKey_(dashboard.spreadsheetId, outputId));
     });
     return dmvDashboardSummary_(dashboard, spreadsheet);
   });
@@ -1260,15 +1264,18 @@ function dmvDeleteDashboard(id, keepTabs) {
       throw new Error('Wait for this dashboard refresh to finish.');
     var store = dmvStore_();
     // -data is the combined tab of dashboards saved before datasets existed.
-    var keys = ['-report', '-charts', '-data']
+    var ids = ['-report', '-charts', '-data']
       .concat(
         (dashboard.outputs || []).map(function (output) {
           return '-d-' + output.id;
         })
       )
       .map(function (suffix) {
-        return dmvOutputKey_(dashboard.spreadsheetId, dashboard.id + suffix);
+        return dashboard.id + suffix;
       });
+    var keys = ids.map(function (outputId) {
+      return dmvOutputKey_(dashboard.spreadsheetId, outputId);
+    });
     var deleted = 0;
     if (keepTabs !== true)
       deleted = dmvWorkbookLocked_(function () {
@@ -1305,6 +1312,8 @@ function dmvDeleteDashboard(id, keepTabs) {
           return request.deleteSheet;
         }).length;
       });
+    // Records on deleted tabs went with them; those on kept tabs go now.
+    dmvForgetOutputs_(dashboard.spreadsheetId, ids);
     store.deleteProperty(dmvKey_('dashboard', dashboard.id));
     keys.forEach(function (key) {
       store.deleteProperty(key);

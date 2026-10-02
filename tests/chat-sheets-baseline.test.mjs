@@ -1079,7 +1079,7 @@ test('baseline: filter sends one exact setBasicFilter, keeps other criteria and 
           filter: {
             range: grid(f.sheet.id, 0, 3, 0, 2),
             criteria: {
-              1: { condition: { type: 'NUMBER_GREATER', values: [{ userEnteredValue: '1.5' }] } },
+              1: { condition: { type: 'NUMBER_GREATER', values: [{ userEnteredValue: '=1.5' }] } },
             },
           },
         },
@@ -1089,7 +1089,7 @@ test('baseline: filter sends one exact setBasicFilter, keeps other criteria and 
   f.edit('filter', { filter: { column: 1, condition: 'TEXT_CONTAINS', value: 'Brand' } });
   assert.deepEqual(f.lastBody().requests[0].setBasicFilter.filter.criteria, {
     0: { condition: { type: 'TEXT_CONTAINS', values: [{ userEnteredValue: 'Brand' }] } },
-    1: { condition: { type: 'NUMBER_GREATER', values: [{ userEnteredValue: '1.5' }] } },
+    1: { condition: { type: 'NUMBER_GREATER', values: [{ userEnteredValue: '=1.5' }] } },
   });
   f.edit('filter', { filter: { column: 1, condition: 'NOT_BLANK' } });
   assert.deepEqual(f.lastBody().requests[0].setBasicFilter.filter.criteria[0], {

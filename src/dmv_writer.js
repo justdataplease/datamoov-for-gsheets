@@ -1,4 +1,4 @@
-/* Sheets output: ownership receipt, overlap checks and one atomic batchUpdate. */
+/* Sheets output: ownership receipt, output record, overlap checks and one atomic batchUpdate. */
 function dmvOutputDigest_(matrix) {
   var bytes = Utilities.computeDigest(
     Utilities.DigestAlgorithm.SHA_256,
@@ -92,6 +92,9 @@ function dmvWriteReportsUnlocked_(spreadsheet, outputs, beforeCommit, extra) {
   });
   starts.push(plan.requests.length);
   if (extra) plan.requests = plan.requests.concat(extra(plan.areas) || []);
+  plan.requests = plan.requests.concat(
+    dmvOutputRecordRequests_(spreadsheet.getId(), outputs, plan.areas, plan.all)
+  );
   if (JSON.stringify(plan.requests).length > DMV_LIMITS.maxBytes) {
     // Marked, with each output's area and share of the batch in output order, so a caller that
     // knows what its outputs hold (a dashboard's datasets and page) can name what to narrow.
@@ -644,6 +647,159 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
     merges: merges,
     made: (grids[sheetId].made || []).concat(created),
   };
+}
+
+/* Output records: what every collaborator's chat knows of report and dashboard output. */
+
+// Receipts are private to the user whose report or dashboard wrote the output. So that chat
+// leaves that output alone for every collaborator, each write also records the output's area as
+// developer metadata on its tab: project visibility keeps it to DataMoov, it goes with the tab,
+// and it holds no names, only ids, the kind of owner and the area. The spreadsheet id lets a
+// copy of the spreadsheet tell a copied record from its own.
+var DMV_OUTPUT_RECORD = 'dmv:v1:output';
+
+// The report or dashboard that owns an output id, from the owner's private records:
+// { kind: 'report'|'dashboard'|'output', name, page? }. 'output' is any other output, such as
+// a chat table, which is never refreshed.
+function dmvOutputOwner_(all, id) {
+  function name(text) {
+    try {
+      return String(JSON.parse(text).name || '');
+    } catch (ignored) {
+      return '';
+    }
+  }
+  if (all['dmv:v1:report:' + id]) return { kind: 'report', name: name(all['dmv:v1:report:' + id]) };
+  var prefix = 'dmv:v1:dashboard:';
+  var keys = Object.keys(all).filter(function (candidate) {
+    return (
+      candidate.indexOf(prefix) === 0 && id.indexOf(candidate.slice(prefix.length) + '-') === 0
+    );
+  });
+  // page marks the dashboard tab (<id>-report) and its chart data tab (<id>-charts); a dataset
+  // receipt (<id>-d-<dataset>) is not one, whatever its dataset id ends with.
+  var page = keys.filter(function (candidate) {
+    var rest = id.slice(candidate.length - prefix.length);
+    return rest === '-report' || rest === '-charts';
+  })[0];
+  var key = page || keys[0];
+  if (key) return { kind: 'dashboard', name: name(all[key]), page: !!page };
+  return { kind: 'output', name: '' };
+}
+
+// The output records of this spreadsheet, each with its metadata id and the tab it lies on.
+function dmvOutputRecords_(spreadsheetId) {
+  var response = Sheets.Spreadsheets.get(spreadsheetId, {
+    fields: 'sheets(properties.sheetId,developerMetadata(metadataId,metadataKey,metadataValue))',
+  });
+  var records = [];
+  ((response && response.sheets) || []).forEach(function (item) {
+    (item.developerMetadata || []).forEach(function (metadata) {
+      if (metadata.metadataKey !== DMV_OUTPUT_RECORD) return;
+      var record;
+      try {
+        record = JSON.parse(metadata.metadataValue);
+      } catch (ignored) {
+        return;
+      }
+      if (
+        !record ||
+        record.spreadsheetId !== spreadsheetId ||
+        typeof record.id !== 'string' ||
+        ['report', 'dashboard'].indexOf(record.kind) < 0 ||
+        ![record.row, record.column, record.rows, record.columns].every(function (value) {
+          return Number.isInteger(value) && value > 0;
+        })
+      )
+        return;
+      records.push({
+        metadataId: metadata.metadataId,
+        // The API leaves out a sheet id of 0.
+        sheetId: (item.properties && item.properties.sheetId) || 0,
+        value: metadata.metadataValue,
+        record: record,
+      });
+    });
+  });
+  return records;
+}
+
+function dmvOutputRecordDelete_(found) {
+  return {
+    deleteDeveloperMetadata: {
+      dataFilter: { developerMetadataLookup: { metadataId: found.metadataId } },
+    },
+  };
+}
+
+// Requests that leave one record per report or dashboard output of this write, on the tab it
+// now lies on. A record that already says the same is kept, so a refresh of the same area sends
+// none. When the records cannot be read, the write goes ahead without them: they protect the
+// output, and a later refresh brings them up to date.
+function dmvOutputRecordRequests_(spreadsheetId, outputs, areas, all) {
+  var owners = outputs.map(function (output) {
+    return dmvOutputOwner_(all, output.report.id);
+  });
+  if (
+    !owners.some(function (owner) {
+      return owner.kind !== 'output';
+    })
+  )
+    return [];
+  var existing;
+  try {
+    existing = dmvOutputRecords_(spreadsheetId);
+  } catch (ignored) {
+    return [];
+  }
+  var requests = [];
+  outputs.forEach(function (output, index) {
+    var owner = owners[index],
+      area = areas[index];
+    if (owner.kind === 'output') return;
+    var record = {
+      spreadsheetId: spreadsheetId,
+      id: output.report.id,
+      kind: owner.kind,
+      row: area.row,
+      column: area.column,
+      rows: area.rows,
+      columns: area.columns,
+    };
+    if (owner.page) record.page = true;
+    var value = JSON.stringify(record),
+      kept = false;
+    existing.forEach(function (found) {
+      if (found.record.id !== record.id) return;
+      if (!kept && found.sheetId === area.sheetId && found.value === value) kept = true;
+      else requests.push(dmvOutputRecordDelete_(found));
+    });
+    if (!kept)
+      requests.push({
+        createDeveloperMetadata: {
+          developerMetadata: {
+            metadataKey: DMV_OUTPUT_RECORD,
+            metadataValue: value,
+            location: { sheetId: area.sheetId },
+            visibility: 'PROJECT',
+          },
+        },
+      });
+  });
+  return requests;
+}
+
+// Removes the records of outputs no longer refreshed, when their report or dashboard (or a
+// dashboard dataset) is removed, so collaborators may edit what was left behind.
+function dmvForgetOutputs_(spreadsheetId, ids) {
+  dmvWorkbookLocked_(function () {
+    var requests = dmvOutputRecords_(spreadsheetId)
+      .filter(function (found) {
+        return ids.indexOf(found.record.id) >= 0;
+      })
+      .map(dmvOutputRecordDelete_);
+    if (requests.length) Sheets.Spreadsheets.batchUpdate({ requests: requests }, spreadsheetId);
+  });
 }
 
 var DMV_LAYOUT_STYLES = {

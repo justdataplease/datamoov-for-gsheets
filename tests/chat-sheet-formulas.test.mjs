@@ -170,6 +170,8 @@ const CORPUS = [
   '=CONCAT("IMPORTRANGE(", "is just text")',
   '=IF(ISNA(#N/A),-A2%,+A2^2&"x")',
   '=SUM(IF(A1:A3>0,1,0),,3)',
+  '=SHEETS()',
+  "=SHEET('Campaign Data'!A1)",
 ];
 
 test('a corpus of analyst formulas is accepted and written exactly as given', () => {

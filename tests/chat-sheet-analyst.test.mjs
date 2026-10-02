@@ -41,6 +41,8 @@ function fixture() {
   f.api.dmvSaveAiSettings({ provider: 'anthropic', apiKey: AI_KEY });
   // Scripted replies name tokens by placeholder, replaced as a model would copy them from the
   // tool results: the edit token of the latest inspection of that range, the latest confirmToken.
+  // REPLAYED is the confirmToken as the replayed transcript text shows it, all a model has of a
+  // token from an earlier request.
   f.seen = {};
   f.tokens = {};
   f.requests = [];
@@ -48,17 +50,21 @@ function fixture() {
   f.api.UrlFetchApp.fetch = (url, options) => {
     const body = JSON.parse(options.payload);
     f.requests.push(body);
+    let replayed;
     for (const message of body.messages)
       for (const block of Array.isArray(message.content) ? message.content : [])
         if (block.type === 'tool_result') {
           const result = JSON.parse(block.content);
           Object.assign(f.seen, result);
           if (result.editToken) f.tokens[result.range] = result.editToken;
-        }
+        } else if (block.type === 'text')
+          for (const found of block.text.matchAll(/confirmToken (c[a-f0-9]*)/g))
+            replayed = found[1];
     for (const block of f.state.responses[0]?.body?.content || [])
       if (block.type === 'tool_use') {
         if (block.input.editToken === 'EDIT') block.input.editToken = f.tokens[block.input.range];
         if (block.input.confirmToken === 'CONFIRM') block.input.confirmToken = f.seen.confirmToken;
+        if (block.input.confirmToken === 'REPLAYED') block.input.confirmToken = replayed;
       }
     return fetch(url, options);
   };
@@ -306,4 +312,148 @@ test('a No, another message or a replayed token leaves the confirmation unused',
   );
   assert.equal(f.state.batches.length, 1, 'a replayed token changes nothing');
   assert.match(third.events.find((event) => event.kind === 'error').text, /not approved/);
+});
+
+test('the confirmToken reaches the next request whole, after a long question or a busy turn', () => {
+  for (const inspections of [0, 11]) {
+    const f = fixture();
+    // A long tab name makes a long question; the token comes after it.
+    f.sheet.name = 'Campaign performance Q3 by country';
+    const tab = f.sheet.name;
+    const remove = (extra) =>
+      call('edit_sheet', { action: 'delete_rows', sheetName: tab, start: 3, count: 2, ...extra });
+    f.state.responses.push(
+      ...(inspections
+        ? [
+            reply(
+              Array.from({ length: inspections }, () =>
+                call('inspect_sheet', { sheetName: tab, range: 'A1:B2' })
+              )
+            ),
+          ]
+        : []),
+      reply([remove()]),
+      reply([call('ask_user', { question: 'Delete rows 3-4?', options: ['Yes', 'No'] })])
+    );
+    const first = plain(f.api.dmvChat({ text: 'Delete rows 3 and 4', transcript: [] }));
+    const token = /^confirmToken (c[a-f0-9]{32})$/.exec(offered(first.events)[0].ref)[1];
+    f.state.responses.push(
+      reply([remove({ confirmToken: 'REPLAYED' })]),
+      reply([{ type: 'text', text: 'Deleted.' }], 'end_turn')
+    );
+    const second = plain(
+      f.api.dmvChat({ text: 'Yes', transcript: first.transcriptAppend, confirmToken: token })
+    );
+    const label = inspections + ' inspections first';
+    assert.deepEqual(
+      second.events.filter((event) => event.kind === 'error'),
+      [],
+      label
+    );
+    assert.equal(f.state.batches.length, 1, label);
+    assert.equal(f.value(f.sheet, 3, 1).trim(), 'cy@x.com', label);
+  }
+});
+
+test('a cut-off confirmToken says the call works without it once the user said yes', () => {
+  const f = fixture();
+  f.setCell(f.sheet, 2, 1, 'ann@x.com');
+  f.state.responses.push(
+    reply([inspect('A1:J6')]),
+    reply([dedupe()]),
+    reply([call('ask_user', { question: 'Remove the duplicate?', options: ['Yes', 'No'] })])
+  );
+  const first = plain(f.api.dmvChat({ text: 'Remove duplicate emails', transcript: [] }));
+  const token = /^confirmToken (c[a-f0-9]{32})$/.exec(offered(first.events)[0].ref)[1];
+  f.state.responses.push(
+    reply([inspect('A1:J6')]),
+    reply([dedupe({ confirmToken: token.slice(0, 20) })]),
+    reply([dedupe()]),
+    reply([{ type: 'text', text: 'Done.' }], 'end_turn')
+  );
+  const second = plain(
+    f.api.dmvChat({ text: 'Yes', transcript: first.transcriptAppend, confirmToken: token })
+  );
+  const errors = second.events.filter((event) => event.kind === 'error');
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].text, /repeat the identical call without confirmToken/);
+  assert.equal(f.state.batches.length, 1, 'the call without the token acted');
+});
+
+test('a confirmToken sent with another call returns the approved call to repeat', () => {
+  const f = fixture();
+  f.setCell(f.sheet, 2, 1, 'ann@x.com');
+  f.state.responses.push(
+    reply([inspect('A1:J6')]),
+    reply([dedupe()]),
+    reply([call('ask_user', { question: 'Remove the duplicate?', options: ['Yes', 'No'] })])
+  );
+  const first = plain(f.api.dmvChat({ text: 'Remove duplicate emails', transcript: [] }));
+  const token = /^confirmToken (c[a-f0-9]{32})$/.exec(offered(first.events)[0].ref)[1];
+  f.state.responses.push(
+    reply([inspect('A1:J6')]),
+    reply([dedupe({ keep: 'last', confirmToken: 'CONFIRM' })]),
+    reply([{ type: 'text', text: 'Asked again.' }], 'end_turn')
+  );
+  plain(f.api.dmvChat({ text: 'Yes', transcript: first.transcriptAppend, confirmToken: token }));
+  const result = JSON.parse(
+    f.requests
+      .at(-1)
+      .messages.at(-1)
+      .content.find((block) => block.type === 'tool_result').content
+  );
+  assert.match(result.error, /given for a different change/);
+  assert.deepEqual(result.approvedCalls, [
+    { action: 'remove_duplicates', keyColumns: [1], range: 'A1:J6', sheetName: 'Export' },
+  ]);
+  assert.equal(f.state.batches.length, 0);
+});
+
+test('a question waits for its own conversation: another chat neither drops nor approves it', () => {
+  const f = fixture();
+  f.setCell(f.sheet, 2, 1, 'ann@x.com');
+  const ONE = 'conversation-one-0000-0000-000000000001';
+  const TWO = 'conversation-two-0000-0000-000000000002';
+  f.state.responses.push(
+    reply([inspect('A1:J6')]),
+    reply([dedupe()]),
+    reply([call('ask_user', { question: 'Remove the duplicate?', options: ['Yes', 'No'] })])
+  );
+  const first = plain(
+    f.api.dmvChat({ text: 'Remove duplicate emails', transcript: [], conversationId: ONE })
+  );
+  const token = /^confirmToken (c[a-f0-9]{32})$/.exec(offered(first.events)[0].ref)[1];
+  // Another sidebar, or the same one after New chat, answers yes to something else; the same
+  // call there still has to ask.
+  f.state.responses.push(
+    reply([inspect('A1:J6')]),
+    reply([dedupe()]),
+    reply([{ type: 'text', text: 'Asked.' }], 'end_turn')
+  );
+  const other = plain(f.api.dmvChat({ text: 'Yes', transcript: [], conversationId: TWO }));
+  assert.equal(offered(other.events).length, 1, 'the other chat was not approved');
+  assert.equal(f.state.batches.length, 0);
+  // The first conversation's Yes chip still approves its own question.
+  f.state.responses.push(
+    reply([inspect('A1:J6')]),
+    reply([dedupe({ confirmToken: 'REPLAYED' })]),
+    reply([{ type: 'text', text: 'Done.' }], 'end_turn')
+  );
+  const yes = plain(
+    f.api.dmvChat({
+      text: 'Yes',
+      transcript: first.transcriptAppend,
+      confirmToken: token,
+      conversationId: ONE,
+    })
+  );
+  assert.deepEqual(
+    yes.events.filter((event) => event.kind === 'error'),
+    []
+  );
+  assert.equal(f.state.batches.length, 1);
+  assert.throws(
+    () => f.api.dmvChat({ text: 'Yes', transcript: [], conversationId: 'short' }),
+    /Choose a valid chat conversation ID/
+  );
 });

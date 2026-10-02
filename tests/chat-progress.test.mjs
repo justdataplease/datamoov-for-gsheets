@@ -476,6 +476,40 @@ test('progress retains at most sixty recent steps with increasing IDs', () => {
   assert.ok(progress.steps[0].id > 1);
 });
 
+test('progress keeps updating after the analyst tools that declare their own labels', () => {
+  const f = fixture(),
+    observed = [];
+  let rounds = 0;
+  f.api.dmvAiComplete_ = () => {
+    observed.push(f.progress());
+    return ++rounds === 1
+      ? reply('', [call('search_sheets'), call('conditional_format'), call('list_sheets')])
+      : reply('Done');
+  };
+  f.api.dmvChatTools_ = () =>
+    ['search_sheets', 'conditional_format', 'list_sheets'].map((name) => ({
+      name,
+      run() {
+        observed.push(f.progress());
+        return {};
+      },
+    }));
+  chat(f);
+  assert.deepEqual(
+    observed.map((snapshot) => [snapshot.status, snapshot.steps.at(-1)?.text]),
+    [
+      ['running', 'Working on your request'],
+      ['running', 'Searching the spreadsheet'],
+      ['running', 'Updating conditional formatting'],
+      ['running', 'Checking spreadsheet tabs'],
+      ['running', 'Reviewing results'],
+    ]
+  );
+  const done = f.progress();
+  assert.equal(done.status, 'complete');
+  assert.equal(done.steps.length, 6);
+});
+
 test('connected source instructions enter the prompt once and never enter progress snapshots', () => {
   const f = fixture();
   f.api.dmvRegisterConnector_({ id: 'orchard', label: 'Orchard', authFields: [], reports: [] });

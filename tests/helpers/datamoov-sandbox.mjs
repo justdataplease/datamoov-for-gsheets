@@ -278,7 +278,8 @@ function sheetProperties(sheet, index) {
 
 const MORE_REQUESTS = ['copyPaste', 'cutPaste', 'insertDimension', 'deleteDimension', 'addDimensionGroup', 'deleteDimensionGroup',
   'findReplace', 'deleteDuplicates', 'trimWhitespace', 'textToColumns', 'setDataValidation', 'addNamedRange', 'updateNamedRange',
-  'deleteNamedRange', 'duplicateSheet', 'addConditionalFormatRule', 'updateConditionalFormatRule', 'deleteConditionalFormatRule'];
+  'deleteNamedRange', 'duplicateSheet', 'addConditionalFormatRule', 'updateConditionalFormatRule', 'deleteConditionalFormatRule',
+  'createDeveloperMetadata', 'deleteDeveloperMetadata'];
 
 const ERROR_TEXT = { ERROR: '#ERROR!', NULL_VALUE: '#NULL!', DIVIDE_BY_ZERO: '#DIV/0!', VALUE: '#VALUE!', REF: '#REF!', NAME: '#NAME?', NUM: '#NUM!', N_A: '#N/A', LOADING: 'Loading...' };
 
@@ -288,11 +289,18 @@ export function createDatamoovSandbox(settings = {}) {
   let activeSpreadsheet = null;
   const user = properties(), script = properties(), document = properties();
   const cacheData = new Map();
+  // Like CacheService, a value over 100 KB is refused and nothing of the call is stored.
+  const cacheFits = (value) => {
+    if (Buffer.byteLength(String(value), 'utf8') > 100 * 1024) throw new Error('Argument too large: value');
+  };
   const cache = {
     data: cacheData,
     get: (key) => cacheData.has(key) ? cacheData.get(key) : null,
-    put(key, value) { cacheData.set(key, String(value)); },
-    putAll(values) { for (const [key, value] of Object.entries(values)) cacheData.set(key, String(value)); },
+    put(key, value) { cacheFits(value); cacheData.set(key, String(value)); },
+    putAll(values) {
+      Object.values(values).forEach(cacheFits);
+      for (const [key, value] of Object.entries(values)) cacheData.set(key, String(value));
+    },
     getAll(keys) { return Object.fromEntries(keys.filter((key) => cacheData.has(key)).map((key) => [key, cacheData.get(key)])); },
     remove(key) { cacheData.delete(key); },
     removeAll(keys) { for (const key of keys) cacheData.delete(key); },
@@ -348,9 +356,11 @@ export function createDatamoovSandbox(settings = {}) {
       columnWidths: new Map(), hiddenGridlines: false, tabColor: null,
       // Advanced Sheets state: userEnteredFormat per cell, merged GridRanges and 0-based pixel sizes.
       formats: new Map(), merges: [], pixelSizes: { ROWS: new Map(), COLUMNS: new Map() },
-      // Other cell fields (note, dataValidation, pivotTable, textFormatRuns), the tab's conditional
+      // Other cell fields (note, dataValidation, pivotTable, textFormatRuns, chipRuns), the tab's conditional
       // format rules in order, and the group depth of each 0-based row and column.
       meta: new Map(), conditionalFormats: [], groupDepths: { ROWS: [], COLUMNS: [] },
+      // Developer metadata located on the tab itself; it goes when the tab is deleted.
+      developerMetadata: [],
       getName: () => sheet.name, getSheetId: () => sheet.id,
       isSheetHidden: () => sheet.hidden,
       showSheet() { sheet.hidden = false; return sheet; },
@@ -366,7 +376,9 @@ export function createDatamoovSandbox(settings = {}) {
       getRange: (...args) => range(sheet, ...args),
       getDataRange() {
         let lastRow = 0, lastColumn = 0;
-        for (const key of sheet.cells.keys()) {
+        // A pivot table shows its output from its anchor cell on, so the data range takes it in.
+        const anchors = [...sheet.meta].filter(([, meta]) => meta?.pivotTable).map(([key]) => key);
+        for (const key of [...sheet.cells.keys(), ...anchors]) {
           const [r, c] = key.split(':').map(Number);
           lastRow = Math.max(lastRow, r); lastColumn = Math.max(lastColumn, c);
         }
@@ -399,7 +411,8 @@ export function createDatamoovSandbox(settings = {}) {
       get activeSheet() { return server.activeSheet; },
       getId: () => server.id, getSpreadsheetTimeZone: () => server.timezone,
       getSheets: visible,
-      getSheetByName: (name) => visible().find((sheet) => sheet.name === name) || null,
+      // Apps Script finds a tab by name without regard to case, as Sheets keeps tab names unique that way.
+      getSheetByName: (name) => visible().find((sheet) => sheet.name.toLowerCase() === String(name).toLowerCase()) || null,
       insertSheet(name) { const sheet = makeSheet(name); server.sheets.push(sheet); known.add(sheet.id); return sheet; },
       getActiveRange: () => server.activeRange,
       getActiveSheet: () => server.activeSheet || visible()[0] || null,
@@ -443,6 +456,7 @@ export function createDatamoovSandbox(settings = {}) {
       sheet.meta = new Map(sheet.meta);
       sheet.conditionalFormats = plain(sheet.conditionalFormats);
       sheet.groupDepths = { ROWS: sheet.groupDepths.ROWS.slice(), COLUMNS: sheet.groupDepths.COLUMNS.slice() };
+      sheet.developerMetadata = sheet.developerMetadata.slice();
     }
     let namedRanges = plain(book.namedRanges || []), requestIndex = -1;
     const order = book.sheets.map((sheet) => sheet.id);
@@ -690,10 +704,31 @@ export function createDatamoovSandbox(settings = {}) {
       if (pivot.valueLayout !== undefined && !['HORIZONTAL', 'VERTICAL'].includes(pivot.valueLayout)) fail(`Invalid value layout ${pivot.valueLayout}.`);
     };
     // Cell fields beyond the value and the format follow the field mask like userEnteredFormat does.
-    const META_FIELDS = ['note', 'dataValidation', 'pivotTable', 'textFormatRuns'];
+    const META_FIELDS = ['note', 'dataValidation', 'pivotTable', 'textFormatRuns', 'chipRuns'];
     const metaFields = (fields) => {
       const list = String(fields || '').split(',').map((field) => field.trim());
       return META_FIELDS.filter((name) => fields === '*' || list.some((field) => field === name || field.startsWith(name + '.')));
+    };
+    // Smart chips (CellData.chipRuns): written runs each carry a person or a rich link chip on an
+    // @ placeholder of the cell's text, and only Drive files can be written as rich link chips.
+    const checkChips = (sheet, key, runs) => {
+      const text = String(sheet.cells.get(key)?.value ?? '');
+      for (const run of runs) {
+        const chip = run?.chip || {};
+        if (['personProperties', 'richLinkProperties'].filter((kind) => chip[kind] !== undefined).length !== 1)
+          fail('A chip run needs a person or a rich link chip.');
+        if (text.charAt(run.startIndex ?? 0) !== '@') fail('A chip run must start at an @ placeholder.');
+        if (chip.personProperties && typeof chip.personProperties.email !== 'string') fail('A person chip needs an email.');
+        if (chip.richLinkProperties && !/^https:\/\/(?:docs|drive)\.google\.com\//.test(String(chip.richLinkProperties.uri)))
+          fail('Only Drive files can be written as chips.');
+      }
+    };
+    // Writing a new userEnteredValue erases the cell's chip runs.
+    const eraseChips = (sheet, row, column) => {
+      const key = address(row + 1, column + 1), meta = sheet.meta.get(key);
+      if (!meta?.chipRuns) return;
+      const { chipRuns: _, ...rest } = meta;
+      keyed(sheet.meta, key, Object.keys(rest).length ? rest : undefined);
     };
     const setMeta = (sheet, row, column, names, input, checked = false) => {
       const key = address(row + 1, column + 1), meta = { ...sheet.meta.get(key) };
@@ -702,6 +737,7 @@ export function createDatamoovSandbox(settings = {}) {
         if (value === undefined || value === '' || (Array.isArray(value) && !value.length)) { delete meta[name]; continue; }
         if (!checked && name === 'dataValidation') checkCondition(value.condition, 'validation');
         if (!checked && name === 'pivotTable') checkPivot(value);
+        if (!checked && name === 'chipRuns') checkChips(sheet, key, value);
         meta[name] = plain(value);
       }
       keyed(sheet.meta, key, Object.keys(meta).length ? meta : undefined);
@@ -806,6 +842,7 @@ export function createDatamoovSandbox(settings = {}) {
       if (all || type === 'PASTE_FORMULA')
         keyed(sheet.cells, key, data.entry?.formula ? formulaEntry(data.entry, formulaFor(data.entry.formula)) : data.entry);
       if (type === 'PASTE_VALUES') keyed(sheet.cells, key, data.entry && data.entry.value !== '' ? { value: data.entry.value, formula: '' } : undefined);
+      if (type === 'PASTE_VALUES' || type === 'PASTE_FORMULA') eraseChips(sheet, row, column);
       if (all || type === 'PASTE_FORMAT')
         keyed(sheet.formats, key, type === 'PASTE_NO_BORDERS' ? setPath(data.format || {}, ['borders'], sheet.formats.get(key)?.borders) : data.format);
       const meta = { ...sheet.meta.get(key) }, from = data.meta || {};
@@ -1090,6 +1127,39 @@ export function createDatamoovSandbox(settings = {}) {
         namedRanges = namedRanges.filter((item) => item.namedRangeId !== id);
         return {};
       }
+      // Developer metadata located on a tab (the subset the app uses): the key and a visibility are
+      // required, the API assigns a positive id unless one is given, and each tab holds at most
+      // 30,000 characters of keys and values. A delete takes a lookup and removes every entry it
+      // matches; the API does not document a lookup that matches nothing, so neither does this.
+      if (request.createDeveloperMetadata) {
+        const input = request.createDeveloperMetadata.developerMetadata || {};
+        if (typeof input.metadataKey !== 'string' || !input.metadataKey) fail('metadataKey is required.');
+        if (!['DOCUMENT', 'PROJECT'].includes(input.visibility)) fail(`Invalid visibility ${input.visibility}.`);
+        const location = input.location || {};
+        if (Object.keys(location).join() !== 'sheetId') fail('This sandbox locates developer metadata on a sheet only.');
+        const sheet = sheetFor(location.sheetId), all = [...staged.values()].flatMap((item) => item.developerMetadata);
+        const id = input.metadataId ?? (state.metadataSerial = Math.max(state.metadataSerial || 0, ...all.map((item) => item.metadataId)) + 1);
+        if (!Number.isInteger(id) || id < 1 || all.some((item) => item.metadataId === id)) fail(`Invalid or duplicate metadata ID ${id}.`);
+        const entry = { metadataId: id, metadataKey: input.metadataKey, metadataValue: input.metadataValue ?? '',
+          location: { locationType: 'SHEET', sheetId: sheet.id }, visibility: input.visibility };
+        const size = [...sheet.developerMetadata, entry].reduce((sum, item) => sum + item.metadataKey.length + item.metadataValue.length, 0);
+        if (size > 30000) fail('The developer metadata of a sheet may hold at most 30,000 characters.');
+        sheet.developerMetadata.push(entry);
+        return { createDeveloperMetadata: { developerMetadata: apiJson(entry) } };
+      }
+      if (request.deleteDeveloperMetadata) {
+        const lookup = request.deleteDeveloperMetadata.dataFilter?.developerMetadataLookup;
+        if (!lookup || !Object.keys(lookup).length) fail('A developerMetadataLookup data filter is required.');
+        const matches = (item) => (lookup.metadataId === undefined || item.metadataId === lookup.metadataId) &&
+          (lookup.metadataKey === undefined || item.metadataKey === lookup.metadataKey) &&
+          (lookup.metadataValue === undefined || item.metadataValue === lookup.metadataValue);
+        const deleted = [];
+        for (const sheet of staged.values()) {
+          deleted.push(...sheet.developerMetadata.filter(matches));
+          sheet.developerMetadata = sheet.developerMetadata.filter((item) => !matches(item));
+        }
+        return { deleteDeveloperMetadata: apiJson({ deletedDeveloperMetadata: deleted }) };
+      }
       if (request.duplicateSheet) {
         const spec = request.duplicateSheet, source = sheetFor(spec.sourceSheetId ?? 0);
         const id = spec.newSheetId ?? nextSheetId + 1, index = spec.insertSheetIndex ?? 0;
@@ -1186,8 +1256,10 @@ export function createDatamoovSandbox(settings = {}) {
           endColumnIndex: (update.start.columnIndex || 0) + Math.max(0, ...(update.rows || []).map((row) => (row.values || []).length)) };
         const target = readGrid(grid);
         if (String(update.fields).includes('userEnteredValue') || update.fields === '*') {
-          for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++)
+          for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++) {
             put(target.cells, r, c, update.rows?.[r - target.startRow]?.values?.[c - target.startColumn]);
+            eraseChips(target.sheet, r, c);
+          }
         }
         const paths = formatPaths(update.fields), rows = paths.length ? plain(update.rows || []) : [];
         if (paths.length)
@@ -1201,7 +1273,7 @@ export function createDatamoovSandbox(settings = {}) {
         const repeat = request.repeatCell;
         const target = readGrid(repeat.range);
         if (String(repeat.fields).includes('userEnteredValue') || repeat.fields === '*')
-          for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++) put(target.cells, r, c, repeat.cell);
+          for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++) { put(target.cells, r, c, repeat.cell); eraseChips(target.sheet, r, c); }
         const paths = formatPaths(repeat.fields), input = plain(repeat.cell || {});
         if (paths.length)
           for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++) setFormat(target.sheet, r, c, paths, input);
@@ -1267,6 +1339,15 @@ export function createDatamoovSandbox(settings = {}) {
         else throw new Error('Invalid appended dimension');
       } else if (request.updateSheetProperties) {
         const props = request.updateSheetProperties.properties, sheet = findSheet(props.sheetId);
+        if (props.title !== undefined) {
+          const from = sheet.name;
+          if (typeof props.title !== 'string' || !props.title ||
+              [...staged.values()].some((other) => other.id !== sheet.id && other.name.toLowerCase() === props.title.toLowerCase()))
+            throw new Error(`A sheet with the name "${props.title}" already exists. Please enter another name.`);
+          // Renaming a tab updates the formulas, rules and validation that name it, as Sheets does.
+          sheet.name = props.title;
+          rewriteAll((ref) => ref.sheet === from ? { ...ref, sheet: props.title } : ref);
+        }
         if (props.gridProperties?.rowCount !== undefined) sheet.maxRows = props.gridProperties.rowCount;
         if (props.gridProperties?.columnCount !== undefined) sheet.maxColumns = props.gridProperties.columnCount;
         if (props.gridProperties?.frozenRowCount !== undefined) sheet.frozenRows = props.gridProperties.frozenRowCount;
@@ -1378,7 +1459,22 @@ export function createDatamoovSandbox(settings = {}) {
       }
     }
     if (format) data.userEnteredFormat = format;
-    return Object.assign(data, sheet.meta.get(key));
+    const meta = sheet.meta.get(key);
+    Object.assign(data, meta);
+    if (meta?.chipRuns) data.chipRuns = chipRunsRead(String(entry?.value ?? ''), meta.chipRuns);
+    return data;
+  }
+  // Reads include the runs between chips too, each with an empty chip.
+  function chipRunsRead(text, runs) {
+    const out = [];
+    let at = 0;
+    for (const run of [...runs].sort((a, b) => (a.startIndex ?? 0) - (b.startIndex ?? 0))) {
+      if ((run.startIndex ?? 0) > at) out.push({ startIndex: at, chip: {} });
+      out.push(run);
+      at = (run.startIndex ?? 0) + 1;
+    }
+    if (at < text.length) out.push({ startIndex: at, chip: {} });
+    return out;
   }
   function apiGet(book, options) {
     const fields = options.fields ? parseFieldMask(String(options.fields)) : null;
@@ -1397,6 +1493,7 @@ export function createDatamoovSandbox(settings = {}) {
         conditionalFormats: sheet.conditionalFormats,
         basicFilter: sheet.filter,
         rowGroups: groupsOf(sheet, 'ROWS'), columnGroups: groupsOf(sheet, 'COLUMNS'),
+        developerMetadata: sheet.developerMetadata,
         charts: state.charts.filter((chart) => chart.spreadsheetId === book.id && (chart.position?.overlayPosition?.anchorCell?.sheetId ?? 0) === sheet.id)
           .map(({ spreadsheetId: _, ...chart }) => chart),
       };
@@ -1481,6 +1578,7 @@ export function createDatamoovSandbox(settings = {}) {
           if (wants('conditionalFormats') && sheet.conditionalFormats.length) entry.conditionalFormats = apiJson(sheet.conditionalFormats);
           for (const [key, dimension] of [['rowGroups', 'ROWS'], ['columnGroups', 'COLUMNS']])
             if (wants(key) && groupsOf(sheet, dimension).length) entry[key] = apiJson(groupsOf(sheet, dimension));
+          if (wants('developerMetadata') && sheet.developerMetadata.length) entry.developerMetadata = apiJson(sheet.developerMetadata);
         });
         if (wants('namedRanges') && book.namedRanges?.length) result.namedRanges = apiJson(book.namedRanges);
         return result;
@@ -1537,7 +1635,7 @@ export function createDatamoovSandbox(settings = {}) {
       if (!ERROR_TEXT[error?.type]) throw new Error(`Unknown error type ${error?.type}`);
       sheet.cells.set(address(row, column), { value: ERROR_TEXT[error.type], formula, error: { type: error.type, message: error.message ?? '' } });
     },
-    // The cell's note, dataValidation, pivotTable and textFormatRuns ({} when unset); setMeta replaces them.
+    // The cell's note, dataValidation, pivotTable, textFormatRuns and chipRuns ({} when unset); setMeta replaces them.
     meta: (sheet, row, column) => plain(sheet.meta.get(address(row, column)) || {}),
     setMeta(sheet, row, column, fields) {
       if (fields && Object.keys(fields).length) sheet.meta.set(address(row, column), plain(fields));

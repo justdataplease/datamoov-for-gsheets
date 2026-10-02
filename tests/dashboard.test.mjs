@@ -1671,7 +1671,13 @@ test('a dataset dropped from the plan releases its receipt, keeps its tab, and t
     chartId = f.state.charts[0].chartId;
   const edited = f.save({ ...f.input, id: saved.id, revision: saved.revision, datasets: [f.input.datasets[0]] });
   assert.deepEqual(edited.datasets.map((dataset) => dataset.id), ['source0']);
-  assert.equal(f.state.batches.length, 1, 'saving a plan writes nothing');
+  // Saving writes no cells; it only forgets the dropped dataset's output record, so collaborators'
+  // chat may edit what it left behind.
+  assert.deepEqual(
+    f.state.batches.slice(1).map((batch) => batch.body.requests.map((request) => Object.keys(request)[0])),
+    [['deleteDeveloperMetadata']],
+    "saving a plan writes no cells; it only removes the dropped dataset's record"
+  );
   assert.deepEqual(f.receipts(saved.id).map(Boolean), [true, false, true, true]);
   assert.deepEqual(plain(f.record(saved.id).connectionIds), [f.connections[0].id]);
   assert.deepEqual(plain([...f.tab('Source 2 data').cells]), dropped);

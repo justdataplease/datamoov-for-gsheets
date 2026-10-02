@@ -18,9 +18,7 @@ function dmvBootstrap() {
     credentialFamilies: dmvFamilyCatalog_(),
     reports: dmvListReports_(spreadsheet),
     dashboards: dmvListDashboards(),
-    sheetNames: spreadsheet.getSheets().map(function (sheet) {
-      return sheet.getName();
-    }),
+    sheetNames: dmvChatTabNames_(spreadsheet),
     limits: DMV_LIMITS,
     ai: dmvAiSummary_(dmvAiRead_()),
     defaultTarget: {
@@ -192,6 +190,7 @@ function dmvDeleteReport(id) {
     var report = dmvReportHere_(id);
     if (report.runToken && Date.now() - report.startedAt < 300000)
       throw new Error('Wait for the current refresh to finish.');
+    dmvForgetOutputs_(report.spreadsheetId, [report.id]);
     dmvStore_().deleteProperty(dmvKey_('report', report.id));
     dmvStore_().deleteProperty(dmvOutputKey_(report.spreadsheetId, report.id));
     dmvClearContinuation_(report.id);

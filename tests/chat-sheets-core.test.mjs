@@ -19,7 +19,6 @@ const LIST = {
 
 function fixture() {
   const f = chatSheetFixture({
-    tabTitles: true,
     sortRange: true,
     orchard: {
       rows: [
@@ -177,7 +176,7 @@ test('undo restores values, formulas, formats, notes and validation exactly, onc
   const request = f.state.batches[1].body.requests[0].updateCells;
   assert.equal(
     request.fields,
-    'userEnteredValue,userEnteredFormat,note,dataValidation,textFormatRuns'
+    'userEnteredValue,userEnteredFormat,note,dataValidation,textFormatRuns,chipRuns'
   );
   assert.deepEqual(f.cellState(f.sheet, 1, 1, 2, 2), before);
   assert.equal(f.formula(f.sheet, 2, 1), '=1+1', 'formulas come back as formulas');
@@ -186,6 +185,34 @@ test('undo restores values, formulas, formats, notes and validation exactly, onc
   assert.deepEqual(f.undo({ action: 'list' }).entries, []);
   assert.throws(() => f.undo({ action: 'undo' }), /no recent chat edit to undo/);
   assert.throws(() => f.undo({ action: 'undo', id: edited.undoId }), /no recent chat edit/);
+});
+
+test('undo puts back people and Drive file chips, and says which chips Sheets cannot write back', () => {
+  const f = fixture();
+  const person = [{ chip: { personProperties: { email: 'ana@example.com' } } }];
+  const file = [
+    { chip: { richLinkProperties: { uri: 'https://drive.google.com/file/d/abc/view' } } },
+  ];
+  const video = [{ chip: { richLinkProperties: { uri: 'https://www.youtube.com/watch?v=x' } } }];
+  for (const [row, chipRuns] of [
+    [1, person],
+    [2, file],
+    [3, video],
+  ]) {
+    f.setCell(f.sheet, row, 1, '@');
+    f.setMeta(f.sheet, row, 1, { chipRuns });
+  }
+  const edited = f.edit('set_values', { values: [['Bob'], ['Cy'], ['Di']] }, f.inspect('A1:A3'));
+  assert.equal(edited.ok, true);
+  assert.deepEqual(f.meta(f.sheet, 1, 1), {}, 'writing a value erases the chip');
+  const undone = f.undo();
+  assert.equal(undone.ok, true);
+  assert.equal(f.value(f.sheet, 1, 1), '@');
+  assert.deepEqual(f.meta(f.sheet, 1, 1), { chipRuns: person });
+  assert.deepEqual(f.meta(f.sheet, 2, 1), { chipRuns: file });
+  // Only Drive files can be written as rich link chips, so the video link stays plain @ text.
+  assert.deepEqual(f.meta(f.sheet, 3, 1), {});
+  assert.match(undone.note, /1 cell held smart chips that Sheets does not let chat write back/);
 });
 
 test('undo covers formatting and sorting, and refuses once the cells changed since', () => {
@@ -230,7 +257,9 @@ test('undo covers formatting and sorting, and refuses once the cells changed sin
 test('undo keeps the last ten edits for six hours, newest first, and undoes an older one by id', () => {
   const f = fixture();
   const ids = [];
+  // One edit per chat request; edits of the current request are never dropped.
   for (let row = 1; row <= 11; row++) {
+    f.session = f.api.dmvChatSession_(f.book);
     ids.push(f.edit('set_values', { values: [[row]] }, f.inspect('A' + row)).undoId);
     f.advance(1000);
   }
@@ -265,6 +294,218 @@ test('undo keeps the last ten edits for six hours, newest first, and undoes an o
   f.session = f.api.dmvChatSession_(f.book);
   assert.deepEqual(f.undo({ action: 'list' }).entries, []);
   assert.throws(() => f.undo({ action: 'undo' }), /keeps the last 10 chat edits for 6 hours/);
+});
+
+test('an overwrite split into smaller edits still asks, and every edit of a request stays undoable', () => {
+  const f = fixture();
+  f.sheet.maxRows = 200;
+  for (let row = 1; row <= 150; row++)
+    for (const column of [1, 2, 3]) f.setCell(f.sheet, row, column, 'kept');
+  const blank = Array.from({ length: 150 }, () => ['']);
+  const clear = (letter, session) =>
+    f.edit(
+      'set_values',
+      { values: blank },
+      f.inspect(letter + '1:' + letter + '150', 'Output', session),
+      session
+    );
+  // 150 cells, then 150 more in the same request: the second edit asks.
+  assert.equal(clear('A', f.session).ok, true);
+  const asked = clear('B', f.session);
+  assert.equal(asked.needsConfirmation, true, JSON.stringify(asked));
+  assert.equal(
+    asked.summary,
+    'This replaces 150 non-empty cells in Output!B1:B150. With the earlier edits of this request, 300 non-empty cells are replaced.'
+  );
+  assert.equal(f.value(f.sheet, 1, 2), 'kept');
+  // Analyst actions count too: a copy_range over filled cells, and the cells find_replace changes.
+  const copied = f.edit('copy_range', { destination: 'C1' }, f.inspect('A1:A150'));
+  assert.equal(copied.needsConfirmation, true, JSON.stringify(copied));
+  assert.match(copied.summary, /300 non-empty cells are replaced/);
+  const next = f.api.dmvChatSession_(f.book);
+  assert.equal(
+    f.edit(
+      'find_replace',
+      { find: 'kept', replacement: 'x' },
+      f.inspect('B1:B150', 'Output', next),
+      next
+    ).ok,
+    true
+  );
+  assert.equal(clear('C', next).needsConfirmation, true);
+  // The request that asked is over; the next one acts on the same edit.
+  assert.equal(clear('C', f.api.dmvChatSession_(f.book)).ok, true);
+  // Eleven edits in one request all stay undoable, past the usual ten.
+  const busy = f.api.dmvChatSession_(f.book);
+  const ids = [];
+  for (let row = 1; row <= 11; row++)
+    ids.push(
+      f.edit('set_values', { values: [[row]] }, f.inspect('D' + row, 'Output', busy), busy).undoId
+    );
+  assert.deepEqual(
+    f.undo({ action: 'list' }, busy).entries.map((entry) => entry.id),
+    ids.slice().reverse()
+  );
+  assert.equal(f.undo({ action: 'undo', id: ids[0] }, busy).ok, true);
+  assert.equal(f.value(f.sheet, 1, 4), '');
+  // The next request keeps the newest ten again.
+  const later = f.api.dmvChatSession_(f.book);
+  f.edit('set_values', { values: [['later']] }, f.inspect('E1', 'Output', later), later);
+  assert.equal(f.undo({ action: 'list' }, later).entries.length, 10);
+});
+
+test('a request whose undo entries outgrow the list size keeps every one it returned', () => {
+  const f = fixture();
+  // Long tab names make each entry a few hundred characters, so 90 pass the list's budget.
+  const name = 'Ω'.repeat(100);
+  f.book.insertSheet(name);
+  const ids = [];
+  for (let row = 1; row <= 90; row++)
+    ids.push(f.edit('set_values', { values: [[row]] }, f.inspect('A' + row, name)).undoId);
+  assert.ok(ids.every(Boolean));
+  assert.deepEqual(
+    f.undo({ action: 'list' }).entries.map((entry) => entry.id),
+    ids.slice().reverse()
+  );
+  assert.equal(f.undo({ action: 'undo', id: ids[0] }).ok, true);
+  assert.equal(f.value(f.book.getSheetByName(name), 1, 1), '');
+  // The next request trims the list again, its own entry first.
+  const later = f.api.dmvChatSession_(f.book);
+  const last = f.edit('set_values', { values: [['later']] }, f.inspect('B1', name, later), later);
+  const kept = f.undo({ action: 'list' }, later).entries.map((entry) => entry.id);
+  assert.deepEqual(kept, [last.undoId].concat(ids.slice(-9).reverse()));
+});
+
+test('a yes to a large overwrite covers the cells replaced so far, so the count starts again', () => {
+  const f = fixture();
+  f.sheet.maxRows = 200;
+  for (let row = 1; row <= 150; row++)
+    for (const column of [1, 2, 3, 4]) f.setCell(f.sheet, row, column, 'kept');
+  const block = Array.from({ length: 150 }, () => ['x', 'x']);
+  const { done, session } = f.confirm((s, extra) =>
+    f.edit('set_values', { values: block, ...extra }, f.inspect('A1:B150', 'Output', s), s)
+  );
+  assert.equal(done.ok, true, JSON.stringify(done));
+  // A small overwrite after the approved one acts without asking again.
+  const small = f.edit(
+    'set_values',
+    { values: Array.from({ length: 5 }, () => ['y']) },
+    f.inspect('C1:C5', 'Output', session),
+    session
+  );
+  assert.equal(small.ok, true, JSON.stringify(small));
+  assert.equal(f.value(f.sheet, 1, 3), 'y');
+  // Counting from the yes, 5 + 145 + 145 cells pass the limit again.
+  const column = (letter) =>
+    f.edit(
+      'set_values',
+      { values: Array.from({ length: 145 }, () => ['z']) },
+      f.inspect(letter + '6:' + letter + '150', 'Output', session),
+      session
+    );
+  assert.equal(column('C').ok, true);
+  const asked = column('D');
+  assert.equal(asked.needsConfirmation, true, JSON.stringify(asked));
+  assert.match(asked.summary, /With the earlier edits of this request, 295 non-empty cells/);
+});
+
+test('a yes to an overwrite asked after earlier edits of the request acts on the repeated call', () => {
+  const f = fixture();
+  f.sheet.maxRows = 200;
+  for (let row = 1; row <= 125; row++)
+    for (const column of [1, 2, 3]) f.setCell(f.sheet, row, column, 'kept');
+  // 50 cells first, then 250 more: the question names the request's total of 300.
+  const first = f.edit(
+    'set_values',
+    { values: Array.from({ length: 50 }, () => ['a']) },
+    f.inspect('A1:A50')
+  );
+  assert.equal(first.ok, true, JSON.stringify(first));
+  const block = Array.from({ length: 125 }, () => ['b', 'b']);
+  const { asked, done } = f.confirm((s, extra) =>
+    f.edit('set_values', { values: block, ...extra }, f.inspect('B1:C125', 'Output', s), s)
+  );
+  assert.equal(
+    asked.summary,
+    'This replaces 250 non-empty cells in Output!B1:C125. With the earlier edits of this request, 300 non-empty cells are replaced.'
+  );
+  // The yes request counts from 0, so its question would lack the total; the yes still covers it.
+  assert.equal(done.ok, true, JSON.stringify(done));
+  assert.equal(f.value(f.sheet, 125, 3), 'b');
+});
+
+test('a yes to an action that names the cells it replaces covers them, so the next edit acts', () => {
+  const f = fixture();
+  f.sheet.maxRows = 200;
+  for (let row = 1; row <= 21; row++)
+    for (let column = 1; column <= 22; column++) f.setCell(f.sheet, row, column, 'kept');
+  // A move over 210 filled cells asks in its own words, and the yes covers them.
+  const moved = f.confirm((s, extra) =>
+    f.edit('move_range', { destination: 'L1', ...extra }, f.inspect('A1:J21', 'Output', s), s)
+  );
+  assert.match(moved.asked.summary, /^Moving Output!A1:J21 replaces 210 non-empty cells in /);
+  assert.equal(moved.done.ok, true, JSON.stringify(moved.done));
+  const one = (session) =>
+    f.edit('set_values', { values: [['y']] }, f.inspect('V1', 'Output', session), session);
+  assert.equal(one(moved.session).ok, true, 'one more cell in the same request does not ask');
+  // So does a yes to a find_replace that names its count.
+  const g = fixture();
+  g.sheet.maxRows = 200;
+  for (let row = 1; row <= 125; row++)
+    for (const column of [1, 2, 3]) g.setCell(g.sheet, row, column, 'kept');
+  const replaced = g.confirm((s, extra) =>
+    g.edit(
+      'find_replace',
+      { find: 'kept', replacement: 'x', ...extra },
+      g.inspect('A1:B125', 'Output', s),
+      s
+    )
+  );
+  assert.match(replaced.asked.summary, / in 250 cells of /);
+  assert.equal(replaced.done.ok, true, JSON.stringify(replaced.done));
+  const after = g.edit(
+    'set_values',
+    { values: [['y']] },
+    g.inspect('C1', 'Output', replaced.session),
+    replaced.session
+  );
+  assert.equal(after.ok, true, JSON.stringify(after));
+});
+
+test('an overwrite of one cell that passes the request limit says cell, not cells', () => {
+  const f = fixture();
+  f.sheet.maxRows = 250;
+  f.column(
+    f.sheet,
+    1,
+    Array.from({ length: 201 }, () => 'kept')
+  );
+  const blank = Array.from({ length: 200 }, () => ['']);
+  assert.equal(f.edit('set_values', { values: blank }, f.inspect('A1:A200')).ok, true);
+  const asked = f.edit('set_values', { values: [['']] }, f.inspect('A201'));
+  assert.equal(
+    asked.summary,
+    'This replaces 1 non-empty cell in Output!A201. With the earlier edits of this request, 201 non-empty cells are replaced.'
+  );
+});
+
+test('an overwrite counts the values a spilled formula or a pivot table shows there', () => {
+  const f = fixture();
+  // Cells an array formula or a pivot table fills hold only what they show, no entered value.
+  f.setCell(f.sheet, 1, 1, '=QUERY(Data!A:F,"select B, sum(F) group by B")');
+  for (let row = 1; row <= 30; row++)
+    for (let column = 2; column <= 10; column++)
+      f.setMeta(f.sheet, row, column, {
+        effectiveValue: { numberValue: row * column },
+        formattedValue: String(row * column),
+      });
+  const values = Array.from({ length: 30 }, () => Array.from({ length: 9 }, () => 'x'));
+  const asked = f.edit('set_values', { values }, f.inspect('B1:J30'));
+  assert.equal(asked.needsConfirmation, true, JSON.stringify(asked));
+  assert.equal(asked.summary, 'This replaces 270 non-empty cells in Output!B1:J30.');
+  const copied = f.edit('copy_range', { destination: 'B1' }, f.inspect('L1:T30'));
+  assert.equal(copied.needsConfirmation, true, JSON.stringify(copied));
+  assert.equal(f.state.batches.length, 0);
 });
 
 test('an edit stands without an undo entry when the read-back fails or the cache refuses it', () => {
@@ -401,6 +642,82 @@ test('confirmations expire, follow the sidebar token, match by input and survive
     const session = f.answer(text);
     assert.deepEqual(plain(session.confirm.approved), [], text);
   }
+});
+
+test('a yes covers its call with defaults spelled out, and another call is told the approved one', () => {
+  const f = fixture();
+  const duplicate = () =>
+    [
+      ['Email', 'Name'],
+      ['a@x.com', 'Ann'],
+      ['b@x.com', 'Bob'],
+      ['a@x.com', 'Ann'],
+    ].forEach((row, r) => row.forEach((value, c) => f.setCell(f.sheet, r + 1, c + 1, value)));
+  duplicate();
+  const dedupe = (extra, session) =>
+    f.edit(
+      'remove_duplicates',
+      { keyColumns: [2, 1], ...extra },
+      f.inspect('A1:B4', 'Output', session),
+      session
+    );
+  // The model repeats the call from memory in the next request: the documented defaults spelled
+  // out and the key columns in another order are the same change.
+  const asked = dedupe({}, f.session);
+  assert.equal(asked.needsConfirmation, true);
+  const chip = f.answer('Yes', asked.confirmToken);
+  const spelled = { keyColumns: [1, 2], keep: 'first', headerRows: 1 };
+  assert.equal(dedupe({ ...spelled, confirmToken: asked.confirmToken }, chip).ok, true);
+  assert.equal(f.value(f.sheet, 4, 1), '');
+  // A call that differs is told what the user approved, with or without the token, and the
+  // approved call then acts once.
+  duplicate();
+  const again = dedupe({}, f.session);
+  const yes = f.answer('Yes', again.confirmToken);
+  const approved = [
+    { action: 'remove_duplicates', keyColumns: [1, 2], range: 'A1:B4', sheetName: 'Output' },
+  ];
+  assert.throws(
+    () => dedupe({ keep: 'last', confirmToken: again.confirmToken }, yes),
+    (error) =>
+      /given for a different change/.test(error.message) &&
+      JSON.stringify(plain(error.approvedCalls)) === JSON.stringify(approved)
+  );
+  const other = dedupe({ keep: 'last' }, yes);
+  assert.equal(other.needsConfirmation, true);
+  assert.deepEqual(plain(other.approvedCalls), approved);
+  assert.match(other.next, /approvedCalls/);
+  assert.equal(f.state.batches.length, 1);
+  assert.equal(dedupe({}, yes).ok, true);
+  assert.equal(f.state.batches.length, 2);
+});
+
+test('many large questions in one request still fit the cache, keeping the newest calls', () => {
+  const f = fixture();
+  for (let row = 1; row <= 21; row++)
+    for (let column = 1; column <= 10; column++) f.setCell(f.sheet, row, column, 1);
+  // Each call is under 6,000 characters, but its text takes three bytes a character, so nine of
+  // them pass the 100 KB a cache value holds.
+  const values = (n) =>
+    Array.from({ length: 21 }, () => Array.from({ length: 10 }, () => String(n) + '€'.repeat(20)));
+  const asked = [];
+  for (let n = 1; n <= 9; n++) {
+    const call = { values: values(n) };
+    assert.ok(JSON.stringify(call).length < 6000);
+    asked.push(f.edit('set_values', call, f.inspect('A1:J21')));
+    assert.equal(asked.at(-1).needsConfirmation, true, JSON.stringify(asked.at(-1)));
+  }
+  // The newest question keeps its call, so another call after the yes is told what was approved.
+  const yes = f.answer('Yes', asked.at(-1).confirmToken);
+  const other = f.edit(
+    'set_values',
+    { values: values(10) },
+    f.inspect('A1:J21', 'Output', yes),
+    yes
+  );
+  assert.equal(other.needsConfirmation, true);
+  assert.deepEqual(plain(other.approvedCalls)[0].values, values(9));
+  assert.equal(f.state.batches.length, 0);
 });
 
 test('a chat turn asks, the next turn answers yes and the edit happens once', () => {

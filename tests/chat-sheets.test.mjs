@@ -324,6 +324,30 @@ test('the number format never leaves a trailing dot on whole numbers', () => {
   );
 });
 
+test('currency with a currencyCode shows that code; without one the schema says it shows none', () => {
+  // A locale default symbol could show $ on AED or EUR amounts, so the code is given, never guessed.
+  const f = fixture();
+  f.setCell(f.sheet, 1, 1, 1234.5);
+  f.edit('format', { format: { numberFormat: 'currency', currencyCode: 'EUR' } });
+  assert.deepEqual(f.state.batches[0].body.requests[0].repeatCell, {
+    range: f.state.batches[0].body.requests[0].repeatCell.range,
+    cell: { userEnteredFormat: { numberFormat: { type: 'CURRENCY', pattern: '#,##0.00" EUR"' } } },
+    fields: 'userEnteredFormat.numberFormat',
+  });
+  for (const [format, message] of [
+    [{ numberFormat: 'currency', currencyCode: 'eur' }, /three-letter code in capitals/],
+    [{ numberFormat: 'currency', currencyCode: 'EU"R' }, /three-letter code in capitals/],
+    [{ numberFormat: 'number', currencyCode: 'EUR' }, /currencyCode is for numberFormat currency/],
+    [{ currencyCode: 'EUR' }, /currencyCode is for numberFormat currency/],
+  ])
+    assert.throws(() => f.edit('format', { format }), message, JSON.stringify(format));
+  const tool = f.api
+    .dmvChatTools_(f.session)
+    .find((item) => item.name === 'edit_sheet').input_schema.properties.format.properties;
+  assert.match(tool.numberFormat.description, /currency without currencyCode shows no symbol/);
+  assert.match(tool.currencyCode.description, /EUR/);
+});
+
 test('filters reject formula-bearing criteria, normalize numbers and preserve other criteria', () => {
   const f = fixture();
   for (const value of [
@@ -337,11 +361,20 @@ test('filters reject formula-bearing criteria, normalize numbers and preserve ot
   }
   assert.equal(f.state.batches.length, 0);
   f.edit('filter', { filter: { column: 2, condition: 'NUMBER_GREATER', value: ' +001.50 ' } });
-  assert.equal(f.sheet.filter.criteria[1].condition.values[0].userEnteredValue, '1.5');
+  assert.equal(f.sheet.filter.criteria[1].condition.values[0].userEnteredValue, '=1.5');
   f.edit('filter', { filter: { column: 1, condition: 'TEXT_CONTAINS', value: 'High' } });
-  assert.equal(f.sheet.filter.criteria[1].condition.values[0].userEnteredValue, '1.5');
+  assert.equal(f.sheet.filter.criteria[1].condition.values[0].userEnteredValue, '=1.5');
   assert.equal(f.sheet.filter.criteria[0].condition.values[0].userEnteredValue, 'High');
   assert.throws(() => f.edit('filter', { filter: {} }, f.inspect('A1:A3')), /different range/);
+});
+
+test('a decimal filter threshold goes as a formula, which reads the same in every locale', () => {
+  // As for conditional formats: '0.25' typed into a de_DE sheet is no number.
+  const f = fixture();
+  f.edit('filter', { filter: { column: 2, condition: 'NUMBER_LESS', value: '0.25' } });
+  assert.deepEqual(f.sheet.filter.criteria[1].condition.values, [{ userEnteredValue: '=0.25' }]);
+  f.edit('filter', { filter: { column: 2, condition: 'NUMBER_LESS', value: 1000 } });
+  assert.deepEqual(f.sheet.filter.criteria[1].condition.values, [{ userEnteredValue: '1000' }]);
 });
 
 test('freeze and new-tab creation are bounded, while rename protects saved report destinations', () => {

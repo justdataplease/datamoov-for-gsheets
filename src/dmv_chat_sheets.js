@@ -1,13 +1,28 @@
 /* Bounded existing-sheet edits. No arbitrary batch requests or executable source are accepted. */
-function dmvChatSheetObject_(value, keys) {
-  if (
-    !value ||
-    Object.prototype.toString.call(value) !== '[object Object]' ||
-    Object.keys(value).some(function (key) {
-      return keys.indexOf(key) < 0;
-    })
-  )
+// Refuses anything but an object with only the given keys; with listFields set, the refusal
+// names the keys it does not take and the ones it does.
+function dmvChatSheetObject_(value, keys, listFields) {
+  if (!value || Object.prototype.toString.call(value) !== '[object Object]')
     throw new Error('Use only the documented fields for this sheet action.');
+  var extra = Object.keys(value).filter(function (key) {
+    return keys.indexOf(key) < 0;
+  });
+  if (extra.length)
+    throw new Error(
+      'Use only the documented fields for this sheet action.' +
+        (listFields
+          ? ' Not allowed here: ' +
+            extra
+              .slice(0, 5)
+              .map(function (key) {
+                return key.slice(0, 40);
+              })
+              .join(', ') +
+            '. Allowed: ' +
+            keys.join(', ') +
+            '.'
+          : '')
+    );
   return value;
 }
 
@@ -26,9 +41,7 @@ function dmvChatSheetDeadline_(session) {
 function dmvChatSeeNewTabs_(session) {
   session.spreadsheet = dmvReopen_(session.spreadsheet);
   try {
-    session.sheetNames = session.spreadsheet.getSheets().map(function (sheet) {
-      return sheet.getName();
-    });
+    session.sheetNames = dmvChatTabNames_(session.spreadsheet);
   } catch (ignored) {
     /* A metadata refresh cannot hide an already successful write. */
   }
@@ -47,6 +60,12 @@ function dmvChatSheetTarget_(session, name) {
         '". Tabs: ' +
         (session.sheetNames || []).join(', ') +
         '. Use list_sheets first.'
+    );
+  if (dmvChatUndoCopy_(sheet))
+    throw new Error(
+      'The tab "' +
+        sheet.getName() +
+        '" is the hidden undo copy of a deleted tab, kept only so undo_sheet_edit can bring the tab back. Chat does not read or change it.'
     );
   return sheet;
 }
@@ -86,7 +105,9 @@ function dmvChatSheetRead_(session, sheet, area) {
     ranges: ["'" + sheet.getName().replace(/'/g, "''") + "'!" + area.a1],
     includeGridData: true,
     fields:
-      'sheets(properties,basicFilter,data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue,userEnteredFormat,dataValidation,note,textFormatRuns))))',
+      'sheets(properties,basicFilter,data(startRow,startColumn,rowData(values(' +
+      DMV_SHEET_UNDO.readFields +
+      '))))',
   });
   var read = (result.sheets || []).filter(function (entry) {
     return entry.properties.sheetId === sheet.getSheetId();
@@ -118,14 +139,19 @@ function dmvChatListSheets_(session, input) {
   dmvChatSheetObject_(input || {}, []);
   dmvChatSheetDeadline_(session);
   var result = {
-    sheets: session.spreadsheet.getSheets().map(function (sheet) {
-      return {
-        sheetName: sheet.getName(),
-        sheetId: sheet.getSheetId(),
-        rows: sheet.getMaxRows(),
-        columns: sheet.getMaxColumns(),
-      };
-    }),
+    sheets: session.spreadsheet
+      .getSheets()
+      .filter(function (sheet) {
+        return !dmvChatUndoCopy_(sheet);
+      })
+      .map(function (sheet) {
+        return {
+          sheetName: sheet.getName(),
+          sheetId: sheet.getSheetId(),
+          rows: sheet.getMaxRows(),
+          columns: sheet.getMaxColumns(),
+        };
+      }),
   };
   session.events.push({ kind: 'summary', text: 'Listed available spreadsheet tabs' });
   return result;
@@ -226,6 +252,7 @@ function dmvChatSheetColor_(value, label) {
 function dmvChatSheetFormat_(input) {
   dmvChatSheetObject_(input, [
     'numberFormat',
+    'currencyCode',
     'bold',
     'textColor',
     'backgroundColor',
@@ -235,6 +262,8 @@ function dmvChatSheetFormat_(input) {
   if (!Object.keys(input).length) throw new Error('Choose at least one formatting change.');
   // 'number' is Sheets' own Number format. '#,##0.###' printed whole numbers as "2,494.", and the
   // range's values can change after this edit, so the decimals are fixed rather than guessed.
+  // currency shows only a code it is given: the locale's default symbol could show $ on amounts
+  // in AED or EUR, so without a code it is a plain amount, as the report writer leaves money.
   var format = {},
     fields = [],
     formats = {
@@ -249,6 +278,13 @@ function dmvChatSheetFormat_(input) {
       throw new Error('Choose number, currency, percent, date or text formatting.');
     format.numberFormat = formats[input.numberFormat];
     fields.push('numberFormat');
+  }
+  if (input.currencyCode !== undefined) {
+    if (input.numberFormat !== 'currency')
+      throw new Error('currencyCode is for numberFormat currency only.');
+    if (typeof input.currencyCode !== 'string' || !/^[A-Z]{3}$/.test(input.currencyCode))
+      throw new Error('currencyCode is a three-letter code in capitals, such as EUR.');
+    format.numberFormat = { type: 'CURRENCY', pattern: '#,##0.00" ' + input.currencyCode + '"' };
   }
   if (input.bold !== undefined) {
     if (typeof input.bold !== 'boolean') throw new Error('bold must be true or false.');
@@ -320,40 +356,46 @@ function dmvChatSheetInspected_(session, input) {
 }
 
 // Cell-changing built-in edits keep what they replace for undo_sheet_edit. Replacing more than
-// 200 non-empty cells, or an edit too large to keep, waits for the user's yes. edit holds
-// { sheet, area, snapshot, touches, replaces }; returns { prepared, approval }, or { ask } with
-// the needsConfirmation answer when nothing may change yet.
+// 200 non-empty cells (with the earlier edits of the request), or an edit too large to keep,
+// waits for the user's yes. edit holds { sheet, area, snapshot, touches, replaces }; returns
+// { prepared, approval, replaced, covered } (covered: the question named the overwrite total, see
+// dmvChatConfirmSpend_), or { ask } with the needsConfirmation answer when nothing may change yet.
 function dmvChatSheetEditPrepare_(session, input, edit) {
   var prepared = dmvChatUndoPrepare_(session, { snapshot: edit.touches }, [
     { grid: edit.area.grid, cells: edit.snapshot.cells },
   ]);
-  var reasons = [];
+  // The question shows reasons; a yes is bound to scoped, which hold the overwrite's own sentence
+  // rather than the request total (dmvChatConfirmOverwrite_).
+  var reasons = [],
+    scoped = [],
+    replaced = 0,
+    overwrite = null;
   if (edit.replaces) {
-    var replaced = 0;
-    (prepared.cells || [{ rows: edit.snapshot.cells }]).forEach(function (item) {
-      replaced += dmvChatSheetNonEmpty_(item.rows);
-    });
-    if (replaced > DMV_SHEET_UNDO.overwriteCells)
-      reasons.push(
-        'This replaces ' +
-          replaced +
-          ' non-empty cells in ' +
-          edit.sheet.getName() +
-          '!' +
-          edit.area.a1 +
-          '.'
-      );
+    replaced =
+      prepared.filled !== undefined ? prepared.filled : dmvChatSheetNonEmpty_(edit.snapshot.cells);
+    overwrite = dmvChatConfirmOverwrite_(
+      session,
+      replaced,
+      edit.sheet.getName() + '!' + edit.area.a1
+    );
+    if (overwrite) {
+      reasons.push(overwrite.text);
+      scoped.push(overwrite.scope);
+    }
   }
-  if (prepared.unavailable) reasons.push(prepared.unavailable);
+  if (prepared.unavailable) {
+    reasons.push(prepared.unavailable);
+    scoped.push(prepared.unavailable);
+  }
   var approval = null;
   if (reasons.length) {
     var summary = reasons.join(' '),
-      scope = dmvChatConfirmScope_(summary, prepared.cells);
+      scope = dmvChatConfirmScope_(scoped.join(' '), prepared.cells);
     approval = dmvChatConfirmFind_(session, 'edit_sheet', input, scope);
     if (!approval)
       return { ask: dmvChatConfirmIssue_(session, 'edit_sheet', input, summary, scope) };
   }
-  return { prepared: prepared, approval: approval };
+  return { prepared: prepared, approval: approval, replaced: replaced, covered: !!overwrite };
 }
 
 // After a built-in edit: records its undo entry and reads formulas back for their results, even
@@ -440,7 +482,9 @@ function dmvChatEditSheet_(session, input) {
       replaces = false,
       policy = null,
       prepared = null,
-      approval = null;
+      approval = null,
+      replaced = 0,
+      covered = false;
     if (input.action === 'create_sheet') {
       var name = dmvSheetName_(input.newName);
       if (session.spreadsheet.getSheetByName(name))
@@ -553,7 +597,11 @@ function dmvChatEditSheet_(session, input) {
             if (numeric && String(filter.value).trim() === '')
               throw new Error('Provide a finite numeric filter value.');
             condition.values = [
-              { userEnteredValue: numeric ? String(Number(filter.value)) : String(filter.value) },
+              {
+                userEnteredValue: numeric
+                  ? dmvChatSheetNumberValue_(Number(filter.value))
+                  : String(filter.value),
+              },
             ];
           }
           basic.criteria = basic.criteria || {};
@@ -589,39 +637,32 @@ function dmvChatEditSheet_(session, input) {
           },
         });
       } else if (input.action === 'rename_sheet') {
-        if (
-          dmvList_('dashboard').some(function (dashboard) {
-            return (
-              dashboard.spreadsheetId === session.spreadsheetId &&
-              [dashboard.target, dashboard.dataTarget]
-                .concat(dashboard.outputs || [])
-                .concat(
-                  dashboard.plan ? [{ sheetName: dmvDashboardChartTab_(dashboard.target) }] : []
-                )
-                .some(function (target) {
-                  return target && target.sheetName === sheet.getName();
-                })
-            );
-          })
-        )
+        // A refresh finds its tab by name, so a tab report or dashboard output uses keeps it.
+        var user = dmvChatTabUser_(session, sheet);
+        if (user && user.collaborator)
           throw new Error(
-            'This tab is used by a saved dashboard. Update its destination before renaming it.'
+            'This tab holds the output of ' +
+              dmvChatOwnerText_(user) +
+              '. Ask them to update its destination before renaming the tab.'
+          );
+        if (user)
+          throw new Error(
+            'This tab is used by a saved ' +
+              user.kind +
+              '. Update its destination before renaming it.'
           );
         var newName = dmvSheetName_(input.newName);
-        if (session.spreadsheet.getSheetByName(newName))
-          throw new Error('A tab with that name already exists.');
+        // Sheets keeps tab names unique without regard to case, so the tab itself may take
+        // other capitals.
         if (
-          dmvList_('report').some(function (report) {
+          session.spreadsheet.getSheets().some(function (other) {
             return (
-              report.spreadsheetId === session.spreadsheetId &&
-              report.target &&
-              report.target.sheetName === sheet.getName()
+              other.getSheetId() !== sheet.getSheetId() &&
+              other.getName().toLowerCase() === newName.toLowerCase()
             );
           })
         )
-          throw new Error(
-            'This tab is used by a saved report. Update its destination before renaming it.'
-          );
+          throw new Error('A tab with that name already exists.');
         requests.push({
           updateSheetProperties: {
             properties: { sheetId: sheet.getSheetId(), title: newName },
@@ -641,6 +682,8 @@ function dmvChatEditSheet_(session, input) {
       if (prepare.ask) return prepare.ask;
       prepared = prepare.prepared;
       approval = prepare.approval;
+      replaced = prepare.replaced;
+      covered = prepare.covered;
     }
     dmvChatSheetDeadline_(session);
     var response = Sheets.Spreadsheets.batchUpdate({ requests: requests }, session.spreadsheetId);
@@ -651,7 +694,7 @@ function dmvChatEditSheet_(session, input) {
         /* The changed fingerprint still prevents replay. */
       }
     }
-    dmvChatConfirmSpend_(session, approval);
+    dmvChatConfirmSpend_(session, approval, replaced, covered);
     var recorded = dmvChatSheetEditRecord_(session, input, {
       sheet: sheet,
       area: area,
@@ -718,7 +761,7 @@ function dmvChatSheetTools_() {
     {
       name: 'edit_sheet',
       description:
-        'Perform a specifically requested sheet edit with one atomic batch. Existing edits require the exact inspected sheetName/range/editToken. Supports literal values, formulas, formatting, sorting, basic filters, freeze panes, tab creation/rename and the analyst actions listed in action. No arbitrary API requests, external, custom or INDIRECT formulas. Formula examples: =SUM(A2:A10), =XLOOKUP(A2,Data!A:A,Data!C:C), =QUERY(Data!A:F,"select B, sum(F) group by B"). The result lists formula errors (cell, error, message) to fix. On report and dashboard output only format, filter and freeze are allowed (conditional_format too), since a refresh keeps them; change the report for anything else. A needsConfirmation answer means nothing changed: ask the user with ask_user (Yes/No) and on yes repeat the call with its confirmToken. undo_sheet_edit reverts cell edits.',
+        'Perform a specifically requested sheet edit with one atomic batch. Existing edits require the exact inspected sheetName/range/editToken; tab and row/column actions (insert/delete/group/ungroup rows or columns, duplicate/delete/hide/show_sheet) take sheetName only, no inspection. Supports literal values, formulas, formatting, sorting, basic filters, freeze panes, tab creation/rename and the analyst actions listed in action. No arbitrary API requests, external, custom or INDIRECT formulas. Formula examples: =SUM(A2:A10), =XLOOKUP(A2,Data!A:A,Data!C:C), =QUERY(Data!A:F,"select B, sum(F) group by B"). The result lists formula errors (cell, error, message) to fix. On report and dashboard output only format, filter and freeze are allowed (conditional_format too), since a refresh keeps them; change the report for anything else. A needsConfirmation answer means nothing changed: ask the user with ask_user (Yes/No) and on yes repeat the call with its confirmToken. undo_sheet_edit reverts cell edits.',
       input_schema: {
         type: 'object',
         properties: Object.assign({}, target, {
@@ -762,6 +805,13 @@ function dmvChatSheetTools_() {
               numberFormat: {
                 type: 'string',
                 enum: ['number', 'currency', 'percent', 'date', 'text'],
+                description:
+                  'Two decimals for number and currency; currency without currencyCode shows no symbol.',
+              },
+              currencyCode: {
+                type: 'string',
+                description:
+                  "With currency: the values' three-letter code, such as EUR, shown after them.",
               },
               bold: { type: 'boolean' },
               textColor: { type: 'string', description: '#RRGGBB' },

@@ -81,6 +81,13 @@ function dmvChatSheetNumber_(value, label) {
   return value;
 }
 
+// A number as a ConditionValue or InterpolationPoint value. Sheets parses these as typed in the
+// spreadsheet's locale, where 1.5 may need a comma; a formula always takes a dot, so a number
+// that is not whole goes as one. Whole numbers read the same in every locale.
+function dmvChatSheetNumberValue_(value) {
+  return Number.isSafeInteger(value) ? String(value) : '=' + String(value);
+}
+
 // A YYYY-MM-DD date as a Sheets DATE formula, which reads the same in every spreadsheet locale.
 function dmvChatSheetDateFormula_(value) {
   var match = typeof value === 'string' && /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -90,8 +97,9 @@ function dmvChatSheetDateFormula_(value) {
   return 'DATE(' + +match[1] + ',' + +match[2] + ',' + +match[3] + ')';
 }
 
-// A BooleanCondition from { type, value, value2 }. Literal values never start with =, which
-// Sheets would read as a formula; a custom formula passes the same checks as set_formulas.
+// A BooleanCondition from { type, value, value2 }. Text values never start with =, which Sheets
+// would read as a formula; the only formulas are the numbers and dates built here and a custom
+// formula, which passes the same checks as set_formulas.
 // options: { formatting, session, sheet, grid } (the rule's range, for formulas).
 function dmvChatSheetCondition_(condition, options) {
   dmvChatSheetObject_(condition, ['type', 'value', 'value2']);
@@ -121,11 +129,11 @@ function dmvChatSheetCondition_(condition, options) {
     );
   if (kind === 'number') {
     var low = dmvChatSheetNumber_(condition.value, 'The condition value');
-    output.values = [{ userEnteredValue: String(low) }];
+    output.values = [{ userEnteredValue: dmvChatSheetNumberValue_(low) }];
     if (between) {
       var high = dmvChatSheetNumber_(condition.value2, 'value2');
       if (high < low) throw new Error('value2 must not be below value.');
-      output.values.push({ userEnteredValue: String(high) });
+      output.values.push({ userEnteredValue: dmvChatSheetNumberValue_(high) });
     }
     return output;
   }
@@ -219,15 +227,24 @@ function dmvChatSheetHex_(style, color) {
 /* Conditional formats */
 
 // A rule range on one tab: one cell, a bounded range, columns to the last row (D2:D) or whole
-// columns (D:F). The grid of an open range has no end row, as in the Sheets API.
+// columns (D:F).
 function dmvChatSheetRuleRange_(sheet, text) {
-  var match =
-    typeof text === 'string' &&
-    /^([A-Za-z]{1,3})([1-9][0-9]{0,6})?(?::([A-Za-z]{1,3})([1-9][0-9]{0,6})?)?$/.exec(text);
-  if (!match || (!match[2] && (match[4] || !match[3])))
+  var range = dmvChatSheetOpenRange_(sheet, text);
+  if (!range)
     throw new Error(
       'Use an A1 range of this tab, such as D2:D500, D2:D (to the last row) or D:F (whole columns).'
     );
+  return range;
+}
+
+// A1 text on sheet whose rows may be open, as rule ranges, dropdown sources and named ranges
+// allow: one cell, a bounded range, D2:D or D:F, as { grid, a1 }. An open range has no end row, as
+// in the Sheets API. null when the text is no such range.
+function dmvChatSheetOpenRange_(sheet, text) {
+  var match =
+    typeof text === 'string' &&
+    /^([A-Za-z]{1,3})([1-9][0-9]{0,6})?(?::([A-Za-z]{1,3})([1-9][0-9]{0,6})?)?$/.exec(text);
+  if (!match || (!match[2] && (match[4] || !match[3]))) return null;
   var first = dmvCell_(match[1] + (match[2] || '1')),
     last = match[3] ? dmvCell_(match[3] + (match[4] || '1')) : first;
   var grid = {
@@ -247,6 +264,7 @@ function dmvChatSheetRuleRange_(sheet, text) {
   return { grid: grid, a1: dmvChatSheetRuleA1_(grid) };
 }
 
+// The A1 of a GridRange whose rows may be open, such as D2:D or D:F.
 function dmvChatSheetRuleA1_(grid) {
   if (grid.endRowIndex !== undefined && grid.endColumnIndex !== undefined)
     return dmvChatGridA1_(grid);
@@ -320,7 +338,7 @@ function dmvChatSheetRuleScale_(scale) {
     var value = dmvChatSheetNumber_(input.value, 'The ' + name + ' point value');
     if (input.type !== 'number' && (value < 0 || value > 100))
       throw new Error('Percent and percentile points are from 0 to 100.');
-    output.value = String(value);
+    output.value = dmvChatSheetNumberValue_(value);
     return output;
   }
   var rule = { minpoint: point(scale.min, 'min', ['min', 'number', 'percent', 'percentile']) };
