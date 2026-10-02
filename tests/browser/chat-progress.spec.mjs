@@ -346,11 +346,53 @@ test('a failed step the model retried successfully is reported as recovered', as
   const summary = page.locator('.chat-actions > summary');
   await expect(summary).toHaveText('Actions · Recovered from 1 failed step');
   await expect(summary).toHaveClass(/recovered/);
-  await expect(summary).toHaveCSS('color', 'rgb(35, 119, 83)');
+  // Recovered steps are grey, not red or green: red is kept for what failed in the end.
+  await expect(summary).toHaveCSS('color', 'rgb(108, 116, 136)');
   await expect(page.locator('.chat-events li.error')).toHaveCount(0);
-  await expect(page.locator('.chat-events li').nth(1)).toHaveText(
-    'create_chart: bad id (retried successfully)'
+  const step = page.locator('.chat-events li').nth(1);
+  await expect(step).toHaveText('create_chart: bad id (retried successfully)');
+  await expect(step).toHaveClass(/recovered/);
+  expect(await step.evaluate((node) => getComputedStyle(node, '::before').color)).toBe(
+    'rgb(108, 116, 136)'
   );
+});
+
+test('a step that fails while chat works is grey; red only for what failed in the end', async ({
+  page,
+}) => {
+  await configuredChat(page);
+  await controlledChat(page);
+  await send(page, 'Chart the report');
+  await page.waitForFunction(() => window.chatProbe.polls.length === 1);
+  await page.evaluate(() => {
+    const poll = window.chatProbe.polls[0];
+    poll.succeed({
+      requestId: poll.input.requestId,
+      status: 'running',
+      steps: [
+        { id: 1, state: 'error', text: 'create_chart: bad id' },
+        { id: 2, state: 'running', text: 'Adding the chart' },
+      ],
+      updatedAt: 2,
+    });
+  });
+  const failedStep = page.locator('#chat-working-steps li.error');
+  await expect(failedStep).toHaveText('Failed: create_chart: bad id');
+  await expect(failedStep).toHaveCSS('color', 'rgb(108, 116, 136)');
+  await page.evaluate(() =>
+    window.chatProbe.chats[0].succeed({
+      text: 'The chart could not be added.',
+      events: [{ kind: 'error', text: 'create_chart: bad id' }],
+      failed: true,
+      transcriptAppend: [],
+    })
+  );
+  await expect(page.locator('.chat-actions > summary')).toHaveCSS('color', 'rgb(183, 62, 70)');
+  expect(
+    await page
+      .locator('.chat-events li.error')
+      .evaluate((node) => getComputedStyle(node, '::before').color)
+  ).toBe('rgb(183, 62, 70)');
 });
 
 test('a request that continues in another execution keeps working until its answer arrives', async ({
@@ -370,7 +412,11 @@ test('a request that continues in another execution keeps working until its answ
   await expect(page.locator('#chat-working')).toBeVisible();
   await expect(page.locator('.chat-message.assistant')).toHaveCount(0);
   await page.evaluate(() =>
-    window.chatProbe.chats[1].succeed({ text: 'Dashboard ready.', events: [], transcriptAppend: [] })
+    window.chatProbe.chats[1].succeed({
+      text: 'Dashboard ready.',
+      events: [],
+      transcriptAppend: [],
+    })
   );
   await expect(page.locator('.chat-message.assistant')).toContainText('Dashboard ready.');
   await expect(page.locator('#chat-working')).toBeHidden();
@@ -387,7 +433,9 @@ test('a request that continues in another execution keeps working until its answ
   expect(await page.evaluate(() => window.chatProbe.chats.length)).toBe(4);
 });
 
-test('each completed step with facts is one collapsed line that opens on click', async ({ page }) => {
+test('each completed step with facts is one collapsed line that opens on click', async ({
+  page,
+}) => {
   await configuredChat(page);
   await controlledChat(page);
   await send(page, 'Spend by campaign');
@@ -545,7 +593,9 @@ test('debug off hides routine completed actions but keeps live progress and part
   await expect(answer.locator('.chat-events li.error')).toHaveText('A source failed');
 });
 
-test('chat source dropdown selects multiple sources and sends only checked IDs', async ({ page }) => {
+test('chat source dropdown selects multiple sources and sends only checked IDs', async ({
+  page,
+}) => {
   await configuredChat(page);
   await controlledChat(page);
   await page.locator('#chat-sources-summary').click();
@@ -569,7 +619,10 @@ test('chat source dropdown selects multiple sources and sends only checked IDs',
   await page.evaluate(() =>
     window.chatProbe.chats[0].succeed({
       text: 'Done',
-      transcriptAppend: [{ role: 'user', text: 'Compare these sources' }, { role: 'assistant', text: 'Done' }],
+      transcriptAppend: [
+        { role: 'user', text: 'Compare these sources' },
+        { role: 'assistant', text: 'Done' },
+      ],
       events: [],
     })
   );

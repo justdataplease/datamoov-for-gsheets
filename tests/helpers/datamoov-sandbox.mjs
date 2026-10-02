@@ -329,6 +329,11 @@ export function createDatamoovSandbox(settings = {}) {
     if (row < 1 || column < 1 || rows < 1 || columns < 1 || row + rows - 1 > sheet.maxRows || column + columns - 1 > sheet.maxColumns) throw new Error('Range exceeds sheet grid');
     const result = {
       getValues: () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => cell(sheet, row + r, column + c).value)),
+      // Text as the sheet shows it; a date stands in for its number format as yyyy-mm-dd.
+      getDisplayValues: () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => {
+        const value = cell(sheet, row + r, column + c).value;
+        return value instanceof Date ? value.toISOString().slice(0, 10) : value === null || value === undefined ? '' : String(value);
+      })),
       getFormulas: () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => cell(sheet, row + r, column + c).formula)),
       getSheet: () => sheet,
       getNumRows: () => rows,

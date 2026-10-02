@@ -26,6 +26,8 @@ function dmvBootstrap() {
       startCell: targetIsEmpty ? active.getCell(1, 1).getA1Notation() : 'A1',
     },
     dateTimezone: spreadsheet.getSpreadsheetTimeZone(),
+    // tools/publish.mjs adds DMV_BUILD to each deployment; local runs have none.
+    build: typeof DMV_BUILD === 'undefined' ? null : DMV_BUILD,
   };
 }
 

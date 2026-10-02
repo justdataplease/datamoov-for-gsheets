@@ -681,8 +681,11 @@ function dmvAiAdapter_(id) {
 
 // One request to the configured provider. `request` is provider-neutral:
 // { system, messages: [{ role, content: [text | tool_use | tool_result], raw? }], tools, maxTokens }
-// The reply is { text, toolCalls: [{ id, name, input }], stop, raw } where `raw` is the provider's
-// own assistant content, replayed unchanged when the same turn continues after tool results.
+// The reply is { text, toolCalls: [{ id, name, input }], stop, reason, raw } where `raw` is the
+// provider's own assistant content, replayed unchanged when the same turn continues after tool
+// results. stop is end, tool, length, refusal or tool_error (the model's tool call was unusable);
+// reason is the provider's own ending when stop could not name it, the code alone for a
+// tool_error, else ''.
 function dmvAiComplete_(settings, request, deadline) {
   var provider = DMV_AI_PROVIDERS[settings.provider];
   if (!provider) throw new Error('Choose a supported AI provider.');
@@ -713,6 +716,12 @@ function dmvAiToolCall_(id, name, input) {
   };
 }
 
+// The provider's ending code when the stop did not map it. Never its message: the reason
+// reaches the user's answer and later transcripts, and a message can echo sheet data.
+function dmvAiStopReason_(stop, providerReason) {
+  return stop || typeof providerReason !== 'string' ? '' : providerReason;
+}
+
 function dmvAiErrorText_(body) {
   return body && body.error && typeof body.error.message === 'string'
     ? body.error.message
@@ -727,6 +736,18 @@ function dmvAiProviderError_(label) {
     if (!message) return '';
     return label + ' rejected the request (HTTP ' + code + '): ' + message.slice(0, 300);
   };
+}
+
+// The cache breakpoint ends before the system prompt's last paragraph: the chat puts the
+// per-execution SPREADSHEET section (tabs, the active tab) there, so a tab switch does not
+// rewrite the cached rules and catalog. The blocks join back to the same text.
+function dmvAiAnthropicSystem_(system) {
+  var split = system.lastIndexOf('\n\n') + 2,
+    head = { type: 'text', text: system, cache_control: { type: 'ephemeral' } };
+  // Anthropic refuses an empty text block, so a prompt without a non-empty last paragraph stays whole.
+  if (split <= 2 || split >= system.length) return [head];
+  head.text = system.slice(0, split);
+  return [head, { type: 'text', text: system.slice(split) }];
 }
 
 var dmvAiAnthropic_ = {
@@ -749,7 +770,7 @@ var dmvAiAnthropic_ = {
     var body = {
       model: settings.model,
       max_tokens: request.maxTokens || DMV_AI.maxOutputTokens,
-      system: [{ type: 'text', text: request.system, cache_control: { type: 'ephemeral' } }],
+      system: dmvAiAnthropicSystem_(request.system),
       messages: messages,
     };
     if (request.tools && request.tools.length)
@@ -797,6 +818,7 @@ var dmvAiAnthropic_ = {
       text: text.join('\n'),
       toolCalls: toolCalls,
       stop: stop || 'end',
+      reason: dmvAiStopReason_(stop, response.stop_reason),
       raw: response.content,
     };
   },
@@ -904,10 +926,25 @@ var dmvAiOpenAi_ = {
       text: typeof choice.message.content === 'string' ? choice.message.content : '',
       toolCalls: toolCalls,
       stop: stop || 'end',
+      reason: dmvAiStopReason_(stop, choice.finish_reason),
       raw: choice.message,
     };
   },
   errorMessage: dmvAiProviderError_('OpenAI'),
+};
+
+// Gemini finish reasons the chat loop acts on. A tool_error reply holds no usable call: the
+// model wrote one Gemini could not read, one it did not declare, or too many.
+var DMV_AI_GEMINI_STOPS = {
+  STOP: 'end',
+  SAFETY: 'refusal',
+  RECITATION: 'refusal',
+  BLOCKLIST: 'refusal',
+  PROHIBITED_CONTENT: 'refusal',
+  SPII: 'refusal',
+  MALFORMED_FUNCTION_CALL: 'tool_error',
+  UNEXPECTED_TOOL_CALL: 'tool_error',
+  TOO_MANY_TOOL_CALLS: 'tool_error',
 };
 
 var dmvAiGemini_ = {
@@ -989,7 +1026,7 @@ var dmvAiGemini_ = {
     var candidate = response && Array.isArray(response.candidates) ? response.candidates[0] : null;
     if (!candidate) {
       if (response && response.promptFeedback && response.promptFeedback.blockReason)
-        return { text: '', toolCalls: [], stop: 'refusal', raw: [] };
+        return { text: '', toolCalls: [], stop: 'refusal', reason: '', raw: [] };
       throw new Error('Gemini returned an unreadable reply.');
     }
     var parts = (candidate.content && candidate.content.parts) || [];
@@ -1006,16 +1043,26 @@ var dmvAiGemini_ = {
           )
         );
     });
-    // A cut-off response may contain a function call; the chat must recover its
-    // answer without executing actions from that incomplete response.
-    var stop =
-      candidate.finishReason === 'MAX_TOKENS'
-        ? 'length'
-        : toolCalls.length
-          ? 'tool'
-          : { STOP: 'end', SAFETY: 'refusal', RECITATION: 'refusal' }[candidate.finishReason];
+    // A cut-off response or an unusable tool call may contain a function call; the chat must
+    // not execute actions from that incomplete response.
+    var finish = candidate.finishReason,
+      stop =
+        finish === 'MAX_TOKENS'
+          ? 'length'
+          : DMV_AI_GEMINI_STOPS[finish] === 'tool_error'
+            ? 'tool_error'
+            : toolCalls.length
+              ? 'tool'
+              : DMV_AI_GEMINI_STOPS[finish];
     // Parts are replayed as-is so thought signatures on function calls survive the tool round.
-    return { text: text.join('\n'), toolCalls: toolCalls, stop: stop || 'end', raw: parts };
+    // An unusable tool call returns no calls at all, so nothing partial is shown or run.
+    return {
+      text: text.join('\n'),
+      toolCalls: stop === 'tool_error' ? [] : toolCalls,
+      stop: stop || 'end',
+      reason: stop === 'tool_error' ? finish : dmvAiStopReason_(stop, finish),
+      raw: parts,
+    };
   },
   errorMessage: dmvAiProviderError_('Gemini'),
 };

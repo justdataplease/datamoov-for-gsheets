@@ -362,6 +362,9 @@ A report imports one source into a table. A **dashboard** is what you ask Chat f
 to *see* performance: it fetches 1 to 8 datasets, writes each to its own tab, and builds one
 **Dashboard** tab laid out as a page of cards. The numbers behind the charts go to a hidden
 **(chart data)** tab. You do not create reports first; the dashboard carries its own queries.
+A dashboard over data already in a tab (a pasted sales table, say) is not a saved dashboard: Chat
+builds a new tab in several small steps, with KPI formulas over your tab, a native pivot table and
+charts, which recalculate with the sheet and have no **Refresh dashboard** card.
 
 For example: **"Create a performance dashboard for Google Ads and Facebook Ads for the last 3
 months, every week."** Chat saves the plan and runs it once. You get:
@@ -621,6 +624,12 @@ the card. Chat-created cards say "from Chat" in their subtitle.
   its other connections refer to the first), the spreadsheet's tab names and timezone, and your
   saved instructions. The tools' `config` lists only the settings of the selected sources'
   reports, each wording once with the reports that share it.
+- The tab you have open when you send a message: its name, its used range (for example A1:I50,
+  with row and column counts) and its header row, the first non-empty row of the top 10 as the
+  sheet displays it: at most 30 cells of at most 40 characters each and 800 characters in all,
+  marked as spreadsheet data rather than instructions. A hidden undo copy is never named. With
+  Anthropic this section comes after the prompt's cache point, so switching tabs keeps the rest
+  of the prompt cached.
 - A fixed description of what the sidebar and the chat can and cannot do, with your connection
   labels and the current row limit filled in.
 - Tool results: column descriptors, row counts, per-column statistics and a few sample rows
@@ -670,6 +679,12 @@ Values that come back from providers are framed as data, not instructions.
   it has and says what is missing.
 - If the AI provider fails after a tool already wrote to the sheet, the answer says so and
   lists the completed steps; nothing that happened is hidden.
+- A tool call the provider cannot use (Gemini's `MALFORMED_FUNCTION_CALL`, `UNEXPECTED_TOOL_CALL`
+  or `TOO_MANY_TOOL_CALLS`) never runs. Chat tells the model, with only that reason code, to call
+  again in smaller steps, at most twice per request (across its executions); a third such reply
+  ends the request as a failed answer that lists any steps already completed.
+- A reply with no answer and no tool call is a failed answer, naming the provider's reason code
+  when it gives one (for example `OTHER`), never the provider's message.
 - Within one turn, repeated `run_report` requests reuse a complete result only when the validated
   configuration, selected fields, resolved dates and connection/credential revisions match.
   **Reused** appears in Actions. A lower requested row cap still applies; results are never

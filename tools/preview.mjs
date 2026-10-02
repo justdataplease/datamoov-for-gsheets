@@ -239,6 +239,8 @@ function installPreview(initial) {
     dmvBootstrap: () => ({
       ...copy(data),
       welcome: { offer: Boolean(window.DATAMOOV_PREVIEW_WELCOME), sheetName: 'Start here' },
+      // Like local runs, the preview has no deployment; DATAMOOV_PREVIEW_BUILD supplies a stamp.
+      build: copy(window.DATAMOOV_PREVIEW_BUILD || null),
     }),
     dmvCreateWelcome() {
       if (!window.DATAMOOV_PREVIEW_WELCOME) return null;

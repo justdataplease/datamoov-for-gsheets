@@ -39,7 +39,7 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | src/appsscript.json | Google scopes, runtime and Sheets service |
 | tests/ | Real implementation exercised with offline services and provider fixtures |
 | tests/browser/ | Sidebar behavior at narrow and wider widths |
-| tools/ | Source checks, local preview and guarded development publication |
+| tools/ | Source checks, local preview and guarded development publication, which adds a generated `dmv_build` server file (`DMV_BUILD`: deployment time, commit, dirty flag, target) that bootstrap returns as `build` for the last line of Settings |
 | videos/ | Social feature videos: a recorder over the local preview with fictional data and a privacy check, one storyboard per video (see videos/README.md) |
 | data/ and .local/ | Ignored private snapshots, verification records and credentials |
 

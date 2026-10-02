@@ -1881,6 +1881,30 @@
         // The sidebar works perfectly well without the page.
       }
     }
+    // The deployed commit and time, in the viewer's own time zone; local previews have no stamp.
+    function renderBuildStamp(build) {
+      const line = $('build-stamp');
+      const deployed = new Date(build?.deployedAt || '');
+      line.hidden = !build?.commit || isNaN(deployed);
+      line.textContent = line.hidden
+        ? ''
+        : [
+            'Version ' + build.commit + (build.dirty ? ' (modified)' : ''),
+            'deployed ' +
+              deployed.toLocaleString('en-GB', {
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              }),
+            build.target === 'development' ? 'development' : '',
+          ]
+            .filter(Boolean)
+            // A narrow sidebar wraps between parts, never inside the date.
+            .map((part) => part.replace(/ /g, '\u00a0'))
+            .join(' · ');
+    }
     async function bootstrap() {
       resetDashboards();
       $('boot-state').hidden = false;
@@ -1908,6 +1932,7 @@
         scheduleDashboardPoll();
         renderConnections();
         renderCredentials();
+        renderBuildStamp(data.build);
         if (window.dmvChatUi) window.dmvChatUi.bootstrap(data);
         if (!state.loaded) {
           resetReport();

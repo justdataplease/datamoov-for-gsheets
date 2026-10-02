@@ -24,8 +24,11 @@ npm run push:dev        # publishes src/ to the Apps Script development project
 ```
 
 `npm run push:dev` prints `verifiedFiles`, the count it read back and compared byte for byte.
-Check it matches the number of files under `src/` (including `appsscript.json` and
-`connectors/`). A mismatch means the publish did not land; say so rather than reporting success.
+Check it is the number of files under `src/` (including `appsscript.json` and `connectors/`)
+plus 1: the generated `dmv_build` stamp (deployment time, commit, dirty flag, target) that the
+publish adds to the payload only, never to `src/`, and prints as `build`. A mismatch means the
+publish did not land; say so rather than reporting success. Commit before publishing so the
+stamp names that commit with `dirty: false`; Settings shows it as its last line.
 
 ## Before committing
 
@@ -57,9 +60,9 @@ rewrites never appears in `git status`.
 the default and needs no permission.
 
 `npm run push:prod` replaces the code behind the live Google Workspace Marketplace listing.
-Never run it on your own initiative. It needs an explicit request, `DATAMOOV_CONFIRM=<scriptId>`,
-and a release also needs a new Marketplace deployment version, consent-screen scopes and
-resubmission — see the README.
+Never run it on your own initiative. It needs an explicit request, `DATAMOOV_CONFIRM=<scriptId>`
+and a committed `src/` (it refuses uncommitted `src/` changes), and a release also needs a new
+Marketplace deployment version, consent-screen scopes and resubmission — see the README.
 
 ## Closing the turn
 

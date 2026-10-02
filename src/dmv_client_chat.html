@@ -480,7 +480,11 @@
     }
     // One completed action is one line; a step with facts or links behind it expands on click.
     function eventRow(event) {
-      const item = el('li', event.kind === 'error' && !event.recovered ? 'error' : '');
+      // A failed step the model recovered from is grey; red is kept for what failed in the end.
+      const item = el(
+        'li',
+        event.kind === 'error' ? (event.recovered ? 'recovered' : 'error') : ''
+      );
       const text = event.text + (event.recovered ? ' (retried successfully)' : '');
       const facts = Array.isArray(event.details)
         ? event.details.filter(

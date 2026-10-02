@@ -232,3 +232,78 @@ test('a provider failure during recovery preserves completed output without anot
   assert.doesNotMatch(result.text, /333,/);
   assert.equal(f.progress().status, 'failed');
 });
+
+// A reply the provider ended because the model's tool call was unusable (Gemini's
+// MALFORMED_FUNCTION_CALL and kin): no text, no calls, and the provider's reason.
+const MALFORMED = 'MALFORMED_FUNCTION_CALL';
+const malformed = () => ({ ...reply('', [], 'tool_error'), reason: MALFORMED });
+const lastNote = (request) => {
+  const message = request.messages.at(-1);
+  assert.equal(message.role, 'user');
+  return message.content.map((block) => block.text || '').join('\n');
+};
+
+test('a malformed tool call is retried with a note naming the provider reason, then succeeds', () => {
+  const f = fixture();
+  f.replies.push(malformed(), reply('', [f.runReport()]), reply('Spend was EUR 125.50.'));
+  const result = f.chat();
+  assert.equal(result.text, 'Spend was EUR 125.50.');
+  assert.equal(result.failed, false);
+  assert.equal(f.requests.length, 3);
+  assert.equal(f.fetched, 1);
+  // The retry keeps the tools and tells the model what went wrong and how to call again.
+  assert.ok(f.requests[1].tools.length > 0);
+  const note = lastNote(f.requests[1]);
+  assert.ok(note.includes(MALFORMED), note);
+  assert.match(note, /smaller/);
+  assert.doesNotMatch(JSON.stringify(result), /returned no answer/);
+});
+
+test('malformed tool calls are retried twice per request, then the answer says what was done', () => {
+  const f = fixture();
+  f.replies.push(reply('', [f.runReport()]), malformed(), malformed(), malformed());
+  const result = f.chat();
+  assert.equal(f.requests.length, 4, 'two retries, no third');
+  assert.equal(result.failed, true);
+  assert.match(result.text, /valid tool call/);
+  assert.match(result.text, /steps completed so far are listed/);
+  assert.doesNotMatch(result.text, /returned no answer/);
+  assert.equal(f.fetched, 1);
+  assert.equal(result.events.length, 1, 'the completed fetch stays listed');
+  assert.equal(f.progress().status, 'failed');
+});
+
+test('the malformed-call retries are counted across the executions of one request', () => {
+  const f = fixture();
+  f.api.DMV_AI.defaultTimeLimit = 400;
+  f.replies.push(malformed(), () => {
+    // Leaves less than resumeBelowMs of this execution, so the request continues in another.
+    f.advance(90000);
+    return reply('', [f.runReport()]);
+  });
+  assert.deepEqual(plain(f.chat()), { pending: true });
+  f.replies.push(malformed(), malformed());
+  const result = plain(f.api.dmvChat({ requestId: REQUEST, resume: true }));
+  assert.equal(f.requests.length, 4);
+  assert.equal(result.failed, true);
+  assert.match(result.text, /valid tool call/);
+});
+
+test('an empty reply the provider gives a reason for names it instead of "no answer"', () => {
+  const f = fixture();
+  f.replies.push({ ...reply('', [], 'end'), reason: 'OTHER' });
+  const result = f.chat();
+  assert.equal(f.requests.length, 1);
+  assert.equal(result.failed, true);
+  assert.match(result.text, /OTHER/);
+  assert.doesNotMatch(result.text, /returned no answer/);
+});
+
+test('an empty reply without a reason is still a failed answer, as its progress step says', () => {
+  const f = fixture();
+  f.replies.push(reply(''));
+  const result = f.chat();
+  assert.equal(result.failed, true);
+  assert.match(result.text, /returned no answer/);
+  assert.equal(f.progress().status, 'failed');
+});

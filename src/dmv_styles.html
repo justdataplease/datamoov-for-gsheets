@@ -935,6 +935,14 @@
     border-bottom: 1px solid var(--line);
     margin-bottom: 12px;
   }
+  .build-stamp {
+    margin: 0;
+    font-size: 10px;
+    color: var(--muted);
+    text-align: center;
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+  }
   .icon-button.primary {
     background: var(--primary);
     color: #fff;
@@ -1224,12 +1232,14 @@
     content: '\2713';
     color: var(--success);
   }
+  /* A step that fails while chat works is grey, since chat may still recover; red is kept for
+     an answer whose actions failed in the end. */
   .chat-progress-steps .error,
+  .chat-actions summary.recovered {
+    color: var(--muted);
+  }
   .chat-actions summary.error {
     color: var(--danger);
-  }
-  .chat-actions summary.recovered {
-    color: var(--success);
   }
   .chat-progress-steps .error::before {
     content: '\2716';
@@ -1356,6 +1366,10 @@
   .chat-events li.error::before {
     content: '\2716';
     color: var(--danger);
+  }
+  .chat-events li.recovered::before {
+    content: '\21bb';
+    color: var(--muted);
   }
   .chat-step {
     min-width: 0;

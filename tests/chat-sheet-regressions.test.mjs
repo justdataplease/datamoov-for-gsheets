@@ -1548,7 +1548,7 @@ test('a hidden undo copy is no tab to chat or the report form, and the sweep kee
     plain(f.api.dmvChatListSheets_(later, {})).sheets.map((sheet) => sheet.sheetName),
     ['Output']
   );
-  assert.match(f.api.dmvChatSystemPrompt_(later), /\nTabs: Output\. /);
+  assert.match(f.api.dmvChatSystemPrompt_(later), /\nTabs: Output\.\n/);
   f.setActive(book);
   assert.deepEqual(plain(f.api.dmvBootstrap().sheetNames), ['Output']);
   // Chat neither reads, changes nor shows it.
