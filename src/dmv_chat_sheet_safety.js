@@ -1,7 +1,7 @@
 /* Safety around chat sheet edits: DataMoov output stays protected, cell-changing edits can be
    undone, destructive or wide edits wait for the user's yes, and dmvChatSheetRunAction_ gives
-   the analyst actions (dmv_chat_sheet_actions.js), analyst pivots and conditional formats the
-   same guarantees as the built-in edits. */
+   every edit_sheet action (dmv_chat_sheets.js, dmv_chat_sheet_actions.js), analyst pivots and
+   conditional formats those guarantees in one pipeline. */
 var DMV_SHEET_UNDO = {
   // CacheService keeps a value for at most six hours.
   ttlSeconds: 21600,
@@ -86,9 +86,10 @@ function dmvChatOwnerText_(owner) {
 // tab, so { sheetId } is the whole tab and { sheetId, startRowIndex: 4 } every row from row 5
 // (what inserting or deleting there would move).
 function dmvChatSheetGuard_(session, ranges) {
+  if (!ranges || !ranges.length) return;
   var owned = dmvChatOwnedAreas_(session);
   if (!owned.length) return;
-  (ranges || []).forEach(function (grid) {
+  ranges.forEach(function (grid) {
     var row = grid.startRowIndex || 0,
       column = grid.startColumnIndex || 0;
     var area = {
@@ -1092,9 +1093,9 @@ function dmvChatConfirmSpend_(session, approval, replaced, covered) {
 
 /* Analyst tools */
 
-// The analyst actions of dmv_chat_sheet_actions.js extend edit_sheet: dmvChatEditSheet_ runs one
-// through dmvChatSheetRunAction_ when it is not a built-in action, and dmvChatSheetTools_ adds
-// their names and properties to the schema without replacing built-in ones. The tools below
+// The analyst actions of dmv_chat_sheet_actions.js extend edit_sheet: dmvChatEditSheet_ runs them
+// through dmvChatSheetRunAction_ as it runs the built-in ones, and dmvChatSheetTools_ adds their
+// names and properties to the schema without replacing built-in ones. The tools below
 // follow the built-in sheet tools, first name wins (dmvChatSheetTools_).
 function dmvChatSheetExtraTools_() {
   return dmvChatSheetConditionTools_().concat(dmvChatSheetFormulaTools_());
@@ -1112,18 +1113,21 @@ function dmvChatSheetToolLabel_(name) {
     : '';
 }
 
-/* The pipeline for extra edit_sheet actions */
+/* The edit_sheet pipeline */
 
-// Runs one registered action with the same guarantees as the built-in ones: the inspected range
+// Runs one edit_sheet action, built-in (dmv_chat_sheets.js) or analyst
+// (dmv_chat_sheet_actions.js), and the pivot and conditional format edits: the inspected range
 // and its token, the protected-output guard, confirmation, an undo entry, one atomic batch, the
-// write event and a result with output links. See dmv_chat_sheet_actions.js for the spec.
+// write event, a result with output links and a fresh token. See dmv_chat_sheet_actions.js for
+// the spec.
 function dmvChatSheetRunAction_(session, input, spec) {
-  var target = spec.target || 'range';
+  var target = typeof spec.target === 'function' ? spec.target(input) : spec.target || 'range';
   // Tab-level actions need no inspection, so an inspected range and its token, which the prompt
-  // asks for on existing sheets, are left out rather than refused, unless the action takes them.
+  // asks for on existing sheets, are left out rather than refused, unless the action takes them
+  // (and the tab of an action that takes none).
   if (target !== 'range' && input && typeof input === 'object') {
     input = Object.assign({}, input);
-    ['range', 'editToken'].forEach(function (key) {
+    ['range', 'editToken'].concat(target === 'none' ? ['sheetName'] : []).forEach(function (key) {
       if ((spec.fields || []).indexOf(key) < 0) delete input[key];
     });
   }
@@ -1134,8 +1138,8 @@ function dmvChatSheetRunAction_(session, input, spec) {
       : target === 'sheet'
         ? ['action', 'sheetName']
         : ['action', 'sheetName', 'range', 'editToken']
-    ).concat(['confirmToken'], spec.fields || []),
-    true
+    ).concat(spec.builtIn && target !== 'range' ? [] : ['confirmToken'], spec.fields || []),
+    !spec.builtIn
   );
   if (JSON.stringify(input).length > 250000)
     throw new Error('The sheet edit is too large. Use a smaller range.');
@@ -1164,9 +1168,18 @@ function dmvChatSheetRunAction_(session, input, spec) {
     var reasons = [];
     if (plan.confirm) reasons.push(plan.confirm);
     // What the edit replaces: the touched cells that hold or show a value, or the plan's count.
-    var replaced = plan.overwrite ? (prepared && prepared.filled) || 0 : plan.replaced || 0;
+    var replaced =
+      plan.overwrite && prepared && prepared.filled !== undefined
+        ? prepared.filled
+        : plan.replaced || 0;
     var overwrite =
-      plan.overwrite || !plan.confirm ? dmvChatConfirmOverwrite_(session, replaced) : null;
+      plan.overwrite || !plan.confirm
+        ? dmvChatConfirmOverwrite_(
+            session,
+            replaced,
+            typeof plan.overwrite === 'string' ? plan.overwrite : ''
+          )
+        : null;
     if (overwrite) reasons.push(overwrite.text);
     // A plan's own question names its count once that passes the limit alone, so a yes to it
     // covers the cells replaced so far as a yes to the overwrite question does.
@@ -1199,6 +1212,15 @@ function dmvChatSheetRunAction_(session, input, spec) {
     dmvChatConfirmSpend_(session, approval, replaced, covered);
     var sheetName = plan.sheetName || (context.sheet ? context.sheet.getName() : input.sheetName);
     var range = plan.range || (context.area ? context.area.a1 : '');
+    // Undo names the tab as it is called, whatever name the call gave it.
+    var undoTab = plan.sheetId === undefined && context.sheet ? context.sheet.getName() : sheetName;
+    // The edited range as read back: undo checks against it and keeps no entry without it.
+    if (plan.readBack)
+      try {
+        context.written = dmvChatSheetRead_(session, context.sheet, context.area);
+      } catch (ignored) {
+        prepared = null;
+      }
     var undoId = dmvChatUndoCommit_(
       session,
       prepared,
@@ -1210,11 +1232,11 @@ function dmvChatSheetRunAction_(session, input, spec) {
             : context.sheet
               ? context.sheet.getSheetId()
               : undefined,
-        sheetName: sheetName,
+        sheetName: undoTab,
         range: range,
-        text: plan.text || input.action + ' ' + sheetName + (range ? '!' + range : ''),
+        text: plan.text || input.action + ' ' + undoTab + (range ? '!' + range : ''),
       },
-      []
+      context.written ? [{ grid: context.area.grid, cells: context.written.cells }] : []
     );
     var extra = {};
     try {
@@ -1247,11 +1269,21 @@ function dmvChatSheetRunAction_(session, input, spec) {
       sheetName: sheetName,
       url: url,
       range: range || null,
-      undoId: undoId,
     };
-    // After an edit of the range given (not a copy elsewhere), as built-in edits do.
-    if (tokenKey && sheetName === context.sheet.getName() && range === context.area.a1)
-      result.editToken = dmvChatSheetRetoken_(session, context.sheet, whole);
+    if (undoId || !spec.builtIn) result.undoId = undoId;
+    // After an edit of the range given (not a copy elsewhere).
+    if (
+      tokenKey &&
+      plan.retoken !== false &&
+      range === context.area.a1 &&
+      (plan.sheetId === undefined || plan.sheetId === context.sheet.getSheetId())
+    )
+      result.editToken = dmvChatSheetRetoken_(
+        session,
+        context.sheet,
+        whole,
+        whole.a1 === context.area.a1 ? context.written : null
+      );
     return Object.assign(result, plan.result || {}, extra);
   });
 }
