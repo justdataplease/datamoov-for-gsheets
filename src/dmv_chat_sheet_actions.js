@@ -593,6 +593,10 @@ function dmvChatActionPaste_(context, move) {
     ];
     plan.touches = [destination];
     plan.overwrite = !frozen;
+    // Pasted values keep no format a formula's result only showed, so a date reads as a number.
+    if (frozen)
+      plan.result.note =
+        'Dates and other formats the formula showed are not kept: format those columns, e.g. numberFormat date.';
     if (type === 'all' || type === 'formats')
       plan.undo = dmvChatActionCopyUndo_(context.session, area.grid, destination, type === 'all');
     return plan;

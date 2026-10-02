@@ -148,6 +148,20 @@ test('copy_range copies values, formats and notes to another tab, and undo clear
   assert.equal(f.requests()[0].copyPaste.pasteType, 'PASTE_VALUES');
   assert.equal(f.value(f.sheet, 1, 5), 'Name');
   assert.deepEqual(f.format(f.sheet, 1, 5), {});
+  assert.equal(values.note, undefined);
+});
+
+test('copy_range values onto the source itself tells chat to format what its formulas showed', () => {
+  const f = fixture();
+  f.setCell(f.sheet, 1, 1, 'Name');
+  // Sheets shows a formula's date or percent result formatted without a format on the cell, and
+  // pasting values keeps only the number: a date reads as its serial number.
+  const frozen = f.edit('copy_range', { destination: 'A1', pasteType: 'values' });
+  assert.equal(frozen.ok, true, JSON.stringify(frozen));
+  assert.equal(
+    frozen.note,
+    'Dates and other formats the formula showed are not kept: format those columns, e.g. numberFormat date.'
+  );
 });
 
 test('copy_range refuses bad destinations, needs its inspection and asks before replacing many cells', () => {
