@@ -616,6 +616,15 @@ async function main() {
     guard.check(html.replace(/<[^>]+>/g, ' '), 'report render');
   }
 
+  // A storyboard may write its own pages (prepare(dir)); they are checked like the renders above.
+  if (storyboard.prepare) {
+    const dir = path.join(renderDir, 'dashboard');
+    await mkdir(dir, { recursive: true });
+    await storyboard.prepare(dir);
+    for (const name of readdirSync(dir).filter((file) => file.endsWith('.html')))
+      guard.check(readFileSync(path.join(dir, name), 'utf8').replace(/<[^>]+>/g, ' '), name);
+  }
+
   const stage = await serve(STAGE_PORT, staticFrom({ kit, render: path.join(kit, '.render') }));
   const sidebar = await serve(SIDEBAR_PORT, async (pathname) =>
     pathname === '/' ? { type: TYPES['.html'], body: await renderPreview() } : null
