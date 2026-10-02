@@ -219,6 +219,22 @@ test('a corpus of analyst formulas is accepted and written exactly as given', ()
   assert.throws(() => f.check(long + '5'), /^Error: B2: a formula can be at most 8000 characters\.$/);
 });
 
+test('a LET name has the size of its value, so a generator sharing a random column is guarded', () => {
+  const f = fixture();
+  // Units drawn once and bound to a name, so Revenue multiplies the same units the table shows.
+  assert.deepEqual(
+    f.check(
+      '=LET(units,MAKEARRAY(3,1,LAMBDA(r,c,RANDBETWEEN(1,4))),{"ID","Units","Revenue";' +
+        'MAKEARRAY(3,1,LAMBDA(r,c,r)),units,MAKEARRAY(3,1,LAMBDA(r,c,INDEX(units,r)*40))})'
+    ).shape,
+    { rows: 4, columns: 3 }
+  );
+  assert.deepEqual(f.check('=LET(rate,0.2,total,A1:A5,ARRAYFORMULA(total*rate))').shape, { rows: 5, columns: 1 });
+  // A LAMBDA's own names stand for values known only when it runs.
+  assert.equal(f.check('=LET(x,A1:A3,MAP(x,LAMBDA(v,v)))').shape, null);
+  assert.equal(f.check('=LET(rows,FILTER(A1:A9,A1:A9>0),rows)').shape, null);
+});
+
 test('every denied function is refused in every disguise, by name, and nothing is written', () => {
   const f = fixture();
   for (const name of DENIED) {

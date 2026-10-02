@@ -45,15 +45,8 @@ test('the header row is capped at 30 cells of 40 characters, on one line', () =>
   assert.doesNotMatch(prompt, /Col 31/);
 });
 
-test('an empty active tab is named as empty, and a hidden undo copy is never shown', () => {
+test('an empty active tab is named as empty', () => {
   assert.match(activeLine(promptWith(() => {})), /^Active tab[^\n]*"Sales"[^\n]*empty/);
-  const prompt = promptWith((f, sheet) => {
-    sheet.name = 'DataMoov undo · Notes';
-    sheet.hidden = true;
-    f.setCell(sheet, 1, 1, 'Secret header');
-  });
-  assert.equal(activeLine(prompt), undefined);
-  assert.doesNotMatch(prompt, /Secret header/);
 });
 
 test('the prompt says how to build a dashboard over data already in a tab', () => {

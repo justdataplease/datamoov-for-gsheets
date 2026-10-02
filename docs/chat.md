@@ -200,10 +200,10 @@ ignoring case and surrounding spaces unless asked.
 | `set_formulas` | Formulas (see [Formulas](#formulas)); cells without = are written as values (labels beside KPI formulas), and text Sheets would read as a formula (+B1, -SUM(…)) is refused | Inspected range, 8,000 characters each |
 | `format`, `sort`, `filter`, `freeze` | Number format (currency shows a code only when given one, such as EUR), bold, colours, alignment and wrap; sort by columns; a basic filter, which without a range is a tab action over the tab's data (from A1 to its last row and column, however large); frozen rows and columns, a tab action that takes only the tab | Inspected range; `filter` without a range the tab's data; `freeze` the tab's grid |
 | `create_sheet`, `rename_sheet` | A new tab (with `count` rows, default 1,000, at most 200,000, for a helper tab of formulas over a large source), whose result carries an `editToken` for its empty first block (A1:Z38), so the edits that fill it need no inspection; or a new name for one | A tab a saved report or dashboard uses must have its destination updated before it is renamed |
-| `copy_range`, `move_range` | Copy or move the inspected range to a top-left cell on this tab or another; a copy pastes all, values, formats or formulas, while a move always takes everything, because Sheets empties the whole source, and takes the formulas that point at it along; a move over cells that formulas refer to by address (checked across the spreadsheet's formulas, up to 200,000 cells, or when that check cannot finish) always asks first, since Sheets turns those references into #REF! and undo cannot repair them; values pasted onto the range itself freeze its formulas without asking, and an array formula in its first cell (a generated table) is frozen whole, as the sheet shows it, however little of its result the range covers, unless that area holds another entry outside the range, which is refused | Inspected range |
-| `insert_rows`, `insert_columns` | Insert before a 1-based `start` | 500 per call |
-| `delete_rows`, `delete_columns` | Delete from `start`; always asks first, and refuses to delete every row or column that is not frozen, as Sheets does | 500 per call; undoable up to 50,000 cells |
-| `group_rows`, `group_columns`, `ungroup_rows`, `ungroup_columns` | Outline groups, at most 8 levels; ungroup only where every row or column is grouped | The tab's grid |
+| `copy_range`, `move_range` | Copy or move the inspected range to a top-left cell on this tab or another; a copy pastes all, values, formats or formulas, while a move always takes everything, because Sheets empties the whole source, and takes the formulas that point at it along; a move always asks first, and its question names the formulas that refer by address to cells it pastes over (checked across the spreadsheet's formulas, up to 200,000 cells, or says when that check cannot finish), since Sheets turns those references into #REF!; values pasted onto the range itself freeze its formulas without asking, and an array formula in its first cell (a generated table) is frozen whole, as the sheet shows it, however little of its result the range covers, unless that area holds another entry outside the range, which is refused | Inspected range |
+| `insert_rows`, `insert_columns` | Insert before a 1-based `start`; always asks first | 500 per call |
+| `delete_rows`, `delete_columns` | Delete from `start`; always asks first, naming the pivot tables anchored there, and refuses to delete every row or column that is not frozen, as Sheets does | 500 per call |
+| `group_rows`, `group_columns`, `ungroup_rows`, `ungroup_columns` | Outline groups, at most 8 levels; ungroup only where every row or column is grouped; always asks first | The tab's grid |
 | `find_replace` | Text or a regular expression, match case and whole cell, in the inspected range or the whole tab's data; never touches formulas and never makes one; dates and numbers are checked both by their number and by what they show (3/15/2023), so the count and the checks never undercount what Sheets changes; a regular expression uses only syntax that Java (which Sheets follows), RE2 and JavaScript read alike: classes, `(?:)` groups, repeats, `\d \w \s \b` and their capitals, `\t \n \r \f` and escaped punctuation; a range holding line breaks, unusual spaces or letters beyond A to Z is refused when the expression uses `.`, `$`, `\s` or `\b`, which differ there, and letters beyond A to Z in the expression need match case; a regular-expression replacement refers to groups as $1 to $9 and has no backslashes or other $ signs, so the text checked is the text Sheets writes; a result is refused when it starts with = or with a + or - that starts an expression, while a lone dash and plain signed numbers (-5, -5%, -$3) are fine | 50,000 cells; the whole tab or more than 200 changed cells asks first |
 | `remove_duplicates` | Keep the first or last row of each key (`keyColumns`), below `headerRows`; always asks first; with `wholeSheet` it compares every row of the tab's data (key columns counted from A) after reading only the key columns, and the kept rows close up for the whole table, so a large export is never deduped range by range | Inspected range, or the whole tab's data up to 50,000 cells (what undo keeps; a larger tab is refused) |
 | `highlight_duplicates` | One live conditional-format rule that colours repeated keys; an error cell (#N/A) counts as no match, so it never turns the rule off for every row; with `wholeSheet` the rule covers every data row of the tab and compares each key with the whole column | Inspected range, or the whole tab's data up to 50,000 cells |
@@ -212,7 +212,7 @@ ignoring case and surrounding spaces unless asked.
 | `data_validation` | Dropdown from a list (up to 500 values) or a range of this spreadsheet (which may run to the last row, as `A2:A`, or be whole columns), checkbox, number or date conditions, strict or not; `clear` removes it; rows a filter hides are included | Inspected range |
 | `set_notes`, `set_links` | Notes, or rich-text links on literal text (https only; an empty URL removes the link) | Inspected range |
 | `named_range` | Add, update (rename or move) or delete a named range, bounded or open (`C2:C`, `C:C`) | One name per call |
-| `duplicate_sheet`, `delete_sheet`, `hide_sheet`, `show_sheet` | Tab operations; delete always asks, and never removes a tab a saved report or dashboard uses or the last visible tab; a tab too large to copy within the spreadsheet's 10 million cells is deleted without an undo copy, and the question says so | One tab per call |
+| `duplicate_sheet`, `delete_sheet`, `hide_sheet`, `show_sheet` | Tab operations; duplicate and delete always ask, and delete never removes a tab a saved report or dashboard uses or the last visible tab | One tab per call |
 
 `create_pivot` makes a real Sheets pivot, by default in a new tab (see
 [Native pivot tables](#native-pivot-tables)). `conditional_format` adds, lists and deletes
@@ -250,7 +250,9 @@ Destructive or wide changes return a question instead of acting, for example rep
 non-empty cells (counting values a spilled array formula or a pivot table shows, and adding up
 the edits of one request, so an overwrite split into smaller calls still asks; a yes to that
 question covers every cell replaced so far, so the count starts again after it), deleting rows, columns or a tab, removing duplicates, find and replace over a
-whole tab or more than 200 cells, and anything that cannot be undone here. The tool answers
+whole tab or more than 200 cells, and anything that cannot be undone here, which includes
+inserting, deleting, grouping and ungrouping rows or columns, `move_range`, `duplicate_sheet` and
+`delete_sheet`. The tool answers
 `{needsConfirmation, confirmToken, summary}` and changes nothing; chat asks you, and the sidebar
 shows **Yes** and **No** under the question, above them DataMoov's own summary of each change
 Yes approves (not the model's wording). The change happens only when your next message is
@@ -273,34 +275,19 @@ validation, rich text and smart chips) in your private cache for six hours, the 
 edit of the current request, however many it makes). Ask "undo
 that" and `undo_sheet_edit` restores the latest edit, or one named from its list, in one batch;
 it refuses when those cells changed since, naming the range, and when rows or columns of their tab
-were inserted or deleted since or a later chat edit moved cells there (undo that one first), since
-the cells are then no longer where they were; group and ungroup undo follow the same rows and
-columns rule. Undoing a named range edit is refused once the name
-was changed since, and undoing `duplicate_sheet` once the copy's data grew or shrank or its charts,
-filters, protected ranges or conditional formats changed. Structural changes are reversed
-where feasible: inserted rows and columns are deleted while untouched, deleted ones are
-re-inserted with their cells, the conditional-format rules and named ranges that touched them
-and the pivot tables anchored in them (the question before the delete names those pivots), a
-move is moved back, a copy's conditional formats and merges are removed and the merges it
-pasted over come back, groups, validation, notes, links, named ranges, conditional-format rules,
-hidden tabs and a pivot placed on an existing tab are put back. Undo cannot repair formulas
-elsewhere: those that pointed at deleted cells, or at cells a move pasted over, stay #REF!, and
-formulas, charts, pivot tables and filters whose ranges started or ended in deleted rows or
-columns still leave them out; the delete and move questions and the undo result say so.
-Undoing a delete or a copy that puts conditional-format rules or named ranges back is refused
-once those changed since.
-Undoing a conditional-format change is refused once the tab's rules changed since, because the
-rule is found by its position. Undoing `format` is allowed over report output, like the edit.
-Undoing an insert or delete is refused, like the edit itself, when report or dashboard output
-now sits in the rows or columns it would move.
-A deleted tab is kept as a hidden "DataMoov undo · <name>" copy for its six-hour undo window;
-the deleting user's first chat request in the spreadsheet after that deletes it (unless report or
-dashboard output now uses it), and the delete result says so, since editors can show hidden tabs.
-Chat leaves such copies out of its tab list and the report form's tab suggestions, whoever deleted
-the tab, and refuses to read or change them. Formulas and dropdowns on the tab that name the tab
-itself point at the copy, so they come back with it. Formulas elsewhere that pointed at it stay
-#REF!, and pivot tables, charts and named ranges that used it stay broken, since they refer to the
-tab by an id the copy does not have: the question before the delete and the undo result name them.
+were inserted or deleted since, since the cells are then no longer where they were. Undoing a
+named range edit is refused once the name was changed since. A copy's conditional formats and
+merges are removed and the merges it pasted over come back; validation, notes, links, named
+ranges, conditional-format rules, hidden tabs and a pivot placed on an existing tab are put back.
+Undoing a copy that puts conditional-format rules back, or a conditional-format change, is refused
+once the tab's rules changed since, because a rule is found by its position. Undoing `format` is
+allowed over report output, like the edit.
+Row, column, move and tab edits (insert, delete, group and ungroup rows or columns, `move_range`,
+`duplicate_sheet` and `delete_sheet`) are not undone by chat: each asks first, saying so, and
+undo answers that File > Version history can restore it, rather than undo an older edit instead.
+Creating or renaming a tab, a pivot on a new tab and a chart neither ask nor are undone: they are
+listed without data, and undo right after one answers how to reverse it (delete the tab or chart,
+or rename the tab back) rather than undo the chat edit before it.
 Each undo entry keeps its cells and checks under cache keys of its own, so the list of entries
 stays well under the 100 KB a cache value holds: past about 30,000 characters its oldest entries
 are dropped, but never those of the current request, whose ids chat already gave out. Should a
@@ -332,9 +319,9 @@ HYPERLINK takes a literal https address. The built-in list is kept in
 `src/dmv_chat_sheet_formulas.js`.
 
 When the size of an array result follows from the formula (bounded ranges, SEQUENCE or
-MAKEARRAY with literal sizes, and array literals of them side by side or stacked, such as a
-header row above MAKEARRAY(1000, 9, …)) and it fills at most 50,000 cells, its spill area must
-be empty and off protected output, and it is kept for undo. Such a result running past the end
+MAKEARRAY with literal sizes, array literals of them side by side or stacked, such as a
+header row above MAKEARRAY(1000, 9, …), and LET names bound to them) and it fills at most
+50,000 cells, its spill area must be empty and off protected output, and it is kept for undo. Such a result running past the end
 of the tab adds the rows or columns it needs in the same edit (Sheets would show #REF!); undo
 leaves them, empty. Larger results, like those below, never grow the tab. Other
 array results (FILTER, QUERY, and lookups or conditional counts such as VLOOKUP, MATCH or
@@ -643,7 +630,7 @@ the card. Chat-created cards say "from Chat" in their subtitle.
 - The tab you have open when you send a message: its name, its used range (for example A1:I50,
   with row and column counts) and its header row, the first non-empty row of the top 10 as the
   sheet displays it: at most 30 cells of at most 40 characters each and 800 characters in all,
-  marked as spreadsheet data rather than instructions. A hidden undo copy is never named. With
+  marked as spreadsheet data rather than instructions. With
   Anthropic this section comes after the prompt's cache point, so switching tabs keeps the rest
   of the prompt cached.
 - A fixed description of what the sidebar and the chat can and cannot do, with your connection

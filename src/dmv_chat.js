@@ -162,14 +162,10 @@ function dmvChatProgress(input) {
     var labels = Object.keys(DMV_CHAT_PROGRESS_LABELS).map(function (name) {
       return DMV_CHAT_PROGRESS_LABELS[name];
     });
-    // The analyst tools declare fixed labels of their own (dmvChatProgressStep_).
-    try {
-      dmvChatSheetExtraTools_().forEach(function (tool) {
-        if (tool.label) labels.push(tool.label);
-      });
-    } catch (ignored) {
-      /* Without them, a step they labelled is simply not shown. */
-    }
+    // The analyst tools have labels of their own (dmvChatProgressStep_).
+    Object.keys(DMV_CHAT_SHEET_TOOL_LABELS).forEach(function (name) {
+      labels.push(DMV_CHAT_SHEET_TOOL_LABELS[name]);
+    });
     if (
       snapshot.steps.some(function (step) {
         return (
@@ -479,7 +475,7 @@ function dmvChatSystemPrompt_(session) {
 // The tab the user is looking at (sidebar calls run with it active): its name, used range and
 // header row (the first non-empty one near the top, as displayed), capped. One read of the data
 // range size and one of the top rows; header cells are spreadsheet content, so the prompt labels
-// them as data. Only tabs chat may name (session.sheetNames, without hidden undo copies) appear.
+// them as data. Only tabs chat may name (session.sheetNames) appear.
 function dmvChatActiveTabText_(session) {
   try {
     var sheet = session.spreadsheet.getActiveSheet();
@@ -1249,9 +1245,8 @@ function dmvChatExecute_(input, progress, spreadsheet) {
       });
   } else {
     // A new request is the user's answer to confirmations the previous one in this conversation
-    // asked for. It also deletes hidden undo copies of deleted tabs whose undo window ended.
+    // asked for.
     dmvChatConfirmBegin_(session, text, input.confirmToken, conversation);
-    dmvChatUndoSweep_(session);
   }
   var system = dmvChatSystemPrompt_(session);
   var tools = dmvChatTools_(session);

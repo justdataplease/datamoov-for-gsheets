@@ -8,10 +8,10 @@
    one could reach a custom function of that name. Text inside string literals is data: a QUERY
    string that says IMPORTRANGE is not a call. When the size of a formula's result can be worked
    out from the formula alone (a bounded range, SEQUENCE or MAKEARRAY with literal sizes,
-   TRANSPOSE or ARRAYFORMULA over those, array literals of them side by side or stacked), its
-   spill area is guarded, kept for undo, refused when it holds data and added to the tab when it
-   runs past its end; other array results are left to Sheets, which never spills over data and
-   shows #REF! instead, and the read-back reports it.
+   TRANSPOSE or ARRAYFORMULA over those, array literals of them side by side or stacked, LET
+   names bound to them), its spill area is guarded, kept for undo, refused when it holds data and
+   added to the tab when it runs past its end; other array results are left to Sheets, which
+   never spills over data and shows #REF! instead, and the read-back reports it.
 
    dmvChatSheetFormulaCheck_(session, formula, options) is the same policy for one formula, for
    other formulas chat writes, such as custom conditional-format rules: it throws a message
@@ -335,8 +335,8 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
     if (token.type === 'ref') return reference(token);
     if (token.type === 'name') {
       var upper = deny(token);
-      if (upper === 'TRUE' || upper === 'FALSE' || scope[upper])
-        return scope[upper] ? null : SCALAR;
+      if (scope[upper]) return scope[upper].shape;
+      if (upper === 'TRUE' || upper === 'FALSE') return SCALAR;
       if (used.names.indexOf(upper) < 0) used.names.push(upper);
       return null;
     }
@@ -380,7 +380,7 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
         if (
           !cache.tabs[key] &&
           !session.spreadsheet.getSheets().some(function (sheet) {
-            return !dmvChatUndoCopy_(sheet) && sheet.getName().toLowerCase() === key;
+            return sheet.getName().toLowerCase() === key;
           })
         ) {
           try {
@@ -481,10 +481,11 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
     depth--;
     return shape;
   }
-  function bind(scope, token) {
+  // A LET name has the size of its value; a LAMBDA's names are known only when it runs (null).
+  function bind(scope, token, shape) {
     var upper = deny(token);
     if (upper === 'TRUE' || upper === 'FALSE') fail(upper + ' cannot be a name', token.at);
-    scope[upper] = true;
+    scope[upper] = { shape: shape || null };
   }
   function letCall(token, scope, arrays) {
     var inner = Object.assign(Object.create(null), scope),
@@ -494,8 +495,7 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
     while (peek() && peek().type === 'name' && is(tokens[index + 1], ',')) {
       var name = tokens[index];
       index += 2;
-      expression(inner, arrays);
-      bind(inner, name);
+      bind(inner, name, expression(inner, arrays));
       expect(',');
       bindings++;
     }
@@ -601,7 +601,6 @@ function dmvChatSheetFormulaTools_() {
   return [
     {
       name: 'search_sheets',
-      label: 'Searching the spreadsheet',
       description:
         'Read-only. mode find (default): find text, a number or a regular expression in cell values (what cells show) or formulas across every visible tab or chosen tabs; returns up to 200 matches as Tab!cell with value and formula, and the total. mode duplicates: report duplicate rows of one tab range by key columns (groups, counts, first rows), ignoring case and surrounding spaces unless matchCase. Changes nothing. Scans at most 200,000 cells per call.',
       input_schema: {
@@ -1053,7 +1052,7 @@ function dmvChatSearchRead_(session, plan, visit, values) {
   dmvChatSheetDeadline_(session);
   var result = Sheets.Spreadsheets.get(session.spreadsheetId, {
     ranges: plan.map(function (item) {
-      return "'" + item.sheet.getName().replace(/'/g, "''") + "'!" + dmvChatGridA1_(item.grid);
+      return dmvChatActionTab_(item.sheet.getName()) + dmvChatGridA1_(item.grid);
     }),
     fields:
       'sheets(properties(sheetId),data(startRow,startColumn,rowData(values(' +

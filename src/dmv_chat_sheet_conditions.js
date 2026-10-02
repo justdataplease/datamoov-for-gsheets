@@ -352,7 +352,7 @@ function dmvChatSheetRuleScale_(scale) {
 function dmvChatSheetRules_(session, sheet) {
   dmvChatSheetDeadline_(session);
   var result = Sheets.Spreadsheets.get(session.spreadsheetId, {
-    ranges: ["'" + sheet.getName().replace(/'/g, "''") + "'!A1"],
+    ranges: [dmvChatActionTab_(sheet.getName()) + 'A1'],
     fields: 'sheets(properties(sheetId),conditionalFormats)',
   });
   var entry = ((result && result.sheets) || []).filter(function (item) {
@@ -580,7 +580,6 @@ function dmvChatSheetRuleTool_() {
   };
   return {
     name: 'conditional_format',
-    label: 'Updating conditional formatting',
     description:
       'Add, list or delete conditional formatting rules of one tab. add colours a range by a condition (number, text or date compare, blank, or a custom formula checked like set_formulas) with a format, or by a 2- or 3-point colour scale; the rule follows the values as they change and goes after existing rules. list returns each rule with its ruleId; delete removes one by ruleId. No inspection needed; undo_sheet_edit reverses add and delete.',
     input_schema: {

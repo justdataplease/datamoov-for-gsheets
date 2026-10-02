@@ -61,12 +61,6 @@ function dmvChatSheetTarget_(session, name) {
         (session.sheetNames || []).join(', ') +
         '. Use list_sheets first.'
     );
-  if (dmvChatUndoCopy_(sheet))
-    throw new Error(
-      'The tab "' +
-        sheet.getName() +
-        '" is the hidden undo copy of a deleted tab, kept only so undo_sheet_edit can bring the tab back. Chat does not read or change it.'
-    );
   return sheet;
 }
 
@@ -115,7 +109,7 @@ function dmvChatSheetArea_(sheet, address) {
 function dmvChatSheetRead_(session, sheet, area) {
   dmvChatSheetDeadline_(session);
   var result = Sheets.Spreadsheets.get(session.spreadsheetId, {
-    ranges: ["'" + sheet.getName().replace(/'/g, "''") + "'!" + area.a1],
+    ranges: [dmvChatActionTab_(sheet.getName()) + area.a1],
     includeGridData: true,
     fields:
       'sheets(properties,basicFilter,data(startRow,startColumn,rowData(values(' +
@@ -151,7 +145,7 @@ function dmvChatSheetFingerprint_(snapshot) {
 // A private, single-use editToken for five minutes, bound to the range's cells and sheet settings
 // as snapshot read them (dmvChatSheetInspected_ checks it).
 function dmvChatSheetToken_(session, sheet, area, snapshot) {
-  var token = 'e' + dmvOutputDigest_(Utilities.getUuid() + ':' + Date.now()).slice(0, 32);
+  var token = dmvChatNewId_('e', 32);
   var saved = {
     spreadsheetId: session.spreadsheetId,
     sheetId: sheet.getSheetId(),
@@ -184,19 +178,14 @@ function dmvChatListSheets_(session, input) {
   dmvChatSheetObject_(input || {}, []);
   dmvChatSheetDeadline_(session);
   var result = {
-    sheets: session.spreadsheet
-      .getSheets()
-      .filter(function (sheet) {
-        return !dmvChatUndoCopy_(sheet);
-      })
-      .map(function (sheet) {
-        return {
-          sheetName: sheet.getName(),
-          sheetId: sheet.getSheetId(),
-          rows: sheet.getMaxRows(),
-          columns: sheet.getMaxColumns(),
-        };
-      }),
+    sheets: session.spreadsheet.getSheets().map(function (sheet) {
+      return {
+        sheetName: sheet.getName(),
+        sheetId: sheet.getSheetId(),
+        rows: sheet.getMaxRows(),
+        columns: sheet.getMaxColumns(),
+      };
+    }),
   };
   session.events.push({ kind: 'summary', text: 'Listed available spreadsheet tabs' });
   return result;
@@ -633,7 +622,9 @@ function dmvChatEditSheet_(session, input) {
       prepared = null,
       approval = null,
       replaced = 0,
-      covered = false;
+      covered = false,
+      // A new or renamed tab is never undone and asks nothing: undo says how to reverse it.
+      undoNone = null;
     if (input.action === 'create_sheet') {
       var name = dmvSheetName_(input.newName);
       if (session.spreadsheet.getSheetByName(name))
@@ -646,6 +637,7 @@ function dmvChatEditSheet_(session, input) {
           properties: { title: name, gridProperties: { rowCount: rowCount, columnCount: 26 } },
         },
       });
+      undoNone = { text: 'Created tab ' + name, hint: dmvChatUndoNewTab_(name) };
     } else if (input.action === 'freeze') {
       sheet = dmvChatSheetTarget_(session, input.sheetName);
       var grid = {},
@@ -793,6 +785,10 @@ function dmvChatEditSheet_(session, input) {
             fields: 'title',
           },
         });
+        undoNone = {
+          text: 'Renamed tab ' + sheet.getName() + ' to ' + newName,
+          hint: 'Rename it back to "' + sheet.getName() + '" to reverse it.',
+        };
       }
     }
     if (['set_values', 'set_formulas', 'format', 'sort'].indexOf(input.action) >= 0) {
@@ -832,6 +828,12 @@ function dmvChatEditSheet_(session, input) {
     var outputId = sheet
       ? sheet.getSheetId()
       : created && created.properties && created.properties.sheetId;
+    if (undoNone)
+      dmvChatUndoNone_(
+        session,
+        { action: input.action, sheetId: outputId, sheetName: outputName, text: undoNone.text },
+        undoNone.hint
+      );
     var url = Number.isInteger(outputId)
       ? dmvSheetUrl_(session.spreadsheet, outputId, area ? area.a1 : 'A1')
       : dmvSheetLink_(session.spreadsheet, { sheetName: outputName }, area ? area.a1 : 'A1');
@@ -1038,7 +1040,9 @@ function dmvChatSheetTools_() {
   });
   return tools.concat(
     dmvChatSheetExtraTools_().filter(function (tool) {
-      return names.indexOf(tool.name) < 0;
+      if (names.indexOf(tool.name) >= 0) return false;
+      names.push(tool.name);
+      return true;
     })
   );
 }

@@ -54,6 +54,17 @@ function fixture() {
   return f;
 }
 
+// Row, column, move and tab edits keep no undo: they ask first, and undo answers with this.
+const NO_UNDO = 'Chat cannot undo this; File > Version history can restore it.';
+const noUndo = (text) =>
+  new RegExp(
+    '^Error: Chat cannot undo "' + text + '"\\. File > Version history can restore it\\.$'
+  );
+
+// A row, column or tab action, asked first and done on the user's yes.
+const confirmed = (f, action, input) =>
+  f.confirm((session, extra) => f.tabAction(action, { ...input, ...extra }, session)).done;
+
 const gridOf = (sheet, startRowIndex, endRowIndex, startColumnIndex, endColumnIndex) => ({
   sheetId: sheet.id,
   startRowIndex,
@@ -190,15 +201,16 @@ test('copy_range refuses bad destinations, needs its inspection and asks before 
   assert.equal(f.value(summary, 21, 10), 'old');
 });
 
-test('move_range moves cells with the formulas that point at them, and undo moves them back', () => {
+test('move_range moves cells with the formulas that point at them', () => {
   const f = fixture();
   const other = f.book.insertSheet('Other');
   f.column(f.sheet, 1, ['a', 'b']);
   f.sheet.formats.set('1:1', BOLD);
   f.setCell(f.sheet, 1, 3, 'kept');
   f.setCell(other, 1, 1, 'a', '=Output!A1');
-  const before = f.cellState(f.sheet, 1, 1, 2, 4);
-  const result = f.edit('move_range', { destination: 'D1' }, f.inspect('A1:A2'));
+  const move = (destination, range) => (session, extra) =>
+    f.edit('move_range', { destination, ...extra }, f.inspect(range, 'Output', session), session);
+  const result = f.confirm(move('D1', 'A1:A2')).done;
   assert.equal(result.ok, true);
   assert.equal(result.range, 'D1:D2');
   assert.deepEqual(f.requests(), [
@@ -214,36 +226,27 @@ test('move_range moves cells with the formulas that point at them, and undo move
   assert.equal(f.value(f.sheet, 2, 4), 'b');
   assert.deepEqual(f.format(f.sheet, 1, 4), BOLD);
   assert.equal(f.formula(other, 1, 1), '=Output!D1', 'references follow the moved cells');
-  const undone = f.undo();
-  assert.equal(undone.ok, true);
-  assert.deepEqual(f.requests()[0], {
-    cutPaste: {
-      source: gridOf(f.sheet, 0, 2, 3, 4),
-      destination: { sheetId: f.sheet.id, rowIndex: 0, columnIndex: 0 },
-      pasteType: 'PASTE_NORMAL',
-    },
-  });
-  assert.deepEqual(f.cellState(f.sheet, 1, 1, 2, 4), before);
-  assert.equal(f.formula(other, 1, 1), '=Output!A1', 'and follow them home');
-  // Moving onto many filled cells asks; the source's own cells do not count.
+  // The question names many filled cells moved over; the source's own cells do not count.
   for (let row = 1; row <= 21; row++)
     for (let column = 1; column <= 21; column++) f.setCell(f.sheet, row, column, row);
-  const inspected = f.inspect('A1:J21');
-  assert.equal(f.edit('move_range', { destination: 'L1' }, inspected).needsConfirmation, true);
-  const over = f.edit('move_range', { destination: 'B1' }, inspected);
-  assert.equal(over.ok, true, 'only the 21 cells of column K are outside the source');
-  const near = f.edit('move_range', { destination: 'A2' }, f.inspect('A1:J1'));
-  assert.equal(near.ok, true, 'ten cells over its own row are not many');
+  const many = /replaces \d+ non-empty cells/;
+  assert.match(f.confirm(move('L1', 'A1:J21')).asked.summary, many);
+  const over = f.confirm(move('B1', 'A1:J21'));
+  assert.doesNotMatch(over.asked.summary, many, 'only the 21 cells of column K are outside');
+  assert.equal(over.done.ok, true);
+  const near = f.confirm(move('A2', 'A1:J1'));
+  assert.doesNotMatch(near.asked.summary, many, 'ten cells over its own row are not many');
 });
 
-test('insert_rows and insert_columns add space, stay clear of report output and undo while untouched', () => {
+test('insert_rows and insert_columns add space and stay clear of report output', () => {
   const f = fixture();
   f.column(f.sheet, 1, ['h', 'a', 'b']);
-  const rows = f.tabAction('insert_rows', { sheetName: 'Output', start: 2, count: 2 });
+  const { done: rows, session } = f.confirm((yes, extra) =>
+    f.tabAction('insert_rows', { sheetName: 'Output', start: 2, count: 2, ...extra }, yes)
+  );
   assert.equal(rows.ok, true);
   assert.equal(rows.inserted, 2);
   assert.equal(rows.at, 'rows 2-3');
-  assert.match(rows.undoId, /^u[a-f0-9]{12}$/);
   assert.deepEqual(f.requests(), [
     {
       insertDimension: {
@@ -254,22 +257,16 @@ test('insert_rows and insert_columns add space, stay clear of report output and 
   ]);
   assert.equal(f.sheet.maxRows, 102);
   assert.equal(f.value(f.sheet, 4, 1), 'a');
-  assert.equal(f.session.events.at(-1).text, 'Inserted 2 rows before row 2 in Output');
-  f.undo();
-  assert.equal(f.sheet.maxRows, 100);
-  assert.equal(f.value(f.sheet, 2, 1), 'a');
+  assert.equal(session.events.at(-1).text, 'Inserted 2 rows before row 2 in Output');
   // Columns, appended at the end: they take the format of the last column.
-  const columns = f.tabAction('insert_columns', { sheetName: 'Output', start: 27, count: 3 });
+  const columns = confirmed(f, 'insert_columns', { sheetName: 'Output', start: 27, count: 3 });
   assert.equal(columns.at, 'columns AA-AC');
   assert.equal(f.requests()[0].insertDimension.inheritFromBefore, true);
   assert.equal(f.sheet.maxColumns, 29);
-  // Undo refuses once a new cell was filled.
-  f.setCell(f.sheet, 1, 28, 'typed');
-  assert.throws(() => f.undo(), /The cells in Output!AA1:AC100 changed since that edit/);
   for (const [extra, message] of [
     [{ start: 2, count: 501 }, /count must be between 1 and 500/],
-    [{ start: 0 }, /start must be between 1 and 101/],
-    [{ start: 102 }, /start must be between 1 and 101/],
+    [{ start: 0 }, /start must be between 1 and 103/],
+    [{ start: 104 }, /start must be between 1 and 103/],
     [{ start: 2.5 }, /start must be an integer number/],
     [{ count: 2 }, /Give start/],
   ])
@@ -297,11 +294,14 @@ test('tab and row or column actions ignore an inspected range and editToken, and
       editToken: inspected.editToken,
       ...extra,
     });
-  assert.equal(asInspected('insert_rows', { start: 2, count: 1 }).ok, true);
-  assert.equal(asInspected('group_rows', { start: 2, count: 1 }).ok, true);
+  assert.equal(asInspected('insert_rows', { start: 2, count: 1 }).needsConfirmation, true);
+  assert.equal(asInspected('group_rows', { start: 2, count: 1 }).needsConfirmation, true);
   assert.equal(asInspected('delete_rows', { start: 2, count: 1 }).needsConfirmation, true);
   assert.equal(asInspected('hide_sheet', {}, 'Notes').ok, true);
-  assert.equal(asInspected('duplicate_sheet', { newName: 'Notes copy' }, 'Notes').ok, true);
+  assert.equal(
+    asInspected('duplicate_sheet', { newName: 'Notes copy' }, 'Notes').needsConfirmation,
+    true
+  );
   assert.equal(asInspected('delete_sheet', {}, 'Old Q2').needsConfirmation, true);
   // A yes to the delete covers the call with or without the ignored fields.
   const yes = f.answer('Yes');
@@ -334,24 +334,21 @@ test('insert and delete never move or remove saved report output', () => {
       action
     );
   assert.equal(f.state.batches.length, before);
-  assert.equal(f.tabAction('insert_rows', { sheetName: 'Output', start: 4 }).ok, true);
-  assert.equal(f.tabAction('insert_columns', { sheetName: 'Output', start: 5 }).ok, true);
+  assert.equal(confirmed(f, 'insert_rows', { sheetName: 'Output', start: 4 }).ok, true);
+  assert.equal(confirmed(f, 'insert_columns', { sheetName: 'Output', start: 5 }).ok, true);
   assert.equal(f.api.dmvRunReport(report.id).ok, true, 'the report still refreshes');
 });
 
-test('delete_rows and delete_columns ask first, and undo puts the cells back where they were', () => {
+test('delete_rows and delete_columns ask first', () => {
   const f = fixture();
   f.column(f.sheet, 1, ['h', 'a', 'b', 'c', 'd']);
-  f.setCell(f.sheet, 3, 2, 7);
-  f.sheet.formats.set('3:2', BOLD);
-  f.setMeta(f.sheet, 3, 1, { note: 'row note', dataValidation: LIST });
-  const before = f.cellState(f.sheet, 1, 1, 6, 3);
   const call = (session, extra) =>
     f.tabAction('delete_rows', { sheetName: 'Output', start: 2, count: 2, ...extra }, session);
   const { asked, done } = f.confirm(call);
   assert.equal(
     asked.summary,
-    'Delete rows 2-3 of tab "Output", with everything in them? Formulas elsewhere that point at them will show #REF!, and undoing the delete does not repair those formulas.'
+    'Delete rows 2-3 of tab "Output", with everything in them? Formulas elsewhere that point at them will show #REF!. ' +
+      NO_UNDO
   );
   assert.equal(done.ok, true);
   assert.equal(done.at, 'rows 2-3');
@@ -364,28 +361,16 @@ test('delete_rows and delete_columns ask first, and undo puts the cells back whe
   ]);
   assert.equal(f.sheet.maxRows, 98);
   assert.equal(f.value(f.sheet, 2, 1), 'c');
-  f.undo();
-  assert.equal(f.sheet.maxRows, 100);
-  assert.deepEqual(f.cellState(f.sheet, 1, 1, 6, 3), before);
-  assert.deepEqual(f.requests()[0], {
-    insertDimension: {
-      range: { sheetId: f.sheet.id, dimension: 'ROWS', startIndex: 1, endIndex: 3 },
-      inheritFromBefore: false,
-    },
-  });
-  // Undo refuses once a row beside the gap changed.
   const columns = (session, extra) =>
     f.tabAction('delete_columns', { sheetName: 'Output', start: 2, ...extra }, session);
   const deleted = f.confirm(columns).done;
   assert.equal(deleted.at, 'column B');
   assert.equal(f.sheet.maxColumns, 25);
-  f.setCell(f.sheet, 1, 2, 'next to the gap');
-  assert.throws(() => f.undo(), /The cells in Output!A1:B100 changed since that edit/);
   // Caps: at most 500, inside the grid, never every row.
   for (const [extra, message] of [
     [{ start: 1, count: 501 }, /count must be between 1 and 500/],
-    [{ start: 99, count: 5 }, /has 100 rows; choose a smaller count/],
-    [{ start: 101 }, /start must be between 1 and 100/],
+    [{ start: 97, count: 5 }, /has 98 rows; choose a smaller count/],
+    [{ start: 99 }, /start must be between 1 and 98/],
   ])
     assert.throws(() => f.tabAction('delete_rows', { sheetName: 'Output', ...extra }), message);
   const tiny = f.book.insertSheet('Tiny');
@@ -396,24 +381,9 @@ test('delete_rows and delete_columns ask first, and undo puts the cells back whe
   );
 });
 
-test('a deletion too large to keep says so in its question and still acts once on yes', () => {
+test('group and ungroup rows or columns', () => {
   const f = fixture();
-  const wide = f.book.insertSheet('Wide');
-  wide.maxColumns = 200;
-  f.setCell(wide, 1, 1, 'x');
-  const call = (session, extra) =>
-    f.tabAction('delete_rows', { sheetName: 'Wide', start: 1, count: 300, ...extra }, session);
-  wide.maxRows = 400;
-  const { asked, done } = f.confirm(call);
-  assert.match(asked.summary, /too large to undo here; Sheets version history can restore it\.$/);
-  assert.equal(done.ok, true);
-  assert.equal(done.undoId, null);
-  assert.equal(wide.maxRows, 100);
-});
-
-test('group and ungroup rows or columns, each undone exactly', () => {
-  const f = fixture();
-  const grouped = f.tabAction('group_rows', { sheetName: 'Output', start: 2, count: 3 });
+  const grouped = confirmed(f, 'group_rows', { sheetName: 'Output', start: 2, count: 3 });
   assert.equal(grouped.grouped, 'rows 2-4');
   assert.deepEqual(f.requests(), [
     {
@@ -425,24 +395,20 @@ test('group and ungroup rows or columns, each undone exactly', () => {
   assert.deepEqual(f.groups(f.sheet), [
     { range: { sheetId: f.sheet.id, dimension: 'ROWS', startIndex: 1, endIndex: 4 }, depth: 1 },
   ]);
-  f.undo();
-  assert.deepEqual(f.groups(f.sheet), []);
   assert.throws(
-    () => f.tabAction('ungroup_rows', { sheetName: 'Output', start: 2, count: 3 }),
-    /Not all of rows 2-4 are grouped/
+    () => f.tabAction('ungroup_rows', { sheetName: 'Output', start: 6, count: 3 }),
+    /Not all of rows 6-8 are grouped/
   );
-  f.tabAction('group_columns', { sheetName: 'Output', start: 1, count: 2 });
-  const ungrouped = f.tabAction('ungroup_columns', { sheetName: 'Output', start: 1, count: 2 });
+  confirmed(f, 'group_columns', { sheetName: 'Output', start: 1, count: 2 });
+  const ungrouped = confirmed(f, 'ungroup_columns', { sheetName: 'Output', start: 1, count: 2 });
   assert.equal(ungrouped.ungrouped, 'columns A-B');
   assert.deepEqual(f.groups(f.sheet, 'COLUMNS'), []);
-  f.undo();
-  assert.equal(f.groups(f.sheet, 'COLUMNS').length, 1);
   // Groups are not limited to 500, only to the grid; they nest at most eight deep.
-  assert.equal(f.tabAction('group_rows', { sheetName: 'Output', start: 1, count: 100 }).ok, true);
-  for (let level = 2; level <= 8; level++)
-    f.tabAction('group_rows', { sheetName: 'Output', start: 5, count: 2 });
+  assert.equal(confirmed(f, 'group_rows', { sheetName: 'Output', start: 1, count: 100 }).ok, true);
+  for (let level = 3; level <= 8; level++)
+    confirmed(f, 'group_rows', { sheetName: 'Output', start: 3, count: 2 });
   assert.throws(
-    () => f.tabAction('group_rows', { sheetName: 'Output', start: 5, count: 1 }),
+    () => f.tabAction('group_rows', { sheetName: 'Output', start: 3, count: 1 }),
     /nest at most 8 levels/
   );
 });
@@ -1231,11 +1197,11 @@ test('named_range adds, renames, moves and deletes names, each undone', () => {
   );
 });
 
-test('duplicate_sheet copies a tab next to it, and undo removes the copy while it is unchanged', () => {
+test('duplicate_sheet copies a tab next to it', () => {
   const f = fixture();
   f.book.insertSheet('Last');
   f.column(f.sheet, 1, ['a', 'b']);
-  const result = f.tabAction('duplicate_sheet', { sheetName: 'Output' });
+  const result = confirmed(f, 'duplicate_sheet', { sheetName: 'Output' });
   assert.equal(result.ok, true);
   assert.equal(result.sheetName, 'Copy of Output');
   const copy = f.tab('Copy of Output');
@@ -1249,45 +1215,20 @@ test('duplicate_sheet copies a tab next to it, and undo removes the copy while i
     newSheetId: copy.id,
     newSheetName: 'Copy of Output',
   });
-  f.undo();
-  assert.equal(f.tab('Copy of Output'), null);
-  f.tabAction('duplicate_sheet', { sheetName: 'Output' });
   assert.equal(
-    f.tabAction('duplicate_sheet', { sheetName: 'Output' }).sheetName,
+    confirmed(f, 'duplicate_sheet', { sheetName: 'Output' }).sheetName,
     'Copy of Output 2'
   );
   assert.throws(
     () => f.tabAction('duplicate_sheet', { sheetName: 'Output', newName: 'last' }),
     /already exists/
   );
-  const named = f.tabAction('duplicate_sheet', { sheetName: 'Output', newName: 'Backup' });
+  const named = confirmed(f, 'duplicate_sheet', { sheetName: 'Output', newName: 'Backup' });
   assert.equal(named.sheetName, 'Backup');
-  f.setCell(f.tab('Backup'), 1, 1, 'edited');
-  assert.throws(() => f.undo(), /The cells in Backup!A1:A2 changed since that edit/);
 });
 
-test('delete_sheet asks, keeps a hidden copy for undo and refuses report tabs and the last visible tab', () => {
+test('delete_sheet refuses report tabs and the last visible tab', () => {
   const f = fixture();
-  const notes = f.book.insertSheet('Notes');
-  f.setCell(notes, 1, 1, 'keep me');
-  const call = (session, extra) =>
-    f.tabAction('delete_sheet', { sheetName: 'Notes', ...extra }, session);
-  const { asked, done } = f.confirm(call);
-  assert.equal(
-    asked.summary,
-    'Delete the tab "Notes" (data in A1)? Formulas on other tabs that point at it will show #REF!.'
-  );
-  assert.equal(done.ok, true);
-  assert.equal(done.url, null);
-  assert.equal(f.tab('Notes'), null);
-  assert.ok(f.tab('DataMoov undo · Notes').hidden);
-  assert.deepEqual(
-    f.requests().map((request) => Object.keys(request)[0]),
-    ['duplicateSheet', 'updateSheetProperties', 'deleteSheet']
-  );
-  f.undo();
-  assert.equal(f.value(f.tab('Notes'), 1, 1), 'keep me');
-  assert.equal(f.tab('Notes').hidden, false);
   f.report();
   assert.throws(
     () => f.tabAction('delete_sheet', { sheetName: 'Output' }),
@@ -1301,6 +1242,103 @@ test('delete_sheet asks, keeps a hidden copy for undo and refuses report tabs an
     /at least one visible tab/
   );
   assert.equal(g.state.batches.length, 0);
+});
+
+test('delete_sheet asks first, keeps no hidden copy, and undo points to version history', () => {
+  const f = fixture();
+  const notes = f.book.insertSheet('Notes');
+  f.setCell(notes, 1, 1, 'keep me');
+  const edited = f.edit('set_values', { values: [['x']] }, f.inspect('A1'));
+  const call = (session, extra) =>
+    f.tabAction('delete_sheet', { sheetName: 'Notes', ...extra }, session);
+  const { asked, done } = f.confirm(call);
+  assert.equal(
+    asked.summary,
+    'Delete the tab "Notes" (data in A1)? Formulas on other tabs that point at it will show #REF!. ' +
+      NO_UNDO
+  );
+  assert.equal(done.ok, true);
+  assert.equal(done.url, null);
+  assert.equal(done.undoId, null);
+  assert.equal(done.note, undefined);
+  assert.deepEqual(f.requests(), [{ deleteSheet: { sheetId: notes.id } }]);
+  assert.deepEqual(
+    f.book.sheets.map((sheet) => sheet.name),
+    ['Output']
+  );
+  // Undo answers with version history rather than undo an older edit instead.
+  const batches = f.state.batches.length;
+  assert.throws(() => f.undo(), noUndo('Deleted tab Notes'));
+  assert.equal(f.state.batches.length, batches);
+  assert.equal(f.value(f.sheet, 1, 1), 'x');
+  assert.deepEqual(
+    f.undo({ action: 'list' }).entries.map((entry) => [entry.text, entry.undoable]),
+    [
+      ['Deleted tab Notes', false],
+      ['set_values Output!A1', undefined],
+    ]
+  );
+  assert.equal(f.undo({ action: 'undo', id: edited.undoId }).ok, true);
+  assert.equal(f.value(f.sheet, 1, 1), '');
+});
+
+test('row, column, move and duplicate edits ask first, and undo points to version history', () => {
+  const f = fixture();
+  f.column(f.sheet, 1, ['a', 'b']);
+  for (const [action, input, question, text] of [
+    [
+      'insert_rows',
+      { start: 2, count: 2 },
+      'Insert 2 rows before row 2 in tab "Output"?',
+      'Inserted 2 rows before row 2 in Output',
+    ],
+    [
+      'insert_columns',
+      { start: 27 },
+      'Insert 1 column at the end in tab "Output"?',
+      'Inserted 1 column at the end in Output',
+    ],
+    [
+      'group_rows',
+      { start: 2, count: 3 },
+      'Group rows 2-4 of tab "Output"?',
+      'Grouped rows 2-4 of Output',
+    ],
+    [
+      'ungroup_rows',
+      { start: 2, count: 3 },
+      'Ungroup rows 2-4 of tab "Output"?',
+      'Ungrouped rows 2-4 of Output',
+    ],
+    [
+      'duplicate_sheet',
+      {},
+      'Duplicate the tab "Output" as "Copy of Output"?',
+      'Duplicated Output as Copy of Output',
+    ],
+  ]) {
+    const { asked, done } = f.confirm((session, extra) =>
+      f.tabAction(action, { sheetName: 'Output', ...input, ...extra }, session)
+    );
+    assert.equal(asked.summary, question + ' ' + NO_UNDO, action);
+    assert.equal(done.ok, true, action);
+    assert.equal(done.undoId, null, action);
+    assert.throws(() => f.undo(), noUndo(text), action);
+  }
+  const move = (session, extra) =>
+    f.edit(
+      'move_range',
+      { destination: 'D1', ...extra },
+      f.inspect('A1:A2', 'Output', session),
+      session
+    );
+  const { asked, done } = f.confirm(move);
+  assert.equal(asked.summary, 'Move Output!A1:A2 to Output!D1:D2? ' + NO_UNDO);
+  assert.equal(done.ok, true);
+  assert.equal(done.undoId, null);
+  assert.equal(f.value(f.sheet, 1, 4), 'a');
+  assert.throws(() => f.undo(), noUndo('Moved Output!A1:A2 to Output!D1:D2'));
+  assert.ok(!f.book.sheets.some((sheet) => /undo/i.test(sheet.name)), 'no hidden copies');
 });
 
 test('hide_sheet and show_sheet toggle a tab and undo the toggle', () => {

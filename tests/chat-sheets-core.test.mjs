@@ -443,7 +443,7 @@ test('a yes to an action that names the cells it replaces covers them, so the ne
   const moved = f.confirm((s, extra) =>
     f.edit('move_range', { destination: 'L1', ...extra }, f.inspect('A1:J21', 'Output', s), s)
   );
-  assert.match(moved.asked.summary, /^Moving Output!A1:J21 replaces 210 non-empty cells in /);
+  assert.match(moved.asked.summary, /\? Moving Output!A1:J21 replaces 210 non-empty cells in /);
   assert.equal(moved.done.ok, true, JSON.stringify(moved.done));
   const one = (session) =>
     f.edit('set_values', { values: [['y']] }, f.inspect('V1', 'Output', session), session);
@@ -952,92 +952,6 @@ test('registered tools join the chat tools with their progress label, without na
     input: {},
   });
   assert.deepEqual(JSON.parse(ran.content), { matches: [] });
-});
-
-test('a tab deleted through a registered action comes back from its hidden copy, which expires', () => {
-  const f = fixture();
-  const notes = f.book.insertSheet('Notes');
-  f.setCell(notes, 1, 1, 'keep me');
-  f.api.dmvChatSheetActions_ = () => ({
-    delete_sheet: {
-      target: 'sheet',
-      plan(context) {
-        const copy = f.api.dmvChatUndoSheetCopy_(context.session, context.sheet);
-        return {
-          requests: copy.requests.concat([
-            { deleteSheet: { sheetId: context.sheet.getSheetId() } },
-          ]),
-          guard: [{ sheetId: context.sheet.getSheetId() }],
-          undo: copy.undo,
-          confirm: 'Delete the tab "' + context.sheet.getName() + '"?',
-          text: 'Deleted tab ' + context.sheet.getName(),
-        };
-      },
-    },
-  });
-  const remove = (session) =>
-    plain(f.api.dmvChatEditSheet_(session, { action: 'delete_sheet', sheetName: 'Notes' }));
-  const asked = remove(f.session);
-  assert.equal(asked.needsConfirmation, true);
-  assert.ok(f.tab('Notes'));
-  const yes = f.answer('Yes');
-  const deleted = remove(yes);
-  assert.equal(deleted.ok, true);
-  assert.equal(deleted.url, null, 'no link to the deleted tab');
-  assert.match(deleted.undoId, /^u[a-f0-9]{12}$/);
-  assert.equal(f.tab('Notes'), null);
-  const copy = f.tab('DataMoov undo · Notes');
-  assert.ok(copy && copy.hidden);
-  assert.equal(f.value(copy, 1, 1), 'keep me');
-  assert.deepEqual(
-    f.state.batches.at(-1).body.requests.map((request) => Object.keys(request)[0]),
-    ['duplicateSheet', 'updateSheetProperties', 'deleteSheet']
-  );
-  const undone = f.undo({ action: 'undo' }, yes);
-  assert.equal(undone.ok, true);
-  assert.match(undone.note, /#REF!/);
-  const back = f.tab('Notes');
-  assert.ok(back && !back.hidden);
-  assert.equal(back.id, copy.id);
-  assert.equal(f.book.sheets.indexOf(back), 1, 'back in its place');
-  assert.equal(f.value(back, 1, 1), 'keep me');
-  assert.equal(f.state.user.getProperty('dmv:v1:undo-tabs:' + f.book.id), null);
-
-  // Deleted again: once the undo window ends, the next edit removes the hidden copy.
-  remove(f.session);
-  remove(f.answer('yes'));
-  const hidden = f.tab('DataMoov undo · Notes');
-  assert.ok(hidden?.hidden);
-  f.advance(6 * 3600 * 1000 + 1);
-  f.api.dmvChatSheetActions_ = () => ({
-    stamp: {
-      plan: (context) => ({
-        requests: [
-          {
-            updateCells: {
-              range: context.area.grid,
-              rows: [{ values: [{ userEnteredValue: { stringValue: 'stamp' } }] }],
-              fields: 'userEnteredValue',
-            },
-          },
-        ],
-      }),
-    },
-  });
-  const later = f.api.dmvChatSession_(f.book);
-  plain(
-    f.api.dmvChatEditSheet_(later, {
-      action: 'stamp',
-      sheetName: 'Output',
-      range: 'A1',
-      editToken: f.inspect('A1', 'Output', later).editToken,
-    })
-  );
-  assert.equal(f.tab('DataMoov undo · Notes'), null);
-  assert.deepEqual(f.state.batches.at(-1).body.requests.at(-1), {
-    deleteSheet: { sheetId: hidden.id },
-  });
-  assert.equal(f.state.user.getProperty('dmv:v1:undo-tabs:' + f.book.id), null);
 });
 
 test('the formula policy hook checks formulas, guards its spill and reads results back', () => {

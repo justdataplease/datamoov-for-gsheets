@@ -17,8 +17,13 @@ var DMV_CHAT_RESULTS = {
   cellChars: 80,
 };
 
+// A fresh random id: prefix and length hex characters.
+function dmvChatNewId_(prefix, length) {
+  return prefix + dmvOutputDigest_(Utilities.getUuid() + ':' + Date.now()).slice(0, length);
+}
+
 function dmvChatResultId_() {
-  return 'r' + dmvOutputDigest_(Utilities.getUuid() + ':' + Date.now()).slice(0, 8);
+  return dmvChatNewId_('r', 8);
 }
 
 // Text longer than one cache value is split into <key>:<n> chunks, with their count at <key>.
@@ -1671,6 +1676,13 @@ function dmvChatCreateChart_(session, input) {
   var anchor = input.anchorCell
     ? dmvCell_(input.anchorCell)
     : { row: area.row, column: area.column + area.columns.length + 1 };
+  var text =
+    'Added a ' +
+    String(input.chartType).toLowerCase() +
+    ' chart "' +
+    title +
+    '" on ' +
+    area.sheetName;
   var response = dmvWorkbookLocked_(function () {
     var currentSheet = dmvChatSheetTarget_(session, area.sheetName);
     if (currentSheet.getSheetId() !== area.sheetId)
@@ -1678,7 +1690,7 @@ function dmvChatCreateChart_(session, input) {
         'The chart source tab changed. Read or write the table again before charting.'
       );
     if (!input.anchorCell) anchor = dmvChatFreeChartAnchor_(session, area.sheetId, anchor);
-    return Sheets.Spreadsheets.batchUpdate(
+    var added = Sheets.Spreadsheets.batchUpdate(
       {
         requests: [
           {
@@ -1703,19 +1715,20 @@ function dmvChatCreateChart_(session, input) {
       },
       session.spreadsheetId
     );
+    // Chat never undoes a chart and asks nothing: undo says how to remove it.
+    dmvChatUndoNone_(
+      session,
+      { action: 'create_chart', sheetId: area.sheetId, sheetName: area.sheetName, text: text },
+      'Delete the chart to remove it.'
+    );
+    return added;
   });
   var reply = response && response.replies && response.replies[0] && response.replies[0].addChart;
   var url = dmvSheetUrl_(session.spreadsheet, area.sheetId, dmvChatA1_(anchor.row, anchor.column));
   session.events.push({
     kind: 'chart',
     links: [{ label: area.sheetName, url: url }],
-    text:
-      'Added a ' +
-      String(input.chartType).toLowerCase() +
-      ' chart "' +
-      title +
-      '" on ' +
-      area.sheetName,
+    text: text,
     details: dmvChatDetails_([
       ['X axis', x.label],
       [

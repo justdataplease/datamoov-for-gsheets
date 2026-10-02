@@ -13,12 +13,11 @@ var DMV_SHEET_UNDO = {
   // many characters (dmvChatUndoDrop_ keeps those of the current request). Each undo entry's
   // cells and checks are kept under keys of its own (dmvChatCachePut_).
   listChars: 30000,
-  // At most this many updateCells requests point a deleted tab's own references at its undo copy.
-  retabRequests: 2000,
   // Replacing more non-empty cells than this asks the user first.
   overwriteCells: 200,
   confirmTtlSeconds: 1800,
-  tabPrefix: 'DataMoov undo · ',
+  // Row, column, move and tab edits keep no undo: they ask first, saying this.
+  noUndo: 'Chat cannot undo this; File > Version history can restore it.',
   // The cell fields an inspection and an undo snapshot read, and the ones undo writes back.
   readFields:
     'userEnteredValue,effectiveValue,userEnteredFormat,dataValidation,note,textFormatRuns,chipRuns',
@@ -229,7 +228,7 @@ function dmvChatSheetCells_(session, grids, values) {
   var ranges = grids.map(function (grid) {
     var sheet = dmvChatSheetById_(session, grid.sheetId);
     if (!sheet) throw new Error('A tab this change needs no longer exists. Use list_sheets.');
-    return "'" + sheet.getName().replace(/'/g, "''") + "'!" + dmvChatGridA1_(grid);
+    return dmvChatActionTab_(sheet.getName()) + dmvChatGridA1_(grid);
   });
   var result = Sheets.Spreadsheets.get(session.spreadsheetId, {
     ranges: ranges,
@@ -418,24 +417,28 @@ function dmvChatUndoDrop_(session, entries, keep) {
     } catch (ignored) {
       /* The cache drops it after six hours anyway. */
     }
-    if (entry.copyId !== undefined) dmvChatUndoTabs_(session, entry.copyId, 0);
   });
 }
 
 // Before a batch: what undo needs, from an undo spec (see dmvChatSheetRunAction_). known lists
 // cells already read ([{ grid, cells }]); the rest of spec.snapshot is read here. The result has
-// unavailable set to the reason when the edit cannot be undone here, and filled to the snapshot
-// cells that hold or show a value (dmvChatSheetNonEmpty_).
+// unavailable set to the reason when the edit cannot be undone here (with none for an edit that
+// never can, which undo answers with that reason), and filled to the snapshot cells that hold or
+// show a value (dmvChatSheetNonEmpty_). An edit that never can be undone still reads its
+// snapshot cells, so a yes covers them only as they were when chat asked (dmvChatConfirmScope_).
+// A spec of only a hint (a new or renamed tab, a chart) is never undone and asks nothing.
 function dmvChatUndoPrepare_(session, spec, known) {
-  if (spec.none) return { unavailable: spec.none };
-  if (!(spec.snapshot || []).length && !(spec.reverse || []).length && !spec.sheet) return null;
+  if (spec.hint) return { none: true, hint: spec.hint };
+  if (!spec.none && !(spec.snapshot || []).length && !(spec.reverse || []).length) return null;
   var snapshot = spec.snapshot || [],
     total = 0;
   snapshot.forEach(function (grid) {
     total += dmvChatGridCells_(grid);
   });
   if (total > DMV_SHEET_UNDO.maxCells)
-    return { unavailable: 'It is too large to undo here; Sheets version history can restore it.' };
+    return spec.none
+      ? { unavailable: spec.none, none: true }
+      : { unavailable: 'It is too large to undo here; Sheets version history can restore it.' };
   var filled = 0,
     chipless = 0;
   var cells = dmvChatGridsRead_(session, snapshot, known).map(function (found) {
@@ -450,6 +453,7 @@ function dmvChatUndoPrepare_(session, spec, known) {
       }),
     };
   });
+  if (spec.none) return { unavailable: spec.none, none: true, cells: cells, filled: filled };
   var notes = [spec.note].concat(
     chipless
       ? [
@@ -465,46 +469,21 @@ function dmvChatUndoPrepare_(session, spec, known) {
       cells: cells,
       reverse: spec.reverse || [],
       restore: spec.restore || null,
-      after: spec.after || [],
     }).length;
   verify.forEach(function (grid) {
     size += JSON.stringify(grid).length + 100;
   });
   if (size > DMV_SHEET_UNDO.maxChars)
     return { unavailable: 'It is too large to undo here; Sheets version history can restore it.' };
-  // Tabs whose cells this edit moved (rows or columns inserted or deleted, a block moved): an
-  // older edit there is found by position, so it waits until this one is undone.
-  var moves = [];
-  (spec.reverse || []).forEach(function (request) {
-    var dimension = request.insertDimension || request.deleteDimension,
-      cut = request.cutPaste;
-    (dimension
-      ? [dimension.range.sheetId]
-      : cut
-        ? [cut.source.sheetId, cut.destination.sheetId]
-        : []
-    )
-      .filter(function (sheetId) {
-        return moves.indexOf(sheetId) < 0;
-      })
-      .forEach(function (sheetId) {
-        moves.push(sheetId);
-      });
-  });
   return {
     cells: cells,
     reverse: spec.reverse || [],
     filled: filled,
     verify: verify,
     rules: spec.rules,
-    sheet: spec.sheet || null,
-    moves: moves,
-    extent: spec.extent,
     named: spec.named,
     restore: spec.restore || null,
-    after: spec.after || [],
     note: notes.filter(Boolean).join(' '),
-    dims: spec.dims || [],
   };
 }
 
@@ -532,39 +511,15 @@ function dmvChatUndoDims_(session, sheetIds) {
     });
 }
 
-// How far a tab's data reaches, with a fingerprint of what it holds besides cells (charts,
-// filters, filter views, protected ranges, slicers, banding and conditional formats), as
-// { sheetId, rows, columns, objects }, or null when the tab is gone.
-function dmvChatUndoExtent_(session, sheetId) {
-  var sheet = dmvChatSheetById_(session, sheetId);
-  if (!sheet) return null;
-  var used = sheet.getDataRange();
-  dmvChatSheetDeadline_(session);
-  var result = Sheets.Spreadsheets.get(session.spreadsheetId, {
-    ranges: ["'" + sheet.getName().replace(/'/g, "''") + "'!A1"],
-    fields:
-      'sheets(properties(sheetId),charts,basicFilter,filterViews,protectedRanges,slicers,bandedRanges,conditionalFormats)',
-  });
-  var objects = ((result && result.sheets) || []).filter(function (entry) {
-    return entry.properties && entry.properties.sheetId === sheetId;
-  })[0];
-  return {
-    sheetId: sheetId,
-    rows: used.getNumRows(),
-    columns: used.getNumColumns(),
-    objects: dmvOutputDigest_(dmvCanonical_(objects || {})),
-  };
-}
-
 // After a successful batch: stores the undo entry and returns its id, or null when it could not
 // be kept. after lists cells already read back ([{ grid, cells }]); other verify ranges are read
-// here. Never fails the edit, which is already in the sheet.
+// here. An edit that never can be undone (prepared.none) is listed without data and returns null,
+// so undo answers with its reason instead of undoing an older edit. Never fails the edit, which
+// is already in the sheet.
 function dmvChatUndoCommit_(session, prepared, details, after) {
-  if (!prepared || prepared.unavailable) return null;
+  if (!prepared || (prepared.unavailable && !prepared.none)) return null;
   try {
-    var verify = prepared.verify || [];
-    var read = dmvChatGridsRead_(session, verify, after);
-    var id = 'u' + dmvOutputDigest_(Utilities.getUuid() + ':' + Date.now()).slice(0, 12);
+    var id = dmvChatNewId_('u', 12);
     var entry = {
       id: id,
       at: Date.now(),
@@ -574,49 +529,42 @@ function dmvChatUndoCommit_(session, prepared, details, after) {
       range: details.range || '',
       text: String(details.text || '').slice(0, 200),
     };
-    var sheetIds = [];
-    read
-      .concat(prepared.cells || [])
-      .map(function (item) {
-        return item.grid.sheetId;
-      })
-      .concat(prepared.dims || [])
-      .forEach(function (sheetId) {
-        if (sheetIds.indexOf(sheetId) < 0) sheetIds.push(sheetId);
-      });
-    entry.dims = dmvChatUndoDims_(session, sheetIds);
-    if ((prepared.moves || []).length) entry.moves = prepared.moves;
-    if (prepared.extent !== undefined) {
-      entry.extent = dmvChatUndoExtent_(session, prepared.extent);
-      if (!entry.extent) return null;
-    }
-    if (prepared.named) entry.named = prepared.named;
-    if (prepared.sheet) {
-      entry.sheet = prepared.sheet;
-      entry.copyId = prepared.sheet.copyId;
-    }
-    if (prepared.rules !== undefined) {
-      var rules = dmvChatUndoRules_(session, prepared.rules);
-      if (!rules) return null;
-      entry.rules = { sheetId: prepared.rules, fingerprint: rules.fingerprint };
-    }
-    dmvChatCachePut_(
-      dmvChatUndoKey_(session.spreadsheetId) + ':' + id,
-      dmvPack_({
-        cells: prepared.cells,
-        reverse: prepared.reverse,
-        restore: dmvChatUndoRestoreKept_(session, prepared.restore),
-        after: prepared.after,
-        note: prepared.note,
-        verify: read.map(function (found) {
-          return { grid: found.grid, fingerprint: dmvChatUndoFingerprint_(found.cells) };
+    if (prepared.none) {
+      entry.none = true;
+      if (prepared.hint) entry.hint = prepared.hint;
+    } else {
+      var read = dmvChatGridsRead_(session, prepared.verify || [], after);
+      var sheetIds = [];
+      read
+        .concat(prepared.cells || [])
+        .map(function (item) {
+          return item.grid.sheetId;
+        })
+        .forEach(function (sheetId) {
+          if (sheetIds.indexOf(sheetId) < 0) sheetIds.push(sheetId);
+        });
+      entry.dims = dmvChatUndoDims_(session, sheetIds);
+      if (prepared.named) entry.named = prepared.named;
+      if (prepared.rules !== undefined) {
+        var rules = dmvChatUndoRules_(session, prepared.rules);
+        if (!rules) return null;
+        entry.rules = { sheetId: prepared.rules, fingerprint: rules.fingerprint };
+      }
+      dmvChatCachePut_(
+        dmvChatUndoKey_(session.spreadsheetId) + ':' + id,
+        dmvPack_({
+          cells: prepared.cells,
+          reverse: prepared.reverse,
+          restore: prepared.restore,
+          note: prepared.note,
+          verify: read.map(function (found) {
+            return { grid: found.grid, fingerprint: dmvChatUndoFingerprint_(found.cells) };
+          }),
         }),
-      }),
-      DMV_SHEET_UNDO.ttlSeconds
-    );
+        DMV_SHEET_UNDO.ttlSeconds
+      );
+    }
     var entries = [entry].concat(dmvChatUndoEntries_(session));
-    if (entry.copyId !== undefined)
-      dmvChatUndoTabs_(session, entry.copyId, entry.at + DMV_SHEET_UNDO.ttlSeconds * 1000);
     // The newest entries are kept, and every entry of this request (session.undoIds), so each
     // undoId it returned stays usable however many edits it makes.
     session.undoIds = (session.undoIds || []).concat([id]);
@@ -627,10 +575,20 @@ function dmvChatUndoCommit_(session, prepared, details, after) {
         return index < DMV_SHEET_UNDO.maxEntries || session.undoIds.indexOf(item.id) >= 0;
       })
     );
-    return id;
+    return entry.none ? null : id;
   } catch (ignored) {
     return null;
   }
+}
+
+// Lists an edit chat neither undoes nor asks about, so undo answers with hint (how to reverse it)
+// instead of undoing the chat edit before it. details as for dmvChatUndoCommit_.
+function dmvChatUndoNone_(session, details, hint) {
+  dmvChatUndoCommit_(session, { none: true, hint: hint }, details, []);
+}
+
+function dmvChatUndoNewTab_(name) {
+  return 'Delete the tab "' + name + '" to remove it.';
 }
 
 // A tab's conditional format rules as { sheetId, list, fingerprint }, or null when the tab is
@@ -643,361 +601,48 @@ function dmvChatUndoRules_(session, sheetId) {
   return { sheetId: sheetId, list: list, fingerprint: dmvOutputDigest_(dmvCanonical_(list)) };
 }
 
-// After the edit: the restore of an undo spec as kept with the entry. Each named range to put
-// back becomes { id, name, after, before }, with after the range as the edit left it (null when
-// the edit removed it), so undo can check it unchanged (dmvChatActionNamedUnchanged_).
-function dmvChatUndoRestoreKept_(session, restore) {
-  if (!restore || !restore.named) return restore || null;
-  var now = dmvChatActionNamedRanges_(session);
-  return Object.assign({}, restore, {
-    named: restore.named.map(function (before) {
-      var after = now.filter(function (item) {
-        return item.namedRangeId === before.namedRangeId;
-      })[0];
-      return { id: before.namedRangeId, name: before.name, after: after || null, before: before };
-    }),
-  });
-}
-
 // The requests that put back a kept restore, after the reverse: the saved conditional format
-// rules replace those the tab holds now (rules, from dmvChatUndoRules_), and each named range is
-// set back, or added again when the edit removed it.
+// rules replace those the tab holds now (rules, from dmvChatUndoRules_).
 function dmvChatUndoRestore_(restore, rules) {
   var requests = [];
-  if (restore.rules) {
-    rules.list.forEach(function () {
-      requests.push({ deleteConditionalFormatRule: { sheetId: rules.sheetId, index: 0 } });
-    });
-    restore.rules.forEach(function (rule, index) {
-      requests.push({ addConditionalFormatRule: { rule: rule, index: index } });
-    });
-  }
-  (restore.named || []).forEach(function (named) {
-    requests.push(
-      named.after
-        ? { updateNamedRange: { namedRange: named.before, fields: 'range' } }
-        : { addNamedRange: { namedRange: named.before } }
-    );
+  rules.list.forEach(function () {
+    requests.push({ deleteConditionalFormatRule: { sheetId: rules.sheetId, index: 0 } });
+  });
+  restore.rules.forEach(function (rule, index) {
+    requests.push({ addConditionalFormatRule: { rule: rule, index: index } });
   });
   return requests;
 }
 
-// Hidden undo copies of deleted tabs, by sheet id, with the time their undo window ends. Kept in
-// the user's properties so a copy is removed even after its cache entry is gone. Expiry 0 marks
-// a copy whose entry was dropped; null forgets it.
-function dmvChatUndoTabs_(session, copyId, expiresAt) {
-  var key = 'dmv:v1:undo-tabs:' + session.spreadsheetId,
-    store = dmvStore_(),
-    tabs;
-  try {
-    tabs = JSON.parse(store.getProperty(key) || '{}') || {};
-  } catch (ignored) {
-    tabs = {};
-  }
-  if (copyId === undefined) return tabs;
-  if (expiresAt === null) delete tabs[copyId];
-  else tabs[copyId] = expiresAt;
-  if (Object.keys(tabs).length) store.setProperty(key, JSON.stringify(tabs));
-  else store.deleteProperty(key);
-  return tabs;
-}
-
-// True for a hidden undo copy of a deleted tab, whoever deleted it (the registry of copies is
-// each user's own): chat neither lists, reads nor changes one, and the report form offers none.
-function dmvChatUndoCopy_(sheet) {
-  return !!sheet.isSheetHidden() && sheet.getName().indexOf(DMV_SHEET_UNDO.tabPrefix) === 0;
-}
-
-// The names of the tabs chat and the report form offer: every tab but hidden undo copies.
+// The names of the spreadsheet's tabs, as chat and the report form offer them.
 function dmvChatTabNames_(spreadsheet) {
-  return spreadsheet
-    .getSheets()
-    .filter(function (sheet) {
-      return !dmvChatUndoCopy_(sheet);
-    })
-    .map(function (sheet) {
-      return sheet.getName();
-    });
-}
-
-// Before delete_sheet: requests that keep a hidden copy of the tab, named "DataMoov undo · <tab>",
-// in the same batch (put them before the deleteSheet), and the undo spec that brings it back.
-// The copy is deleted by the deleting user's first chat request or edit after its undo window
-// ends (dmvChatUndoSweep_, dmvChatUndoCleanup_). undo.sheet.broken names, as one phrase, what
-// the copy cannot bring back (dmvChatUndoRetabCells_); delete_sheet adds what other tabs lose.
-function dmvChatUndoSheetCopy_(session, sheet) {
-  var sheets = dmvChatSeeNewTabs_(session).getSheets();
-  var ids = sheets.map(function (item) {
-      return item.getSheetId();
-    }),
-    names = sheets.map(function (item) {
-      return item.getName();
-    });
-  var copyId = parseInt(dmvOutputDigest_(Utilities.getUuid()).slice(0, 7), 16);
-  while (ids.indexOf(copyId) >= 0) copyId++;
-  // Sheets refuses a tab name that differs from another only in case.
-  var taken = names.map(function (item) {
-    return item.toLowerCase();
-  });
-  var base = (DMV_SHEET_UNDO.tabPrefix + sheet.getName()).slice(0, 90),
-    name = base,
-    suffix = 2;
-  while (taken.indexOf(name.toLowerCase()) >= 0) name = base + ' (' + suffix++ + ')';
-  var retab = dmvChatUndoRetabCells_(session, sheet, copyId, name);
-  return {
-    requests: [
-      {
-        duplicateSheet: {
-          sourceSheetId: sheet.getSheetId(),
-          insertSheetIndex: sheets.length,
-          newSheetId: copyId,
-          newSheetName: name,
-        },
-      },
-      {
-        updateSheetProperties: {
-          properties: { sheetId: copyId, hidden: true },
-          fields: 'hidden',
-        },
-      },
-    ].concat(retab.requests),
-    undo: {
-      sheet: {
-        copyId: copyId,
-        copyName: name,
-        title: sheet.getName(),
-        index: names.indexOf(sheet.getName()),
-        hidden: !!sheet.isSheetHidden(),
-        broken: retab.broken,
-      },
-    },
-  };
-}
-
-// A copy made with duplicateSheet keeps formulas and dropdown ranges that name the tab itself
-// ('Notes'!A1) pointing at the tab, which the same batch deletes. In the copy they name the copy
-// instead, so the rename on undo carries them back. Returns { requests, broken }: updateCells
-// requests for the copy, and broken ('' or a phrase) when the tab is too large to check, holds
-// too many such cells, has a formula naming it that chat cannot read, or has more cells than
-// chat reads for dropdowns outside its data.
-function dmvChatUndoRetabCells_(session, sheet, copyId, copyName) {
-  var used = dmvChatActionUsed_(sheet),
-    from = sheet.getName(),
-    unread = false,
-    edits = { userEnteredValue: [], dataValidation: [] };
-  var unchecked = {
-    requests: [],
-    broken: 'any formulas and dropdowns on it that name the tab itself (too many to check)',
-  };
-  if (dmvChatGridCells_(used) > DMV_SHEET_UNDO.maxCells) return unchecked;
-  // Formulas lie within the data range, but dropdowns are often set below it, so the whole grid
-  // is read when it fits; otherwise dropdowns outside the data stay unchecked.
-  var grid = {
-    sheetId: used.sheetId,
-    startRowIndex: 0,
-    endRowIndex: sheet.getMaxRows(),
-    startColumnIndex: 0,
-    endColumnIndex: sheet.getMaxColumns(),
-  };
-  var partial = dmvChatGridCells_(grid) > DMV_SHEET_UNDO.maxCells;
-  if (partial) grid = used;
-  function retab(formula) {
-    var next = dmvChatUndoRetab_(formula, from, copyName);
-    if (next === null && formula.toLowerCase().indexOf(from.toLowerCase()) >= 0) unread = true;
-    return next === formula ? null : next;
-  }
-  dmvChatSheetCells_(session, [grid], 'userEnteredValue,dataValidation')[0].cells.forEach(
-    function (row, r) {
-      row.forEach(function (cell, c) {
-        var value = cell.userEnteredValue;
-        var formula = value && typeof value.formulaValue === 'string' && retab(value.formulaValue);
-        if (formula)
-          edits.userEnteredValue.push({ row: r, column: c, value: { formulaValue: formula } });
-        var rule = cell.dataValidation,
-          moved = false;
-        if (!rule || !rule.condition || !Array.isArray(rule.condition.values)) return;
-        var values = rule.condition.values.map(function (item) {
-          var text =
-            typeof item.userEnteredValue === 'string' &&
-            item.userEnteredValue.charAt(0) === '=' &&
-            retab(item.userEnteredValue);
-          if (!text) return item;
-          moved = true;
-          return Object.assign({}, item, { userEnteredValue: text });
-        });
-        if (moved)
-          edits.dataValidation.push({
-            row: r,
-            column: c,
-            value: Object.assign({}, rule, {
-              condition: Object.assign({}, rule.condition, { values: values }),
-            }),
-          });
-      });
-    }
-  );
-  // One request per run of cells down a column, for each field.
-  var requests = [];
-  Object.keys(edits).forEach(function (field) {
-    edits[field]
-      .sort(function (a, b) {
-        return a.column - b.column || a.row - b.row;
-      })
-      .forEach(function (edit) {
-        var last = requests[requests.length - 1],
-          cell = {};
-        cell[field] = edit.value;
-        var range = last && last.updateCells.fields === field && last.updateCells.range;
-        if (range && range.startColumnIndex === edit.column && range.endRowIndex === edit.row) {
-          range.endRowIndex++;
-          last.updateCells.rows.push({ values: [cell] });
-          return;
-        }
-        requests.push({
-          updateCells: {
-            range: {
-              sheetId: copyId,
-              startRowIndex: edit.row,
-              endRowIndex: edit.row + 1,
-              startColumnIndex: edit.column,
-              endColumnIndex: edit.column + 1,
-            },
-            rows: [{ values: [cell] }],
-            fields: field,
-          },
-        });
-      });
-  });
-  if (requests.length > DMV_SHEET_UNDO.retabRequests) return unchecked;
-  var broken = [];
-  if (unread) broken.push('formulas on it that name the tab itself and chat could not read');
-  if (partial)
-    broken.push(
-      'any dropdowns outside its data that name the tab itself (too many cells to check)'
-    );
-  return { requests: requests, broken: broken.join(', and ') };
-}
-
-// formula with each reference to the tab named from naming the tab to instead (Sheets matches
-// tab names without regard to case); text values stay as they are. null when chat cannot read
-// the formula (dmvChatFormulaTokens_).
-function dmvChatUndoRetab_(formula, from, to) {
-  var tokens;
-  try {
-    tokens = dmvChatFormulaTokens_(formula, function () {
-      throw new Error('unreadable');
-    });
-  } catch (ignored) {
-    return null;
-  }
-  var quoted = "'" + to.replace(/'/g, "''") + "'";
-  return tokens.reduceRight(function (text, token) {
-    if (token.type !== 'ref' || !token.sheet || token.sheet.toLowerCase() !== from.toLowerCase())
-      return text;
-    return text.slice(0, token.at) + quoted + text.slice(token.at + token.text.lastIndexOf('!'));
-  }, formula);
-}
-
-// deleteSheet requests for hidden undo copies whose window ended, while they are still hidden
-// under their undo name; a copy the user renamed or showed again, or that report or dashboard
-// output now uses, is theirs and is forgotten.
-function dmvChatUndoCleanup_(session) {
-  var tabs = dmvChatUndoTabs_(session),
-    requests = [],
-    owned = null;
-  Object.keys(tabs).forEach(function (id) {
-    if (tabs[id] > Date.now()) return;
-    var sheet = dmvChatSheetById_(session, Number(id));
-    owned = owned || dmvChatOwnedAreas_(session);
-    var used = owned.some(function (area) {
-      return area.sheetId === Number(id);
-    });
-    if (sheet && dmvChatUndoCopy_(sheet) && !used)
-      requests.push({ deleteSheet: { sheetId: Number(id) } });
-    else dmvChatUndoTabs_(session, Number(id), null);
-  });
-  return requests;
-}
-
-function dmvChatUndoCleaned_(session, requests) {
-  requests.forEach(function (request) {
-    if (request.deleteSheet) dmvChatUndoTabs_(session, request.deleteSheet.sheetId, null);
+  return spreadsheet.getSheets().map(function (sheet) {
+    return sheet.getName();
   });
 }
 
-// At the start of each chat request: deletes the hidden copies whose undo window ended, so a
-// deleted tab does not wait for the next analyst edit. Never fails the request.
-function dmvChatUndoSweep_(session) {
-  try {
-    var tabs = dmvChatUndoTabs_(session);
-    var due = Object.keys(tabs).some(function (id) {
-      return tabs[id] <= Date.now();
-    });
-    if (!due) return;
-    dmvWorkbookLocked_(function () {
-      var cleanup = dmvChatUndoCleanup_(session);
-      if (!cleanup.length) return;
-      Sheets.Spreadsheets.batchUpdate({ requests: cleanup }, session.spreadsheetId);
-      dmvChatUndoCleaned_(session, cleanup);
-    });
-  } catch (ignored) {
-    /* A later request or edit tries again. */
-  }
-}
-
-// Refuses an undo whose cells, data or named range are no longer where the edit left them: a
-// later chat edit or the user inserted, deleted or moved rows and columns on its tabs, data was
-// added to a copied tab outside what was copied or its charts, filters, protected ranges or
-// conditional formats changed, or the named range was changed since.
-function dmvChatUndoPlaced_(session, entries, entry) {
+// Refuses an undo whose cells or named range are no longer where the edit left them: rows or
+// columns of its tabs were inserted or deleted since, or the named range was changed since.
+function dmvChatUndoPlaced_(session, entry) {
   var dims = entry.dims || [];
-  var tabs = dims.map(function (item) {
-    return item.sheetId;
-  });
-  function tabName(sheetId) {
-    var tab = dmvChatSheetById_(session, sheetId);
-    return tab ? '"' + tab.getName() + '"' : 'its tab';
-  }
-  entries.slice(0, entries.indexOf(entry)).forEach(function (later) {
-    var moved = (later.moves || []).filter(function (sheetId) {
-      return tabs.indexOf(sheetId) >= 0;
-    })[0];
-    if (moved !== undefined)
-      throw new Error(
-        'A later chat edit (' +
-          later.text +
-          ') moved cells on ' +
-          tabName(moved) +
-          ', so the cells of this edit are no longer where they were. Undo the later edit first.'
-      );
-  });
-  var now = dmvChatUndoDims_(session, tabs);
+  var now = dmvChatUndoDims_(
+    session,
+    dims.map(function (item) {
+      return item.sheetId;
+    })
+  );
   dims.forEach(function (item) {
     var found = now.filter(function (current) {
       return current.sheetId === item.sheetId;
     })[0];
+    var tab = dmvChatSheetById_(session, item.sheetId);
     if (found && (found.rows !== item.rows || found.columns !== item.columns))
       throw new Error(
         'Rows or columns of ' +
-          tabName(item.sheetId) +
+          (tab ? '"' + tab.getName() + '"' : 'its tab') +
           ' were inserted or deleted since that edit, so its cells are no longer where they were and it cannot be undone here. Sheets version history can restore it.'
       );
   });
-  if (entry.extent) {
-    var extent = dmvChatUndoExtent_(session, entry.extent.sheetId);
-    if (extent && (extent.rows !== entry.extent.rows || extent.columns !== entry.extent.columns))
-      throw new Error(
-        'The data of ' +
-          tabName(entry.extent.sheetId) +
-          ' grew or shrank since that edit, and undoing it deletes the tab with those changes. Delete the tab by hand if that is intended.'
-      );
-    if (extent && extent.objects !== entry.extent.objects)
-      throw new Error(
-        'The charts, filters, protected ranges or conditional formats of ' +
-          tabName(entry.extent.sheetId) +
-          ' changed since that edit, and undoing it deletes the tab with them. Delete the tab by hand if that is intended.'
-      );
-  }
   if (entry.named) dmvChatActionNamedUnchanged_(session, entry.named);
 }
 
@@ -1020,6 +665,7 @@ function dmvChatUndoSheetEdit_(session, input) {
           range: entry.range,
           text: entry.text,
           minutesAgo: Math.floor((Date.now() - entry.at) / 60000),
+          undoable: entry.none ? false : undefined,
         };
       }),
       note:
@@ -1045,6 +691,13 @@ function dmvChatUndoSheetEdit_(session, input) {
               DMV_SHEET_UNDO.maxEntries +
               ' chat edits for 6 hours; Sheets version history keeps the rest.'
       );
+    if (entry.none)
+      throw new Error(
+        'Chat cannot undo "' +
+          entry.text +
+          '". ' +
+          (entry.hint || 'File > Version history can restore it.')
+      );
     var text = dmvChatCacheGet_(dmvChatUndoKey_(session.spreadsheetId) + ':' + entry.id);
     var data = text ? dmvUnpack_(text) : null;
     // Data kept without its verify fingerprints cannot be checked, so it is not applied.
@@ -1053,31 +706,12 @@ function dmvChatUndoSheetEdit_(session, input) {
         'That edit can no longer be undone here. Sheets version history can restore it.'
       );
     var requests = (data.reverse || []).slice();
-    var sheet = dmvChatSheetById_(session, entry.sheet ? entry.sheet.copyId : entry.sheetId);
+    var sheet = dmvChatSheetById_(session, entry.sheetId);
     if (!sheet)
       throw new Error(
         'The tab of that edit no longer exists, so it cannot be undone here. Sheets version history can restore it.'
       );
-    if (entry.sheet) {
-      if (dmvChatSeeNewTabs_(session).getSheetByName(entry.sheet.title))
-        throw new Error(
-          'A tab named "' +
-            entry.sheet.title +
-            '" exists again. Rename it first, then undo the deletion.'
-        );
-      requests.push({
-        updateSheetProperties: {
-          properties: {
-            sheetId: entry.sheet.copyId,
-            title: entry.sheet.title,
-            hidden: entry.sheet.hidden,
-            index: entry.sheet.index,
-          },
-          fields: 'title,hidden,index',
-        },
-      });
-    }
-    dmvChatUndoPlaced_(session, entries, entry);
+    dmvChatUndoPlaced_(session, entry);
     var current = dmvChatSheetCells_(
       session,
       data.verify.map(function (item) {
@@ -1102,21 +736,7 @@ function dmvChatUndoSheetEdit_(session, input) {
           sheet.getName() +
           ' changed since that edit, so it cannot be undone here. Undo later edits first, or use conditional_format list and delete.'
       );
-    if (data.restore) {
-      var named = data.restore.named ? dmvChatActionNamedRanges_(session) : [];
-      (data.restore.named || []).forEach(function (item) {
-        dmvChatActionNamedUnchanged_(session, item, named);
-      });
-      requests = requests.concat(dmvChatUndoRestore_(data.restore, rules));
-    }
-    // Reversing an insert or a delete moves everything from its span on, as the edit itself
-    // did, so output written there since is refused the same way.
-    var moved = (data.reverse || [])
-      .map(function (request) {
-        var dimension = request.insertDimension || request.deleteDimension;
-        return dimension && dimension.range ? dmvChatActionSpanGuard_(dimension.range) : null;
-      })
-      .filter(Boolean);
+    if (data.restore) requests = requests.concat(dmvChatUndoRestore_(data.restore, rules));
     // format is allowed over report and dashboard output, so its undo is too: verify showed the
     // cells, values included, are as the edit left them, so the restore writes the same values
     // back and changes only the formatting.
@@ -1132,8 +752,7 @@ function dmvChatUndoSheetEdit_(session, input) {
             ? []
             : data.verify.map(function (item) {
                 return item.grid;
-              }),
-          moved
+              })
         )
     );
     (data.cells || []).forEach(function (item) {
@@ -1147,16 +766,11 @@ function dmvChatUndoSheetEdit_(session, input) {
         },
       });
     });
-    requests = requests.concat(data.after || []);
-    var cleanup = dmvChatUndoCleanup_(session).filter(function (request) {
-      return !entry.sheet || request.deleteSheet.sheetId !== entry.sheet.copyId;
-    });
     if (!requests.length) throw new Error('That edit has nothing to undo.');
     var sheetId = sheet.getSheetId(),
-      sheetName = entry.sheet ? entry.sheet.title : sheet.getName();
+      sheetName = sheet.getName();
     dmvChatSheetDeadline_(session);
-    Sheets.Spreadsheets.batchUpdate({ requests: requests.concat(cleanup) }, session.spreadsheetId);
-    dmvChatUndoCleaned_(session, cleanup);
+    Sheets.Spreadsheets.batchUpdate({ requests: requests }, session.spreadsheetId);
     try {
       dmvChatUndoDrop_(
         session,
@@ -1165,15 +779,10 @@ function dmvChatUndoSheetEdit_(session, input) {
           return item.id !== entry.id;
         })
       );
-      if (entry.sheet) dmvChatUndoTabs_(session, entry.sheet.copyId, null);
     } catch (ignored) {
       /* The restored cells no longer match the entry, so it cannot be applied twice. */
     }
-    dmvChatSeeNewTabs_(session);
-    // Undoing duplicate_sheet deletes the tab, so there is nothing to link to.
-    var url = dmvChatSheetById_(session, sheetId)
-      ? dmvSheetUrl_(session.spreadsheet, sheetId, entry.range || 'A1')
-      : null;
+    var url = dmvSheetUrl_(session.spreadsheet, sheetId, entry.range || 'A1');
     session.events.push({
       kind: 'write',
       links: url ? [{ label: sheetName, url: url }] : [],
@@ -1183,20 +792,6 @@ function dmvChatUndoSheetEdit_(session, input) {
         ['Range', entry.range],
       ]),
     });
-    // What undo could not put back: references to a deleted tab, and the edit's own note.
-    var note = [
-      entry.sheet
-        ? 'The tab is back. Formulas elsewhere that pointed at it still show #REF! and need fixing by hand.' +
-          (entry.sheet.broken
-            ? ' These still point at the deleted tab and need fixing by hand too: ' +
-              entry.sheet.broken +
-              '.'
-            : '')
-        : '',
-      data.note || '',
-    ]
-      .filter(Boolean)
-      .join(' ');
     return {
       ok: true,
       undone: entry.id,
@@ -1204,7 +799,8 @@ function dmvChatUndoSheetEdit_(session, input) {
       sheetName: sheetName,
       range: entry.range || null,
       url: url,
-      note: note || undefined,
+      // What undo could not put back.
+      note: data.note || undefined,
     };
   });
 }
@@ -1286,7 +882,7 @@ function dmvChatConfirmKey_(session) {
 function dmvChatConfirmState_(session) {
   if (!session.confirm)
     session.confirm = {
-      turn: 't' + dmvOutputDigest_(Utilities.getUuid() + ':' + Date.now()).slice(0, 16),
+      turn: dmvChatNewId_('t', 16),
       conversation: '',
       approved: [],
       replaced: 0,
@@ -1414,7 +1010,7 @@ function dmvChatConfirmFind_(session, tool, input, scope) {
 // request. scope is dmvChatConfirmScope_ of the change the summary describes.
 function dmvChatConfirmIssue_(session, tool, input, summary, scope) {
   var state = dmvChatConfirmState_(session),
-    token = 'c' + dmvOutputDigest_(Utilities.getUuid() + ':' + Date.now()).slice(0, 32),
+    token = dmvChatNewId_('c', 32),
     cache = CacheService.getUserCache(),
     key = dmvChatConfirmKey_(session),
     offer = null;
@@ -1499,28 +1095,21 @@ function dmvChatConfirmSpend_(session, approval, replaced, covered) {
 // The analyst actions of dmv_chat_sheet_actions.js extend edit_sheet: dmvChatEditSheet_ runs one
 // through dmvChatSheetRunAction_ when it is not a built-in action, and dmvChatSheetTools_ adds
 // their names and properties to the schema without replacing built-in ones. The tools below
-// follow the built-in sheet tools, first name wins.
+// follow the built-in sheet tools, first name wins (dmvChatSheetTools_).
 function dmvChatSheetExtraTools_() {
-  var seen = Object.create(null);
-  return []
-    .concat(dmvChatSheetConditionTools_(), dmvChatSheetFormulaTools_())
-    .filter(function (tool) {
-      if (!tool || !tool.name || seen[tool.name]) return false;
-      seen[tool.name] = true;
-      return true;
-    });
+  return dmvChatSheetConditionTools_().concat(dmvChatSheetFormulaTools_());
 }
 
-// The progress label an extra tool declares, or '' when it has none.
+// The progress labels of the extra tools (dmvChatProgressStep_).
+var DMV_CHAT_SHEET_TOOL_LABELS = {
+  search_sheets: 'Searching the spreadsheet',
+  conditional_format: 'Updating conditional formatting',
+};
+
 function dmvChatSheetToolLabel_(name) {
-  try {
-    var tool = dmvChatSheetExtraTools_().filter(function (item) {
-      return item.name === name;
-    })[0];
-    return (tool && tool.label) || '';
-  } catch (ignored) {
-    return '';
-  }
+  return Object.prototype.hasOwnProperty.call(DMV_CHAT_SHEET_TOOL_LABELS, name)
+    ? DMV_CHAT_SHEET_TOOL_LABELS[name]
+    : '';
 }
 
 /* The pipeline for extra edit_sheet actions */
@@ -1595,18 +1184,9 @@ function dmvChatSheetRunAction_(session, input, spec) {
       approval = dmvChatConfirmFind_(session, 'edit_sheet', input, scope);
       if (!approval) return dmvChatConfirmIssue_(session, 'edit_sheet', input, summary, scope);
     }
-    var cleanup = dmvChatUndoCleanup_(session);
-    // A hidden copy is registered before it exists, so it is removed in time even when its undo
-    // entry cannot be saved; a copy the batch never made is simply forgotten.
-    if (prepared && prepared.sheet)
-      dmvChatUndoTabs_(
-        session,
-        prepared.sheet.copyId,
-        Date.now() + DMV_SHEET_UNDO.ttlSeconds * 1000
-      );
     dmvChatSheetDeadline_(session);
     var response = Sheets.Spreadsheets.batchUpdate(
-      { requests: plan.requests.concat(cleanup) },
+      { requests: plan.requests },
       session.spreadsheetId
     );
     if (tokenKey) {
@@ -1617,11 +1197,6 @@ function dmvChatSheetRunAction_(session, input, spec) {
       }
     }
     dmvChatConfirmSpend_(session, approval, replaced, covered);
-    try {
-      dmvChatUndoCleaned_(session, cleanup);
-    } catch (ignored) {
-      /* A copy left in the registry is cleaned up by a later edit. */
-    }
     var sheetName = plan.sheetName || (context.sheet ? context.sheet.getName() : input.sheetName);
     var range = plan.range || (context.area ? context.area.a1 : '');
     var undoId = dmvChatUndoCommit_(

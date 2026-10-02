@@ -5,10 +5,9 @@ import { chatSheetFixture, ORCHARD_COLUMNS } from './helpers/chat-sheet-fixture.
 
 // Regressions found in reviews of the analyst sheet tools. Each test reproduces a confirmed
 // finding: the protected-output guard, regular expressions in find_replace and search_sheets,
-// the typed yes and what it covers, undo of structural edits, named ranges, conditional formats
-// and tab copies after later changes, the hidden undo copy of a deleted tab, formula policy and
-// read-back details, text that Sheets would read as a formula, and the prompt and capability
-// text about what chat may change.
+// the typed yes and what it covers, undo of named ranges and conditional formats after later
+// changes, formula policy and read-back details, text that Sheets would read as a formula, and
+// the prompt and capability text about what chat may change.
 
 const BS = String.fromCharCode(92);
 // Most tests save a two-row EUR report; the first group of findings used a one-row report.
@@ -157,36 +156,6 @@ test('a typed answer approves a confirmation only when it is a plain yes', () =>
   }
 });
 
-test('undoing an insert or delete never moves report output written since', () => {
-  for (const [action, cell, start] of [
-    ['insert_rows', 'A20', 2],
-    ['delete_rows', 'A20', 2],
-    ['insert_columns', 'F40', 2],
-    ['delete_columns', 'F40', 2],
-  ]) {
-    const f = fixture(ONE_ROW);
-    const call = (session, extra) =>
-      f.tabAction(action, { sheetName: 'Output', start, count: 2, ...extra }, session);
-    const done = action.startsWith('delete') ? f.confirmed(call) : call(f.session, {});
-    assert.equal(done.ok, true, JSON.stringify(done));
-    f.report(cell);
-    const [row, column] = cell === 'A20' ? [20, 1] : [40, 6];
-    assert.equal(f.value(f.sheet, row, column), 'Date');
-    const before = f.state.batches.length;
-    assert.throws(() => f.undo(), /output of the saved report "Late"/, action);
-    assert.equal(f.state.batches.length, before, action + ': nothing was sent');
-    assert.equal(f.value(f.sheet, row, column), 'Date', action + ': the output stayed put');
-  }
-});
-
-test('undoing an insert with no output after it still works', () => {
-  const f = fixture(ONE_ROW);
-  f.report('A1');
-  const done = f.tabAction('insert_rows', { sheetName: 'Output', start: 10, count: 2 });
-  assert.equal(done.ok, true, JSON.stringify(done));
-  assert.equal(f.undo().ok, true);
-});
-
 test('nested or alternating repeated groups are refused before they run', () => {
   const f = fixture(ONE_ROW);
   f.setCell(f.sheet, 1, 1, 'aaaab');
@@ -225,52 +194,6 @@ test('search_sheets skips cells too long for a regular expression and says so', 
   assert.match(found.note, /longer than 5,000 characters/);
   // Plain text searches read every cell.
   assert.equal(plain(f.api.dmvChatSearchSheets_(f.session, { query: 'ab' })).total, 2);
-});
-
-test('a hidden undo copy is removed by the first chat request after its undo window', () => {
-  const f = fixture(ONE_ROW);
-  const salaries = f.book.insertSheet('Salaries');
-  f.setCell(salaries, 1, 1, 'secret 100000');
-  const deleted = f.confirmed((session, extra) =>
-    f.tabAction('delete_sheet', { sheetName: 'Salaries', ...extra }, session)
-  );
-  assert.equal(deleted.ok, true);
-  assert.match(deleted.note, /hidden copy "DataMoov undo · Salaries"/);
-  const copy = () => f.book.sheets.find((sheet) => sheet.name.startsWith('DataMoov undo'));
-  assert.ok(copy()?.hidden);
-  f.api.dmvSaveAiSettings({ provider: 'anthropic', apiKey: 'sk-ant-offline-review-0001' });
-  const answer = () => ({
-    body: { content: [{ type: 'text', text: 'Hello.' }], stop_reason: 'end_turn' },
-  });
-  // Within the window a new request keeps it, so undo still works.
-  f.state.responses.push(answer());
-  assert.equal(plain(f.api.dmvChat({ text: 'Hi', transcript: [] })).failed, false);
-  assert.ok(copy());
-  f.advance(7 * 3600 * 1000);
-  f.state.responses.push(answer());
-  assert.equal(plain(f.api.dmvChat({ text: 'Hi again', transcript: [] })).failed, false);
-  assert.equal(copy(), undefined);
-  assert.equal(
-    f.api.PropertiesService.getUserProperties().getProperty('dmv:v1:undo-tabs:' + f.book.id),
-    null
-  );
-});
-
-test('undoing duplicate_sheet links to no tab, since the copy is gone', () => {
-  const f = fixture(ONE_ROW);
-  const done = f.tabAction('duplicate_sheet', { sheetName: 'Output' });
-  assert.equal(done.ok, true);
-  const session = f.api.dmvChatSession_(f.book);
-  const undone = f.undo(undefined, session);
-  assert.equal(undone.ok, true);
-  assert.equal(
-    f.book.sheets.some((sheet) => sheet.name === done.sheetName),
-    false
-  );
-  assert.equal(undone.url, null);
-  const event = session.events.at(-1);
-  assert.equal(event.kind, 'write');
-  assert.deepEqual(plain(event.links), []);
 });
 
 test('array lookups inside ARRAYFORMULA are read back where they spill', () => {
@@ -350,7 +273,7 @@ test('custom conditional-format formulas refer only to their own tab and fill no
   assert.equal(add('={1,2}', 'C4:F5').ok, true);
 });
 
-test('a dashboard can be removed after chat deleted the last other tab into a hidden undo copy', () => {
+test('a dashboard can be removed when only a hidden tab would remain', () => {
   const f = fixture();
   const saved = plain(
     f.api.dmvSaveDashboard({
@@ -381,18 +304,13 @@ test('a dashboard can be removed after chat deleted the last other tab into a hi
     })
   );
   f.api.dmvRunDashboard(saved.id);
-  const first = f.book.sheets[0].name;
-  const done = f.confirmed((session, extra) =>
-    f.tabAction('delete_sheet', { sheetName: first, ...extra }, session)
-  );
-  assert.equal(done.ok, true);
-  assert.ok(f.book.sheets.some((sheet) => sheet.hidden && /^DataMoov undo · /.test(sheet.name)));
+  f.book.sheets[0].hidden = true;
   // Only hidden tabs would remain, so removal adds a visible one first, as when no tab remains.
   const removed = plain(f.api.dmvDeleteDashboard(saved.id));
   assert.equal(removed.ok, true);
   assert.equal(removed.deletedTabs, 3);
   assert.deepEqual(f.requests()[0], { addSheet: { properties: {} } });
-  const left = f.book.sheets.map((sheet) => [/^DataMoov undo · /.test(sheet.name), !!sheet.hidden]);
+  const left = f.book.sheets.map((sheet) => [sheet.name === 'Output', !!sheet.hidden]);
   assert.deepEqual(left.sort(), [
     [false, false],
     [true, true],
@@ -651,7 +569,14 @@ test('move_range moves everything only, since Sheets cuts the whole source', () 
     f.inspect('A1:A2')
   );
   assert.equal(copied.ok, true);
-  const moved = f.edit('move_range', { destination: 'F1', pasteType: 'all' }, f.inspect('A1:A2'));
+  const moved = f.confirmed((session, extra) =>
+    f.edit(
+      'move_range',
+      { destination: 'F1', pasteType: 'all', ...extra },
+      f.inspect('A1:A2', 'Output', session),
+      session
+    )
+  );
   assert.equal(moved.ok, true);
   assert.equal(f.value(f.sheet, 1, 6), 'a');
   const schema = plain(f.api.dmvChatTools_(f.session)).find((tool) => tool.name === 'edit_sheet');
@@ -687,43 +612,6 @@ test('formatting over report output can be undone, like the edit itself', () => 
     () => f.edit('set_values', { values: [['x', 'y']] }, f.inspect('A2:B2')),
     /output of the saved report "Daily"/
   );
-});
-
-test('undo puts back rows and columns deleted at the end of a tab', () => {
-  const f = fixture();
-  f.sheet.maxRows = 100;
-  f.sheet.maxColumns = 26;
-  f.setCell(f.sheet, 98, 1, 'row 98');
-  f.setCell(f.sheet, 100, 1, 'row 100');
-  f.setCell(f.sheet, 1, 26, 'column Z');
-  const rows = f.confirmed((session, extra) =>
-    f.tabAction('delete_rows', { sheetName: 'Output', start: 96, count: 5, ...extra }, session)
-  );
-  assert.equal(rows.ok, true);
-  assert.equal(f.sheet.maxRows, 95);
-  assert.equal(f.undo().ok, true);
-  assert.deepEqual(f.requests()[0].insertDimension.inheritFromBefore, true);
-  assert.equal(f.sheet.maxRows, 100);
-  assert.equal(f.value(f.sheet, 98, 1), 'row 98');
-  assert.equal(f.value(f.sheet, 100, 1), 'row 100');
-
-  const columns = f.confirmed((session, extra) =>
-    f.tabAction('delete_columns', { sheetName: 'Output', start: 26, count: 1, ...extra }, session)
-  );
-  assert.equal(columns.ok, true);
-  assert.equal(f.sheet.maxColumns, 25);
-  assert.equal(f.undo().ok, true);
-  assert.equal(f.sheet.maxColumns, 26);
-  assert.equal(f.value(f.sheet, 1, 26), 'column Z');
-
-  // In the middle of a tab the rows below are still the ones to inherit from.
-  f.setCell(f.sheet, 3, 1, 'row 3');
-  f.confirmed((session, extra) =>
-    f.tabAction('delete_rows', { sheetName: 'Output', start: 2, count: 2, ...extra }, session)
-  );
-  assert.equal(f.undo().ok, true);
-  assert.deepEqual(f.requests()[0].insertDimension.inheritFromBefore, false);
-  assert.equal(f.value(f.sheet, 3, 1), 'row 3');
 });
 
 test('the sandbox refuses an append that does not inherit from before, as Sheets does', () => {
@@ -873,26 +761,6 @@ test('undo of a named_range edit still works while the name is as the edit left 
   );
 });
 
-test('undo of duplicate_sheet refuses once data was added to the copy outside what was copied', () => {
-  const f = fixture();
-  f.column(f.sheet, 1, ['a', 'b']);
-  const done = f.tabAction('duplicate_sheet', { sheetName: 'Output' });
-  assert.equal(done.sheetName, 'Copy of Output');
-  const copy = f.tab('Copy of Output');
-  f.setCell(copy, 10, 1, 'my new work');
-  f.setCell(copy, 1, 5, 'another');
-  assert.throws(() => f.undo(), /The data of "Copy of Output" grew or shrank since that edit/);
-  assert.ok(f.tab('Copy of Output'), 'the copy and its new cells stay');
-  assert.equal(f.value(copy, 10, 1), 'my new work');
-  // Once the copy is back as copied, undo deletes it.
-  f.setCell(copy, 10, 1, '');
-  f.setCell(copy, 1, 5, '');
-  copy.cells.delete('10:1');
-  copy.cells.delete('1:5');
-  assert.equal(f.undo().ok, true);
-  assert.equal(f.tab('Copy of Output'), null);
-});
-
 test('undo refuses once rows were inserted above the edited cells', () => {
   const f = fixture();
   f.column(f.sheet, 1, ['Status', 'Done', 'Done', 'Open', 'Done']);
@@ -911,30 +779,6 @@ test('undo refuses once rows were inserted above the edited cells', () => {
     /Rows or columns of "Output" were inserted or deleted since that edit/
   );
   assert.deepEqual(f.values(f.sheet, 1, 6), before, 'no record was overwritten');
-});
-
-test('undo of an older edit waits for a later chat edit that moved cells on its tab', () => {
-  const f = fixture();
-  f.column(f.sheet, 1, ['Status', 'Done', 'Done', 'Open', 'Done']);
-  const edited = f.edit('set_values', { values: [['Done']] }, f.inspect('A4'));
-  const inserted = f.tabAction('insert_rows', { sheetName: 'Output', start: 1, count: 1 });
-  assert.equal(inserted.inserted, 1);
-  assert.throws(
-    () => f.undo({ action: 'undo', id: edited.undoId }),
-    /A later chat edit \(Inserted 1 row at|A later chat edit \(Inserted 1 row before/
-  );
-  // Undoing the insert first puts the cells back where the older edit was.
-  assert.equal(f.undo().ok, true);
-  assert.equal(f.undo({ action: 'undo', id: edited.undoId }).ok, true);
-  assert.deepEqual(f.values(f.sheet, 1, 5), ['Status', 'Done', 'Done', 'Open', 'Done']);
-  // A block moved on the same tab also holds an older undo back.
-  const cleared = f.edit('set_values', { values: [[''], ['']] }, f.inspect('C1:C2'));
-  f.column(f.sheet, 4, ['x', 'y']);
-  f.edit('move_range', { destination: 'C1' }, f.inspect('D1:D2'));
-  assert.throws(
-    () => f.undo({ action: 'undo', id: cleared.undoId }),
-    /moved cells on "Output", so the cells of this edit are no longer where they were/
-  );
 });
 
 test('a yes covers only the change it was asked about, not the same call over changed cells', () => {
@@ -1031,37 +875,6 @@ test('find_replace matches date and number cells by what they show', () => {
   assert.equal(serial.ok, true, JSON.stringify(serial));
 });
 
-test('delete_sheet deletes a tab too large to copy, asking first and saying it cannot be undone', () => {
-  const f = fixture();
-  const big = f.book.insertSheet('Big');
-  big.maxRows = 200000;
-  big.maxColumns = 30;
-  f.setCell(big, 1, 1, 'x');
-  const asked = f.tabAction('delete_sheet', { sheetName: 'Big' });
-  assert.equal(asked.needsConfirmation, true);
-  assert.match(asked.summary, /too large to keep a copy for undo/);
-  const done = f.tabAction(
-    'delete_sheet',
-    { sheetName: 'Big', confirmToken: asked.confirmToken },
-    f.answer('Yes', asked.confirmToken)
-  );
-  assert.equal(done.ok, true, JSON.stringify(done));
-  assert.equal(done.undoId, null);
-  assert.equal(done.note, undefined);
-  assert.deepEqual(
-    f.requests().map((request) => Object.keys(request)[0]),
-    ['deleteSheet']
-  );
-  assert.equal(f.tab('Big'), null);
-  // A tab that fits keeps its hidden copy, as before.
-  f.book.insertSheet('Small');
-  const small = f.confirmed((session, extra) =>
-    f.tabAction('delete_sheet', { sheetName: 'Small', ...extra }, session)
-  );
-  assert.match(small.undoId, /^u[a-f0-9]{12}$/);
-  assert.match(small.note, /hidden copy "DataMoov undo · Small"/);
-});
-
 test('delete_rows and delete_columns refuse to delete every row or column that is not frozen', () => {
   const f = fixture();
   const data = f.book.insertSheet('Data');
@@ -1082,22 +895,6 @@ test('delete_rows and delete_columns refuse to delete every row or column that i
   // One row fewer leaves a row that is not frozen, so it asks as usual.
   const asked = f.tabAction('delete_rows', { sheetName: 'Data', start: 2, count: 499 });
   assert.equal(asked.needsConfirmation, true);
-});
-
-test('the hidden undo copy of a deleted tab gets a name that differs in more than case', () => {
-  const f = fixture();
-  f.book.insertSheet('Leads');
-  f.confirmed((session, extra) =>
-    f.tabAction('delete_sheet', { sheetName: 'Leads', ...extra }, session)
-  );
-  assert.ok(f.tab('DataMoov undo · Leads'));
-  f.book.insertSheet('LEADS');
-  const done = f.confirmed((session, extra) =>
-    f.tabAction('delete_sheet', { sheetName: 'LEADS', ...extra }, session)
-  );
-  assert.equal(done.ok, true);
-  const copy = f.state.batches.at(-1).body.requests[0].duplicateSheet;
-  assert.equal(copy.newSheetName, 'DataMoov undo · LEADS (2)');
 });
 
 test('a LET name called inside its own value is a global function and is refused', () => {
@@ -1128,41 +925,6 @@ test('a LET name called inside its own value is a global function and is refused
   ]);
   assert.deepEqual(f.check('=LET(SUM, 1, SUM + 1)').functions, ['LET']);
   assert.deepEqual(f.check('=LET(total, SUM(A1:A3), total)').functions, ['LET', 'SUM']);
-});
-
-test('group and ungroup undo refuse once rows moved on the tab', () => {
-  const f = fixture();
-  f.tabAction('group_rows', { sheetName: f.sheet.name, start: 5, count: 3 });
-  const ungrouped = f.tabAction('ungroup_rows', { sheetName: f.sheet.name, start: 5, count: 3 });
-  assert.equal(ungrouped.ok, true);
-  assert.ok(ungrouped.undoId);
-  f.tabAction('insert_rows', { sheetName: f.sheet.name, start: 1, count: 2 });
-  assert.throws(
-    () => f.undo({ action: 'undo', id: ungrouped.undoId }),
-    /A later chat edit .* moved cells on "Output"/
-  );
-  assert.deepEqual(f.groups(f.sheet), []);
-
-  const g = fixture();
-  const grouped = g.tabAction('group_rows', { sheetName: g.sheet.name, start: 5, count: 3 });
-  g.byHand({
-    deleteDimension: {
-      range: { sheetId: g.sheet.id, dimension: 'ROWS', startIndex: 0, endIndex: 2 },
-    },
-  });
-  const before = g.groups(g.sheet);
-  assert.throws(
-    () => g.undo({ action: 'undo', id: grouped.undoId }),
-    /Rows or columns of "Output" were inserted or deleted since that edit/
-  );
-  assert.deepEqual(g.groups(g.sheet), before);
-
-  // Nothing moved: undo still removes the group.
-  const h = fixture();
-  h.tabAction('group_columns', { sheetName: h.sheet.name, start: 2, count: 2 });
-  assert.equal(h.groups(h.sheet, 'COLUMNS').length, 1);
-  assert.equal(h.undo().ok, true);
-  assert.deepEqual(h.groups(h.sheet, 'COLUMNS'), []);
 });
 
 test('highlight_duplicates counts error cells as no match instead of failing every row', () => {
@@ -1448,7 +1210,7 @@ test('a LET or LAMBDA name is never called, so it cannot reach a function of tha
   assert.deepEqual(f.check('=LET(SUM, 1, SUM + 1)').functions, ['LET']);
 });
 
-/* Undo storage and hidden undo copies */
+/* Undo storage */
 
 const UNDO_LIST = /^dmv:sheet-undo:[0-9a-f]{32}$/;
 const undoList = (f) => [...f.state.cache.data].find(([key]) => UNDO_LIST.test(key))?.[1] || '[]';
@@ -1524,401 +1286,7 @@ test('an undo list near the cache limit drops its oldest entries, never the newe
   assert.equal(f.undo().undone, done.undoId);
 });
 
-test('a hidden undo copy is no tab to chat or the report form, and the sweep keeps one report output uses', () => {
-  const f = fixture(ONE_ROW);
-  f.setCell(f.book.insertSheet('Notes'), 1, 1, 'my notes');
-  f.confirmed((session, extra) =>
-    f.tabAction('delete_sheet', { sheetName: 'Notes', ...extra }, session)
-  );
-  const name = 'DataMoov undo · Notes';
-  assert.ok(f.tab(name).hidden);
-  // A later request sees every tab, hidden ones included, as Apps Script does. The copy is known
-  // by its name and hidden state, so another user's chat, without this user's registry of
-  // copies, leaves it out too.
-  const book = f.reopen(f.book);
-  const user = f.api.PropertiesService.getUserProperties(),
-    registry = 'dmv:v1:undo-tabs:' + f.book.id,
-    copies = user.getProperty(registry);
-  user.deleteProperty(registry);
-  assert.deepEqual(plain(f.api.dmvChatSession_(book).sheetNames), ['Output']);
-  user.setProperty(registry, copies);
-  const later = f.api.dmvChatSession_(book);
-  assert.deepEqual(plain(later.sheetNames), ['Output']);
-  assert.deepEqual(
-    plain(f.api.dmvChatListSheets_(later, {})).sheets.map((sheet) => sheet.sheetName),
-    ['Output']
-  );
-  assert.match(f.api.dmvChatSystemPrompt_(later), /\nTabs: Output\.\n/);
-  f.setActive(book);
-  assert.deepEqual(plain(f.api.dmvBootstrap().sheetNames), ['Output']);
-  // Chat neither reads, changes nor shows it.
-  const refused = /"DataMoov undo · Notes" is the hidden undo copy of a deleted tab/;
-  assert.throws(() => f.inspect('A1', name, later), refused);
-  assert.throws(() => f.api.dmvChatReadSheet_(later, { sheetName: name }), refused);
-  assert.throws(() => f.tabAction('show_sheet', { sheetName: name }, later), refused);
-  assert.throws(
-    () =>
-      f.api.dmvChatSheetFormulaCheck_(later, "='DataMoov undo · Notes'!A1", {
-        sheet: book.getSheetByName('Output'),
-      }),
-    refused
-  );
-  // Report output written there by hand is not deleted with the copy: the sweep forgets it.
-  const { run } = f.saveReport({ name: 'Into copy', sheetName: name, startCell: 'D1' });
-  assert.equal(run.ok, true);
-  f.api.dmvSaveAiSettings({ provider: 'anthropic', apiKey: 'sk-ant-offline-review-0001' });
-  f.advance(7 * 3600 * 1000);
-  f.state.responses.push({
-    body: { content: [{ type: 'text', text: 'Hello.' }], stop_reason: 'end_turn' },
-  });
-  assert.equal(plain(f.api.dmvChat({ text: 'Hi', transcript: [] })).failed, false);
-  assert.equal(f.value(f.tab(name), 1, 1), 'my notes');
-  assert.equal(
-    f.api.PropertiesService.getUserProperties().getProperty('dmv:v1:undo-tabs:' + f.book.id),
-    null
-  );
-});
-
-test('undoing delete_sheet keeps the formulas and dropdowns that name their own tab', () => {
-  const f = fixture(ONE_ROW);
-  const notes = f.book.insertSheet('Notes');
-  f.setCell(notes, 1, 1, 5);
-  f.setCell(notes, 1, 2, 10, '=A1*2');
-  f.setCell(notes, 1, 3, 10, '=Notes!A1*2');
-  f.setCell(notes, 2, 3, 10, '=Notes!A2*2');
-  f.setCell(notes, 1, 4, 5, "=SUM('Notes'!A1:A1)");
-  // Text that only looks like a reference stays as it is.
-  f.setCell(notes, 1, 5, 'Notes!A1', '="Notes!A1"');
-  f.setMeta(notes, 2, 1, {
-    dataValidation: {
-      condition: { type: 'ONE_OF_RANGE', values: [{ userEnteredValue: "='Notes'!A1:A1" }] },
-      showCustomUi: true,
-    },
-  });
-  const { asked } = f.confirm((session, extra) =>
-    f.tabAction('delete_sheet', { sheetName: 'Notes', ...extra }, session)
-  );
-  assert.doesNotMatch(asked.summary, /stay broken/);
-  // The copy names itself, so the rename on undo carries the references back.
-  const copy = f.tab('DataMoov undo · Notes');
-  assert.equal(f.formula(copy, 1, 3), "='DataMoov undo · Notes'!A1*2");
-  const undone = f.undo();
-  assert.equal(undone.ok, true);
-  assert.doesNotMatch(undone.note, /stay broken|still point/);
-  const back = f.tab('Notes');
-  assert.deepEqual(
-    [
-      [1, 2],
-      [1, 3],
-      [2, 3],
-      [1, 4],
-      [1, 5],
-    ].map(([row, column]) => f.formula(back, row, column)),
-    ['=A1*2', '=Notes!A1*2', '=Notes!A2*2', '=SUM(Notes!A1:A1)', '="Notes!A1"']
-  );
-  assert.equal(
-    f.meta(back, 2, 1).dataValidation.condition.values[0].userEnteredValue,
-    '=Notes!A1:A1'
-  );
-});
-
-test('undoing delete_sheet keeps dropdowns below the data that name their own tab', () => {
-  const dropdown = {
-    dataValidation: {
-      condition: { type: 'ONE_OF_RANGE', values: [{ userEnteredValue: "='Notes'!A1:A2" }] },
-      showCustomUi: true,
-    },
-  };
-  // A dropdown column set up below the data, which the tab's data range does not include.
-  const f = fixture(ONE_ROW);
-  const notes = f.book.insertSheet('Notes');
-  f.column(notes, 1, ['a', 'b']);
-  for (let row = 3; row <= 10; row++) f.setMeta(notes, row, 2, dropdown);
-  const { asked } = f.confirm((session, extra) =>
-    f.tabAction('delete_sheet', { sheetName: 'Notes', ...extra }, session)
-  );
-  assert.doesNotMatch(asked.summary, /dropdowns|stay broken/);
-  const undone = f.undo();
-  assert.equal(undone.ok, true, JSON.stringify(undone));
-  const back = f.tab('Notes');
-  for (const row of [3, 5, 10])
-    assert.equal(
-      f.meta(back, row, 2).dataValidation.condition.values[0].userEnteredValue,
-      '=Notes!A1:A2'
-    );
-  // A tab larger than the cells chat checks says which dropdowns it could not check.
-  const g = fixture(ONE_ROW);
-  const big = g.book.insertSheet('Notes');
-  big.maxRows = 3000;
-  g.column(big, 1, ['a', 'b']);
-  g.setMeta(big, 5, 2, dropdown);
-  const large = g.tabAction('delete_sheet', { sheetName: 'Notes' });
-  assert.equal(large.needsConfirmation, true, JSON.stringify(large));
-  assert.match(large.summary, /dropdowns outside its data that name the tab itself/);
-});
-
-test('delete_sheet names the pivots, charts and named ranges that use the tab, and undo says they stay broken', () => {
-  const f = fixture(ONE_ROW);
-  const raw = f.book.insertSheet('Raw');
-  const pivots = f.book.insertSheet('Pivots');
-  f.column(raw, 1, ['Month', 'Jan', 'Feb']);
-  f.column(raw, 2, ['Sales', 10, 20]);
-  const grid = (columns) => ({
-    sheetId: raw.id,
-    startRowIndex: 0,
-    endRowIndex: 3,
-    startColumnIndex: columns[0],
-    endColumnIndex: columns[1],
-  });
-  f.setMeta(pivots, 1, 1, {
-    pivotTable: {
-      source: grid([0, 2]),
-      rows: [{ sourceColumnOffset: 0, showTotals: true, sortOrder: 'ASCENDING' }],
-      values: [{ summarizeFunction: 'SUM', sourceColumnOffset: 1 }],
-    },
-  });
-  f.byHand(
-    { addNamedRange: { namedRange: { name: 'Targets', range: grid([1, 2]) } } },
-    {
-      addChart: {
-        chart: {
-          spec: {
-            title: 'Sales',
-            basicChart: {
-              chartType: 'COLUMN',
-              domains: [{ domain: { sourceRange: { sources: [grid([0, 1])] } } }],
-              series: [{ series: { sourceRange: { sources: [grid([1, 2])] } } }],
-            },
-          },
-          position: { overlayPosition: { anchorCell: { sheetId: f.sheet.id, rowIndex: 4 } } },
-        },
-      },
-    }
-  );
-  const { asked } = f.confirm((session, extra) =>
-    f.tabAction('delete_sheet', { sheetName: 'Raw', ...extra }, session)
-  );
-  const broken =
-    /the pivot table at Pivots!A1, the chart "Sales" on Output and the named range Targets/;
-  assert.match(asked.summary, broken);
-  assert.match(asked.summary, /Undo brings the tab back, but these stay broken/);
-  const undone = f.undo();
-  assert.equal(undone.ok, true);
-  assert.match(undone.note, broken);
-  assert.match(undone.note, /still point at the deleted tab/);
-});
-
-test('delete_sheet looks for pivots within the search cell cap, and says which tabs it could not check', () => {
-  const f = fixture(ONE_ROW);
-  const raw = f.book.insertSheet('Raw');
-  const pivots = f.book.insertSheet('Pivots');
-  const big = f.book.insertSheet('Big');
-  f.column(raw, 1, ['Month', 'Jan', 'Feb']);
-  f.column(raw, 2, ['Sales', 10, 20]);
-  f.setMeta(pivots, 3, 3, {
-    pivotTable: {
-      source: {
-        sheetId: raw.id,
-        startRowIndex: 0,
-        endRowIndex: 3,
-        startColumnIndex: 0,
-        endColumnIndex: 2,
-      },
-      rows: [{ sourceColumnOffset: 0, showTotals: true, sortOrder: 'ASCENDING' }],
-      values: [{ summarizeFunction: 'SUM', sourceColumnOffset: 1 }],
-    },
-  });
-  // Big's data spans more than the 200,000 cells one search reads.
-  big.maxRows = 1000;
-  big.maxColumns = 250;
-  f.setCell(big, 1000, 250, 'last');
-  const reads = [];
-  const get = f.api.Sheets.Spreadsheets.get;
-  f.api.Sheets.Spreadsheets.get = (id, options) => {
-    reads.push(options || {});
-    return get(id, options);
-  };
-  const asked = f.tabAction('delete_sheet', { sheetName: 'Raw' });
-  f.api.Sheets.Spreadsheets.get = get;
-  assert.equal(asked.needsConfirmation, true, JSON.stringify(asked));
-  assert.match(
-    asked.summary,
-    /these stay broken: the pivot table at Pivots!C3, and any pivot tables on Big built on it, which chat could not check \(too many cells\)\./
-  );
-  // Grid data is read for explicit ranges only, never for the whole spreadsheet.
-  for (const options of reads)
-    if (/rowData|[(,.]data/.test(options.fields || '') || options.includeGridData)
-      assert.ok([].concat(options.ranges ?? []).length, JSON.stringify(options));
-});
-
-test('undoing duplicate_sheet refuses once charts or conditional formats were added to the copy', () => {
-  const f = fixture(ONE_ROW);
-  f.column(f.sheet, 1, ['Month', 'Jan', 'Feb']);
-  f.column(f.sheet, 2, ['Sales', 10, 20]);
-  f.tabAction('duplicate_sheet', { sheetName: 'Output' });
-  const copy = f.tab('Copy of Output');
-  const grid = {
-    sheetId: copy.id,
-    startRowIndex: 1,
-    endRowIndex: 3,
-    startColumnIndex: 1,
-    endColumnIndex: 2,
-  };
-  f.byHand({
-    addChart: {
-      chart: {
-        chartId: 77,
-        spec: {
-          basicChart: {
-            chartType: 'COLUMN',
-            series: [{ series: { sourceRange: { sources: [grid] } } }],
-          },
-        },
-        position: {
-          overlayPosition: { anchorCell: { sheetId: copy.id, rowIndex: 4, columnIndex: 4 } },
-        },
-      },
-    },
-  });
-  const refused =
-    /charts, filters, protected ranges or conditional formats of "Copy of Output" changed since that edit/;
-  assert.throws(() => f.undo(), refused);
-  f.byHand({ deleteEmbeddedObject: { objectId: 77 } });
-  f.byHand({
-    addConditionalFormatRule: {
-      index: 0,
-      rule: {
-        ranges: [grid],
-        booleanRule: {
-          condition: { type: 'NUMBER_GREATER', values: [{ userEnteredValue: '15' }] },
-          format: { backgroundColor: { red: 1 } },
-        },
-      },
-    },
-  });
-  assert.throws(() => f.undo(), refused);
-  assert.ok(f.tab('Copy of Output'));
-  f.byHand({ deleteConditionalFormatRule: { sheetId: copy.id, index: 0 } });
-  assert.equal(f.undo().ok, true);
-  assert.equal(f.tab('Copy of Output'), null);
-});
-
-// Output!B2:B100 holds amounts that a total on Summary, a conditional format and a named range
-// cover; a second rule and name sit wholly inside rows 3-4 and columns C or B.
-function referenced(f) {
-  const summary = f.book.insertSheet('Summary');
-  f.sheet.maxRows = 100;
-  for (let row = 2; row <= 100; row++) f.setCell(f.sheet, row, 2, row);
-  f.setCell(summary, 1, 1, 0, '=SUM(Output!B2:B100)');
-  const grid = (top, bottom, left, right) => ({
-    sheetId: f.sheet.id,
-    startRowIndex: top,
-    endRowIndex: bottom,
-    startColumnIndex: left,
-    endColumnIndex: right,
-  });
-  const rule = (range) => ({
-    ranges: [range],
-    booleanRule: { condition: { type: 'NOT_BLANK' }, format: { textFormat: { bold: true } } },
-  });
-  f.byHand(
-    { addConditionalFormatRule: { index: 0, rule: rule(grid(1, 100, 0, 1)) } },
-    { addConditionalFormatRule: { index: 1, rule: rule(grid(2, 4, 2, 3)) } },
-    {
-      addNamedRange: {
-        namedRange: { namedRangeId: 'n1', name: 'Amounts', range: grid(1, 100, 1, 2) },
-      },
-    },
-    { addNamedRange: { namedRange: { namedRangeId: 'n2', name: 'Pair', range: grid(2, 4, 1, 2) } } }
-  );
-  return summary;
-}
-
-// The rules of Output and the named ranges as the Sheets API reports them, without zero indexes.
-function reported(f) {
-  const read = plain(
-    f.api.Sheets.Spreadsheets.get(f.book.id, {
-      fields: 'namedRanges,sheets(properties(sheetId),conditionalFormats)',
-    })
-  );
-  return {
-    rules: read.sheets.find((entry) => entry.properties.sheetId === f.sheet.id).conditionalFormats,
-    named: (read.namedRanges || []).sort((a, b) => a.name.localeCompare(b.name)),
-  };
-}
-
-for (const [where, start] of [
-  ['first', 2],
-  ['last', 97],
-]) {
-  test(`undoing delete_rows of the ${where} rows of a range puts its conditional formats and named ranges back, and says formulas are not repaired`, () => {
-    const f = fixture(ONE_ROW);
-    const summary = referenced(f);
-    const before = reported(f);
-    const { asked } = f.confirm((session, extra) =>
-      f.tabAction('delete_rows', { sheetName: 'Output', start, count: 4, ...extra }, session)
-    );
-    assert.match(asked.summary, /Formulas elsewhere that point at them will show #REF!/);
-    assert.match(asked.summary, /undoing the delete does not repair those formulas/);
-    assert.equal(f.formula(summary, 1, 1), '=SUM(Output!B2:B96)');
-    const undone = f.undo();
-    assert.equal(undone.ok, true);
-    assert.equal(f.value(f.sheet, start, 2), start);
-    assert.deepEqual(reported(f), before);
-    // Formulas elsewhere stay as the delete left them, and the result says so.
-    assert.match(undone.note, /The rows are back/);
-    assert.match(undone.note, /still show #REF!/);
-    assert.match(undone.note, /started or ended in them still leave them out/);
-  });
-}
-
-test('undoing delete_columns puts back the conditional formats and named ranges that ended in them', () => {
-  const f = fixture(ONE_ROW);
-  referenced(f);
-  const before = reported(f);
-  f.confirmed((session, extra) =>
-    f.tabAction('delete_columns', { sheetName: 'Output', start: 2, count: 2, ...extra }, session)
-  );
-  assert.equal(f.named().length, 0, 'both names lay wholly in the deleted columns');
-  const undone = f.undo();
-  assert.equal(undone.ok, true);
-  assert.deepEqual(reported(f), before);
-  assert.match(undone.note, /The columns are back/);
-});
-
-test('undoing delete_rows refuses once a named range it puts back changed since', () => {
-  const f = fixture(ONE_ROW);
-  referenced(f);
-  f.confirmed((session, extra) =>
-    f.tabAction('delete_rows', { sheetName: 'Output', start: 2, count: 4, ...extra }, session)
-  );
-  f.byHand({
-    updateNamedRange: {
-      namedRange: {
-        namedRangeId: 'n1',
-        range: { sheetId: f.sheet.id, startRowIndex: 0, endRowIndex: 5 },
-      },
-      fields: 'range',
-    },
-  });
-  assert.throws(() => f.undo(), /The named range "Amounts" changed since that edit/);
-});
-
-test('undoing delete_rows says formulas that pointed at a deleted cell still show #REF!', () => {
-  const f = fixture(ONE_ROW);
-  f.setCell(f.sheet, 11, 2, 42);
-  f.setCell(f.sheet, 2, 4, 84, '=B11*2');
-  f.confirmed((session, extra) =>
-    f.tabAction('delete_rows', { sheetName: 'Output', start: 11, count: 1, ...extra }, session)
-  );
-  assert.equal(f.formula(f.sheet, 2, 4), '=#REF!*2');
-  const undone = f.undo();
-  assert.equal(undone.ok, true);
-  assert.equal(f.value(f.sheet, 11, 2), 42);
-  assert.match(undone.note, /Formulas elsewhere that pointed at cells in them still show #REF!/);
-});
-
-test('deleting rows or columns that hold a pivot anchor names it, and undo puts the pivot back', () => {
+test('deleting rows or columns that hold a pivot anchor names it', () => {
   for (const [action, input] of [
     ['delete_rows', { start: 1, count: 3 }],
     ['delete_columns', { start: 8, count: 1 }],
@@ -1953,8 +1321,6 @@ test('deleting rows or columns that hold a pivot anchor names it, and undo puts 
     );
     assert.match(asked.summary, /including the pivot table at H1/, action);
     assert.equal(anchor(), undefined, action);
-    assert.equal(f.undo().ok, true, action);
-    assert.deepEqual(anchor(), before, action);
   }
 });
 
@@ -1981,7 +1347,7 @@ test('deleting rows that hold two pivot anchors names both, joined like the othe
   assert.match(asked.summary, /, including the pivot tables at H1 and K1\?/);
 });
 
-test('move_range over cells that formulas refer to asks first, and undo says those formulas stay #REF!', () => {
+test('move_range over cells that formulas refer to names them in its question', () => {
   const f = fixture(ONE_ROW);
   const report = f.book.insertSheet('Report');
   f.column(f.sheet, 1, ['a', 'c'], 5);
@@ -2001,30 +1367,32 @@ test('move_range over cells that formulas refer to asks first, and undo says tho
     asked.summary,
     /Formulas at Report!B2 and Report!B3 refer to cells in Output!D5:E6 that this move pastes over/
   );
-  assert.match(asked.summary, /undo does not repair them/);
   assert.equal(done.ok, true);
   assert.equal(f.formula(report, 2, 2), '=#REF!');
-  const undone = f.undo();
-  assert.equal(undone.ok, true);
-  assert.equal(f.value(f.sheet, 5, 4), 100);
-  assert.equal(f.value(f.sheet, 5, 1), 'a');
-  assert.match(undone.note, /still show #REF!/);
 });
 
-test('move_range asks when it cannot check every formula, and not when nothing refers to the destination', () => {
+test('move_range says when it cannot check every formula, and nothing when nothing refers to the destination', () => {
   const f = fixture(ONE_ROW);
   const report = f.book.insertSheet('Report');
   f.column(f.sheet, 1, ['a', 'c'], 5);
-  // References to the source follow the block, so they are no reason to ask.
+  // References to the source follow the block, so the question names no formulas.
   f.setCell(report, 2, 2, 0, '=SUM(Output!A5:B6)+Output!H9');
-  const moved = f.edit('move_range', { destination: 'D5' }, f.inspect('A5:B6'));
-  assert.equal(moved.ok, true);
+  const move = (session, extra) =>
+    f.edit(
+      'move_range',
+      { destination: 'D5', ...extra },
+      f.inspect('A5:B6', 'Output', session),
+      session
+    );
+  const { asked, done } = f.confirm(move);
+  assert.doesNotMatch(asked.summary, /Formulas at|could not check/);
+  assert.equal(done.ok, true);
   assert.equal(f.formula(report, 2, 2), '=SUM(Output!D5:E6)+Output!H9');
-  assert.equal(f.undo().note, undefined);
+  f.column(f.sheet, 1, ['a', 'c'], 5);
   f.api.DMV_SHEET_SEARCH.maxCells = 5;
-  const asked = f.edit('move_range', { destination: 'D5' }, f.inspect('A5:B6'));
-  assert.equal(asked.needsConfirmation, true);
-  assert.match(asked.summary, /Chat could not check every formula of this spreadsheet/);
+  const unchecked = f.edit('move_range', { destination: 'G5' }, f.inspect('A5:B6'));
+  assert.equal(unchecked.needsConfirmation, true);
+  assert.match(unchecked.summary, /Chat could not check every formula of this spreadsheet/);
 });
 
 test('undoing copy_range removes the conditional formats and merges the copy brought in', () => {
@@ -2335,4 +1703,34 @@ test('rename_sheet changes only the capitals of a tab name, and refuses a name a
     /^Error: A tab with that name already exists\.$/
   );
   assert.equal(f.state.batches.length, before);
+});
+
+test('a yes to delete_rows, delete_columns or move_range does not cover cells changed since chat asked', () => {
+  const f = fixture();
+  f.column(f.sheet, 1, ['h', 'a', 'b', 'c']);
+  const rows = (session, extra) =>
+    f.tabAction('delete_rows', { sheetName: 'Output', start: 2, count: 2, ...extra }, session);
+  const columns = (session, extra) =>
+    f.tabAction('delete_columns', { sheetName: 'Output', start: 1, ...extra }, session);
+  const move = (session, extra) =>
+    f.edit(
+      'move_range',
+      { destination: 'E1', ...extra },
+      f.inspect('A1:A2', 'Output', session),
+      session
+    );
+  for (const [call, typed] of [
+    [rows, [2, 2]],
+    [columns, [3, 1]],
+    [move, [1, 5]],
+  ]) {
+    const before = f.state.batches.length;
+    const asked = call(f.session, {});
+    assert.equal(asked.needsConfirmation, true, JSON.stringify(asked));
+    // The user types into the cells it would change, then answers yes.
+    f.setCell(f.sheet, typed[0], typed[1], 'typed');
+    const again = call(f.answer('Yes'), { confirmToken: asked.confirmToken });
+    assert.equal(again.needsConfirmation, true, JSON.stringify(again));
+    assert.equal(f.state.batches.length, before, 'nothing changed');
+  }
 });

@@ -391,12 +391,14 @@ function dmvChatCreatePivot_(session, input) {
       session.sheetNames.push(target);
     dmvChatSeeNewTabs_(session);
     var url = dmvSheetUrl_(session.spreadsheet, sheetId, 'A1');
-    session.events.push({
-      kind: 'write',
-      links: [{ label: target, url: url }],
-      text:
-        'Created a native pivot table on ' + target + ' from ' + source.getName() + '!' + area.a1,
-    });
+    var text =
+      'Created a native pivot table on ' + target + ' from ' + source.getName() + '!' + area.a1;
+    session.events.push({ kind: 'write', links: [{ label: target, url: url }], text: text });
+    dmvChatUndoNone_(
+      session,
+      { action: 'create_pivot', sheetId: sheetId, sheetName: target, range: 'A1', text: text },
+      dmvChatUndoNewTab_(target)
+    );
     var result = {
       ok: true,
       sheetName: target,
@@ -918,8 +920,8 @@ function dmvChatPivotPlaced_(session, layout, target, cell) {
   };
 }
 
-// A new tab, sized like the original options' with room for subtotals. A new tab needs no undo
-// entry: the user can delete it, as with the original options.
+// A new tab, sized like the original options' with room for subtotals. Undo answers that the user
+// can delete it, as with the original options.
 function dmvChatPivotNewTab_(layout, tabs) {
   var area = layout.area;
   var gridRows = Math.max(
@@ -953,7 +955,7 @@ function dmvChatPivotNewTab_(layout, tabs) {
       },
     ],
     touches: [],
-    undo: null,
+    undo: { hint: dmvChatUndoNewTab_(layout.targetName) },
     sheetName: layout.targetName,
     sheetId: sheetId,
     range: 'A1',

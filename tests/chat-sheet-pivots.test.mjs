@@ -587,6 +587,77 @@ test('a pivot placed on an existing tab needs empty cells there, and undo remove
   assert.equal(f.state.batches.length, 2, 'only the pivot and its undo were written');
 });
 
+test('after a new tab, a renamed tab, a pivot on a new tab or a chart, undo says how to reverse it rather than undo the edit before it', () => {
+  const f = fixture();
+  f.api.dmvReadDefinitions_ = () => ({ definitions: [] });
+  const edited = f.edit('set_values', { values: [['x']] }, f.inspect('A1', 'Source'));
+  const cannot = (text, hint) =>
+    new RegExp(
+      '^Error: Chat cannot undo "' +
+        text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+        '"\\. ' +
+        hint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+        '$'
+    );
+  const batches = () => f.state.batches.length;
+  for (const [make, text, hint] of [
+    [
+      () => f.tabAction('create_sheet', { newName: 'Scratch' }),
+      'Created tab Scratch',
+      'Delete the tab "Scratch" to remove it.',
+    ],
+    [
+      () => f.edit('rename_sheet', { newName: 'Notes' }, f.inspect('A1', 'Scratch')),
+      'Renamed tab Scratch to Notes',
+      'Rename it back to "Scratch" to reverse it.',
+    ],
+    [
+      () => f.pivot({}),
+      'Created a native pivot table on Pivot from Source!B3:F8',
+      'Delete the tab "Pivot" to remove it.',
+    ],
+    [
+      () => f.pivot({ targetSheet: 'Totals', totals: false }),
+      'Created a native pivot table on Totals from Source!B3:F8',
+      'Delete the tab "Totals" to remove it.',
+    ],
+    [
+      () =>
+        f.api.dmvChatCreateChart_(f.session, {
+          sheetName: 'Source',
+          range: 'B3:F6',
+          chartType: 'column',
+          xColumn: 'Campaign',
+          seriesColumns: ['Spend'],
+        }),
+      'Added a column chart "Spend by Campaign" on Source',
+      'Delete the chart to remove it.',
+    ],
+  ]) {
+    const done = plain(make());
+    assert.equal(done.undoId ?? null, null, text);
+    // Asked nothing, and undo changes nothing: it names the edit and how to reverse it.
+    assert.equal(done.needsConfirmation, undefined, text);
+    const before = batches();
+    assert.throws(() => f.undo(), cannot(text, hint), text);
+    assert.equal(batches(), before, text);
+    assert.equal(f.value(f.source, 1, 1), 'x', text);
+  }
+  assert.deepEqual(
+    f.undo({ action: 'list' }).entries.map((entry) => [entry.text, entry.undoable]),
+    [
+      ['Added a column chart "Spend by Campaign" on Source', false],
+      ['Created a native pivot table on Totals from Source!B3:F8', false],
+      ['Created a native pivot table on Pivot from Source!B3:F8', false],
+      ['Renamed tab Scratch to Notes', false],
+      ['Created tab Scratch', false],
+      ['set_values Source!A1', undefined],
+    ]
+  );
+  assert.equal(f.undo({ action: 'undo', id: edited.undoId }).ok, true);
+  assert.equal(f.value(f.source, 1, 1), '');
+});
+
 test('pivots never land on report output, while their source may be report output', () => {
   const f = fixture();
   const report = f.report();
