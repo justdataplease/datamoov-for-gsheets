@@ -197,9 +197,16 @@ function fixture() {
         if (value !== '') f.setCell(sheet, top + r, left + c, value);
       })
     );
-  // The values of a receipt's area, read the way the writer reads them to check ownership.
-  f.areaValues = (sheet, area) =>
-    sheet.getRange(area.row, area.column, area.rows, area.columns).getValues();
+  // The cells of a receipt's area as entered: the value of each cell, but the text given for
+  // each formula cell by its A1 address, as the receipt keeps it (each reference as #).
+  f.areaValues = (sheet, area, formulas = {}) => {
+    const values = sheet.getRange(area.row, area.column, area.rows, area.columns).getValues();
+    for (const [cell, text] of Object.entries(formulas)) {
+      const { row, column } = a1(cell);
+      values[row - area.row][column - area.column] = text;
+    }
+    return values;
+  };
   f.receiptKeys = () =>
     [...f.state.user.data.keys()].filter((key) => key.startsWith('dmv:v1:output:'));
   return f;
@@ -1973,7 +1980,7 @@ test('baseline: a saved report refresh over a tab chat edited keeps the chat edi
   assert.equal(f.value(f.sheet, 1, 6), 'Notes');
 });
 
-test('baseline: a dashboard refresh over tabs chat edited keeps the chat edits and every receipt digest matches its tab', () => {
+test('baseline: a dashboard refresh over tabs chat edited keeps the chat edits, the page and chart receipt digests match their tabs and the data tab is rewritten', () => {
   const f = fixture();
   const saved = plain(f.api.dmvSaveDashboard(dashboardInput(f)));
   f.api.dmvRunDashboard(saved.id);
@@ -1981,15 +1988,23 @@ test('baseline: a dashboard refresh over tabs chat edited keeps the chat edits a
   const tabs = { '-d-main': 'Main data', '-charts': 'Dash (chart data)', '-report': 'Dash' };
   const receipts = () =>
     Object.fromEntries(suffixes.map((suffix) => [suffix, f.readOutput(saved.id + suffix)]));
+  // The formulas the page and the chart data show, as their receipts keep them.
+  const formulas = {
+    '-charts': { B3: '=SUMIFS(#,#,"=Brand")', B4: '=SUMIFS(#,#,"=Generic")' },
+    '-report': { B8: '=SUM(#)' },
+  };
   const first = receipts();
   for (const suffix of suffixes) {
     const tab = f.tab(tabs[suffix]);
     assertIncludes(first[suffix], { sheetId: tab.id, row: 1, column: 1 }, suffix);
-    assert.equal(
-      first[suffix].digest,
-      sha256(JSON.stringify(f.areaValues(tab, first[suffix]))),
-      suffix
-    );
+    // A data tab is rewritten without being read back: its receipt keeps no digest.
+    if (suffix === '-d-main') assert.equal(first[suffix].rewrite, true, suffix);
+    else
+      assert.equal(
+        first[suffix].digest,
+        sha256(JSON.stringify(f.areaValues(tab, first[suffix], formulas[suffix]))),
+        suffix
+      );
   }
   // Chat writes beside the data table and on a tab of the user's own, formats them and freezes a row.
   const data = f.tab('Main data');
@@ -2021,11 +2036,15 @@ test('baseline: a dashboard refresh over tabs chat edited keeps the chat edits a
       first[suffix].digest,
       suffix + ' keeps its digest for the same data at the same time'
     );
-    assert.equal(
-      second[suffix].digest,
-      sha256(JSON.stringify(f.areaValues(f.tab(tabs[suffix]), second[suffix]))),
-      suffix
-    );
+    if (suffix === '-d-main') assert.equal(second[suffix].rewrite, true, suffix);
+    else
+      assert.equal(
+        second[suffix].digest,
+        sha256(
+          JSON.stringify(f.areaValues(f.tab(tabs[suffix]), second[suffix], formulas[suffix]))
+        ),
+        suffix
+      );
   }
   assert.deepEqual(
     [f.value(data, 1, 6), f.value(data, 1, 7), f.value(data, 2, 6), f.value(data, 2, 7)],

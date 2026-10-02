@@ -1,0 +1,382 @@
+{
+ "private dashboard saves two dataset queries and refreshes every data tab, the dashboard tab and its chart in one atomic batch": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "7838798fb4ff3e0d"
+  }
+ ],
+ "refresh fetches fresh datasets again, preserves stable tabs and charts, and clears owned trailing rows": [
+  {
+   "data: Source 1 data": "0de009795ba4539b",
+   "data: Source 2 data": "2ea53bc9ea35a344",
+   "charts: Dashboard report (chart data)": "ba2ca5e970666b90",
+   "page: Dashboard report": "fd62805e5963e8ac"
+  }
+ ],
+ "a failed later dataset names itself, preserves every previous output and stores only sanitized errors": [
+  {
+   "data: Source 1 data": "120804033331c5fe",
+   "data: Source 2 data": "2ea53bc9ea35a344",
+   "charts: Dashboard report (chart data)": "891901b5e16702e0",
+   "page: Dashboard report": "97af127b58fe9998"
+  }
+ ],
+ "destination occupancy or an edited dashboard tab blocks all writes and new tab creation": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "7838798fb4ff3e0d"
+  }
+ ],
+ "atomic batch failure creates no output tab, chart or ownership receipt and stays retryable": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "7838798fb4ff3e0d"
+  }
+ ],
+ "active leases prevent simultaneous refresh, edit, delete, and source identity changes": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "7838798fb4ff3e0d"
+  }
+ ],
+ "the shared deadline bounds all dataset fetches and an expired lease becomes retryable": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "7838798fb4ff3e0d"
+  }
+ ],
+ "money stays split by currency on scorecards, charts and tables, and a limited table says what it omitted": [
+  {
+   "data: Source 1 data": "b1503ace3d85f283",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "0287b76aebc2e521",
+   "page: Dashboard report": "9363db5fc103e876"
+  }
+ ],
+ "a mixed-currency chart ranks its categories within each currency, and a table of currencies alone has no total row": [
+  {
+   "data: Source 1 data": "ac61c3ad99039206",
+   "data: Source 2 data": "9e030a0455761edf",
+   "charts: Dashboard report (chart data)": "1e2460acc4987684",
+   "page: Dashboard report": "aba35e2ca35b3833"
+  }
+ ],
+ "tiles filter their rows and compute ratios from summed counts": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "d023c47ce738566c",
+   "page: Dashboard report": "46ad00033d5c2a35"
+  }
+ ],
+ "a compare scorecard shows the current dataset with its change against the previous one": [
+  {
+   "data: Source 1 data": "d39f0390b9e6e3ec",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "29c77f36e1eab212",
+   "page: Dashboard report": "9b4d7c465d5cffc2"
+  }
+ ],
+ "compare lists add up every account of a period, so scorecard ratios are true ratios across accounts": [
+  {
+   "data: Source 1 data": "1c6c8395d8bd2ab2",
+   "data: Source 2 data": "aac47dd630b18a7f",
+   "data: Source 1 previous data": "c7e431624389e781",
+   "data: Source 2 previous data": "62ab4f11fd3436de",
+   "charts: Dashboard report (chart data)": "2bdfdf0af123d2b7",
+   "page: Dashboard report": "adeaad4c555142d6"
+  }
+ ],
+ "a compared table adds a change column after each value, matched by its groupBy values": [
+  {
+   "data: Source 1 data": "2ce2be7192375c47",
+   "data: Source 2 data": "aac47dd630b18a7f",
+   "data: Source 1 previous data": "995bb35a1592a5c8",
+   "data: Source 2 previous data": "d1b2871da5bcd7b8",
+   "charts: Dashboard report (chart data)": "e5aa0c691e675fe3",
+   "page: Dashboard report": "ed7da5a14a1d9c0d"
+  }
+ ],
+ "a compared chart over dates lines up the periods by their own days, not by calendar weeks": [
+  {
+   "data: Source 1 data": "9cf0f42ca95d7fb7",
+   "data: Source 2 data": "2e67b50f7b5230cb",
+   "data: Source 1 previous data": "ed730940ee26e04f",
+   "data: Source 2 previous data": "88ea7d3dda055d04",
+   "charts: Dashboard report (chart data)": "ff1f8a6e29306236",
+   "page: Dashboard report": "16927d9fb1e3cd1a"
+  }
+ ],
+ "chart tiles can stack, draw a ratio on the right axis as a line, and take the whole row": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "6be7571facda812a",
+   "page: Dashboard report": "83e9f5b67436c1ef"
+  }
+ ],
+ "a scheduled dashboard refreshes from the hourly trigger, one per tick, and advances its next run": [
+  {
+   "data: Source 1 data": "807eb3b5e74f28d7",
+   "data: Source 2 data": "eb346157cbaf0f30",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "42b6c5ea6b54d1e4"
+  }
+ ],
+ "each dataset allows the larger of its saved row limit and the Settings row cap, and an overflow names the dataset": [
+  {
+   "data: Source 1 data": "0c0a9d495520953c",
+   "data: Source 2 data": "38c173246451b550",
+   "charts: Dashboard report (chart data)": "ba2ca5e970666b90",
+   "page: Dashboard report": "6ccf03d42f6be2c5"
+  }
+ ],
+ "ownership journals recover every committed tab after a receipt-storage failure": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "7838798fb4ff3e0d"
+  }
+ ],
+ "journal recovery never adopts manually edited cells as dashboard-owned output": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "f32a02e327b3d918"
+  }
+ ],
+ "post-commit dashboard state failures disclose updated tabs with safe metadata": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "7838798fb4ff3e0d"
+  }
+ ],
+ "dashboard refresh freezes all relative periods at one local date across a week boundary": [
+  {
+   "data: Source 1 data": "094fef674dc11d39",
+   "data: Source 2 data": "8c2d669d453ce027",
+   "charts: Dashboard report (chart data)": "f0a6126576a88723",
+   "page: Dashboard report": "876fe3c8affb4515"
+  }
+ ],
+ "datasets with different columns each get their own tab, and a tile reads one of them under its own column names": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Channel data": "921bb947373325c8",
+   "charts: Dashboard report (chart data)": "51d29036763a3b6f",
+   "page: Dashboard report": "2d766133c86a7e15"
+  }
+ ],
+ "a dataset dropped from the plan releases its receipt, keeps its tab, and the rest refreshes in place": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "charts: Dashboard report (chart data)": "f0a6126576a88723",
+   "page: Dashboard report": "cdf024e3605460cb"
+  }
+ ],
+ "a second dashboard cannot take over tabs another dashboard owns": [
+  {
+   "data: Copy of Source 1 data": "d88dab4a926c4997",
+   "data: Copy of Source 2 data": "6cd7a26ca786ac6a",
+   "charts: Copy report (chart data)": "7dc53b732f03aac6",
+   "page: Copy report": "30d2bc5b71ee0f51"
+  }
+ ],
+ "a plan edited to fewer chart tiles removes its surplus chart in the same batch and keeps the others": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "7838798fb4ff3e0d"
+  }
+ ],
+ "a retry after a post-commit failure keeps exactly one native chart per chart tile": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "7838798fb4ff3e0d"
+  },
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "7838798fb4ff3e0d"
+  }
+ ],
+ "highlight rules tint the rows they flag, first rule first, against a fixed value or the overall value": [
+  {
+   "data: Source 1 data": "7302495195a2307a",
+   "data: Source 2 data": "f6d6a728235caf9b",
+   "charts: Dashboard report (chart data)": "bb031a3756e2b291",
+   "page: Dashboard report": "73777a45908c4623"
+  }
+ ],
+ "a highlight rule on a groupBy column matches its text like a filter and reads like the page": [
+  {
+   "data: Source 1 data": "39c2c4af5c0229ce",
+   "data: Source 2 data": "290d9bc641b8d0ef",
+   "charts: Dashboard report (chart data)": "2bb4411c27ac2255",
+   "page: Dashboard report": "21fa6c0aca3666c0"
+  }
+ ],
+ "values far apart in size move to the right axis unless the plan places them": [
+  {
+   "data: Source 1 data": "3b6d7ab1317b17ea",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "b89c08d3b6c35761",
+   "page: Dashboard report": "e8c37a770cc4116a"
+  }
+ ],
+ "a refresh puts every chart back into its card, also after the page moved, and keeps one chart per tile": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "12ef74edaf34766b"
+  }
+ ],
+ "a plan saved before dashboard v2 still refreshes: one-dataset compares, no polarity, no highlight rules": [
+  {
+   "data: Source 1 data": "d39f0390b9e6e3ec",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "29c77f36e1eab212",
+   "page: Dashboard report": "9b4d7c465d5cffc2"
+  }
+ ],
+ "a plan saved before dashboard v2 keeps refreshing with a comparison a save now refuses": [
+  {
+   "data: Source 1 data": "6719a10b6b253f1e",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "29c77f36e1eab212",
+   "page: Dashboard report": "7ad6681087bc34c5"
+  }
+ ],
+ "a table wider than twelve columns first drops its bar, then widens the whole page": [
+  {
+   "data: Source 1 data": "1c6c8395d8bd2ab2",
+   "data: Source 2 data": "aac47dd630b18a7f",
+   "data: Source 1 previous data": "c7e431624389e781",
+   "data: Source 2 previous data": "d1b2871da5bcd7b8",
+   "charts: Dashboard report (chart data)": "2bdfdf0af123d2b7",
+   "page: Dashboard report": "1cdc83998033499e"
+  }
+ ],
+ "changes and small rates are computed unrounded and printed once, so the card, the cell and the chat agree": [
+  {
+   "data: Source 1 data": "a04500fd5864fba9",
+   "data: Source 2 data": "5ff1415e7d081a0a",
+   "data: Source 1 previous data": "291b3537250a4e54",
+   "data: Source 2 previous data": "a8ff2a2bc677f210",
+   "charts: Dashboard report (chart data)": "db20eb0387fdb7e4",
+   "page: Dashboard report": "643f2cb5261d92d5"
+  }
+ ],
+ "a comparison needs the period just before, and previous datasets stay out of the other tiles": [
+  {
+   "data: Source 1 data": "dc4a9486a2972519",
+   "data: Source 2 data": "2ea53bc9ea35a344",
+   "data: Source 1 previous data": "47f4ebd288a5f50d",
+   "data: Source 2 previous data": "4f634fbf3fceadba",
+   "charts: Dashboard report (chart data)": "2091eed8fef8e6fb",
+   "page: Dashboard report": "257a1a937ff7739b"
+  }
+ ],
+ "a compared trend keeps the same days of both periods and shades the current one": [
+  {
+   "data: Source 1 data": "fd68d830deabb6d4",
+   "data: Source 2 data": "51c1359205e41165",
+   "data: Source 1 previous data": "d68acca7cd6e3756",
+   "data: Source 2 previous data": "4e0c987801d0c27a",
+   "charts: Dashboard report (chart data)": "9f915adcc6fa26d4",
+   "page: Dashboard report": "0dfe19076d4b31f6"
+  }
+ ],
+ "the page reads like a report: codes in words, partly covered weeks with their days, long names cut at a word, flags counted over every row": [
+  {
+   "data: Source 1 data": "9d91e33e2836661f",
+   "data: Source 2 data": "2a44fc89f8584521",
+   "charts: Dashboard report (chart data)": "6116f6b131e1c435",
+   "page: Dashboard report": "8f7ead1f18d527ea"
+  }
+ ],
+ "a dataset cut to its top rows says so in the data sources, on its tiles and in their totals; whole datasets read as before": [
+  {
+   "data: Source 1 data": "51d8fc09d59e71ad",
+   "data: Source 2 data": "7259dc34518d83bf",
+   "charts: Dashboard report (chart data)": "640124a4fbc0de2b",
+   "page: Dashboard report": "6143787b3b11ffc3"
+  }
+ ],
+ "every scorecard is kept, in balanced rows that fill the page": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "8dd93a2c80e4fae6",
+   "page: Dashboard report": "f89c340fdc2365cd"
+  }
+ ],
+ "a saved comparison holds on every refresh day of the coming year, and only whole months stand for months": [
+  {
+   "data: Source 1 data last30": "00d98446d778712b",
+   "data: Source 2 data last30": "b9fe66a7a527eeb0",
+   "data: Source 1 previous data last30": "9cf6310b1107ea16",
+   "data: Source 2 previous data last30": "b8534c671bb1eef4",
+   "charts: Dashboard report last30 (chart data)": "891901b5e16702e0",
+   "page: Dashboard report last30": "efdf1f3f5bf5b760",
+   "data: Source 1 data lastWeek": "3a23cb08638dd9cc",
+   "data: Source 2 data lastWeek": "f6644b6664a38430",
+   "data: Source 1 previous data lastWeek": "6062fb2a66ea0ddc",
+   "data: Source 2 previous data lastWeek": "7e34eecf328571b7",
+   "charts: Dashboard report lastWeek (chart data)": "891901b5e16702e0",
+   "page: Dashboard report lastWeek": "a52b329896526318",
+   "data: Source 1 data lastMonth": "d948db049c1dbb18",
+   "data: Source 2 data lastMonth": "d319b2c9c159fc5e",
+   "data: Source 1 previous data lastMonth": "111e53dc1283171a",
+   "data: Source 2 previous data lastMonth": "25e91a0e242eced5",
+   "charts: Dashboard report lastMonth (chart data)": "891901b5e16702e0",
+   "page: Dashboard report lastMonth": "acc577bb853fa78d"
+  }
+ ],
+ "compared tiles read their compare lists, a source filter keeps both periods and an empty period keeps its currency": [
+  {
+   "data: Source 1 data": "1c6c8395d8bd2ab2",
+   "data: Source 2 data": "2ea53bc9ea35a344",
+   "data: Source 1 previous data": "c7e431624389e781",
+   "data: Source 2 previous data": "751770d82a1b87df",
+   "charts: Dashboard report (chart data)": "b9bd45926878705d",
+   "page: Dashboard report": "fd7cdcdcde266737"
+  }
+ ],
+ "long tables shade and colour a column per request, so they refresh again and again within one write": [
+  {
+   "data: Source 1 data": "b7612c2a14c02d7d",
+   "data: Source 2 data": "196632a9c59d56e5",
+   "charts: Dashboard report (chart data)": "3e3501c8623f2447",
+   "page: Dashboard report": "48d73a9f86365103"
+  }
+ ],
+ "a refresh past the cell budget names its largest datasets, rows by columns, and writes nothing; rows past one Sheets write follow in more": [
+  {
+   "data: Assets Data": "5213e97b3e8cf7cd",
+   "data: Keywords Data": "cac422ba1233416a",
+   "data: Search terms Data": "8de9012ec37236ed",
+   "charts: Dashboard report (chart data)": "4e24c01515c5b536",
+   "page: Dashboard report": "efda45ce6c49ea19"
+  }
+ ]
+}

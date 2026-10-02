@@ -109,7 +109,7 @@ function dmvValidateReport_(input, spreadsheet) {
     config: query.config,
     dateRange: query.dateRange,
     target: { sheetName: sheetName, startCell: cell.a1 },
-    maxRows: query.maxRows,
+    maxRows: dmvInteger_(query.maxRows, 1, DMV_LIMITS.reportRows, 'Row limit'),
     schedule: schedule,
     at: dmvScheduleAt_(schedule, input.at),
   };

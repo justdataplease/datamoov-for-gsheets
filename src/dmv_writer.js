@@ -1,4 +1,5 @@
-/* Sheets output: ownership receipt, output record, overlap checks and one atomic batchUpdate. */
+/* Sheets output: ownership receipt, output record, overlap checks and one atomic batchUpdate,
+   with the rows of rewritten outputs past its size limit in the batches after it. */
 function dmvOutputDigest_(matrix) {
   var bytes = Utilities.computeDigest(
     Utilities.DigestAlgorithm.SHA_256,
@@ -10,6 +11,91 @@ function dmvOutputDigest_(matrix) {
       return ('0' + ((byte + 256) % 256).toString(16)).slice(-2);
     })
     .join('');
+}
+
+// The UTF-8 bytes of a text, as the Sheets API counts a request: a character beyond ASCII takes
+// two or three, a pair of surrogates four.
+function dmvUtf8Bytes_(text) {
+  if (!/[^\x00-\x7f]/.test(text)) return text.length;
+  var bytes = text.length;
+  for (var at = 0; at < text.length; at++) {
+    var code = text.charCodeAt(at);
+    if (code > 0x7f) bytes += code > 0x7ff && (code < 0xd800 || code > 0xdfff) ? 2 : 1;
+  }
+  return bytes;
+}
+
+// A cell the writer enters as a formula. Only the app makes one: values from a source are text,
+// numbers or booleans by then (dmvSheetValue_), so text that looks like a formula stays text.
+function DmvFormula_(text) {
+  if (typeof text !== 'string' || text.charAt(0) !== '=')
+    throw new Error('A formula starts with =.');
+  this.formula = text;
+}
+
+// A matrix row as Sheets cells: a formula, a number, a boolean, text, or nothing for ''.
+function dmvOutputRow_(row) {
+  return {
+    values: row.map(function (value) {
+      if (value === '') return {};
+      if (value instanceof DmvFormula_)
+        return { userEnteredValue: { formulaValue: value.formula } };
+      if (typeof value === 'number') return { userEnteredValue: { numberValue: value } };
+      if (typeof value === 'boolean') return { userEnteredValue: { boolValue: value } };
+      return { userEnteredValue: { stringValue: value } };
+    }),
+  };
+}
+
+// An area's cells as entered: a formula's text, otherwise the value, from the written matrix or
+// from a tab's values and formulas. A formula's references, outside its text, read as #: Sheets
+// rewrites them when the tabs they read change (#REF! for a deleted tab, the new name of a renamed
+// one, other cells when rows or columns move there) and drops quotes a simple tab name does not
+// need. None of that edits the formula, and the next write puts its own references back. Nor
+// does the spelling Sheets may store outside the text (names in capitals, a number in another
+// notation, spaces), so case, spaces and number notation do not count there either.
+function dmvOutputEntered_(values, formulas) {
+  return values.map(function (row, r) {
+    return row.map(function (value, c) {
+      var formula = formulas ? formulas[r][c] : value instanceof DmvFormula_ ? value.formula : '';
+      if (!formula) return value;
+      return String(formula)
+        .split(/("(?:[^"]|"")*")/)
+        .map(function (part, index) {
+          return index % 2
+            ? part
+            : part
+                .toUpperCase()
+                .replace(
+                  /(?:'(?:[^']|'')*'!|[^\s'!(),"&=<>+\-*/:;{}^%#]+!)?(?:\$?[A-Z]+\$?\d+(?::\$?[A-Z]+\$?\d+)?(?![\w(])|#REF!)/g,
+                  '#'
+                )
+                .replace(/\s+/g, '')
+                .replace(
+                  /(^|[^\w.])(\d+\.?\d*|\.\d+)(E[+-]?\d+)?/g,
+                  function (all, before, digits, power) {
+                    return before + Number(digits + (power || ''));
+                  }
+                );
+        })
+        .join('');
+    });
+  });
+}
+
+// The pattern a number column takes from its written numbers: whole numbers, numbers below 1
+// with four decimals, others with two. '#,##0.###' showed whole numbers as "2,494.".
+function dmvNumberPattern_(written) {
+  var numbers = written.filter(function (value) {
+    return typeof value === 'number';
+  });
+  var whole = numbers.every(function (value) {
+    return value % 1 === 0;
+  });
+  var small = numbers.every(function (value) {
+    return Math.abs(value) < 1;
+  });
+  return whole ? '#,##0' : small ? '0.0000' : '#,##0.00';
 }
 
 // Grid sizes and merged ranges of every tab, keyed by sheet id, from one metadata-only Sheets
@@ -49,7 +135,9 @@ function dmvWriteReport_(spreadsheet, report, result) {
 
 // Every destination is verified before any tab creation, cell change or receipt update.
 // extra(areas) may add requests (a dashboard's charts) to the same atomic batch; areas follow
-// the output order and carry the sheet ids planned for new tabs.
+// the output order and carry the sheet ids planned for new tabs. The rows of outputs owned for
+// rewriting (a dashboard's data tabs) end that batch, and those past its size limit follow in as
+// many further batches as they take.
 function dmvWriteReports_(spreadsheet, outputs, beforeCommit, extra) {
   return dmvWorkbookLocked_(function () {
     return dmvWriteReportsUnlocked_(spreadsheet, outputs, beforeCommit, extra);
@@ -82,6 +170,8 @@ function dmvWriteReportsUnlocked_(spreadsheet, outputs, beforeCommit, extra) {
     areas: [],
     receipts: [],
     requests: [],
+    // The areas and matrices of outputs owned for rewriting, written after every other request.
+    rewrites: [],
   };
   // Where each output's requests start, so a batch past the size limit can say what grew.
   var starts = outputs.map(function (output) {
@@ -95,7 +185,8 @@ function dmvWriteReportsUnlocked_(spreadsheet, outputs, beforeCommit, extra) {
   plan.requests = plan.requests.concat(
     dmvOutputRecordRequests_(spreadsheet.getId(), outputs, plan.areas, plan.all)
   );
-  if (JSON.stringify(plan.requests).length > DMV_LIMITS.maxBytes) {
+  var size = dmvUtf8Bytes_(JSON.stringify(plan.requests));
+  if (size > DMV_LIMITS.maxBytes) {
     // Marked, with each output's area and share of the batch in output order, so a caller that
     // knows what its outputs hold (a dashboard's datasets and page) can name what to narrow.
     var large = new Error(
@@ -107,7 +198,7 @@ function dmvWriteReportsUnlocked_(spreadsheet, outputs, beforeCommit, extra) {
         id: output.report.id,
         rows: plan.areas[index].rows,
         columns: plan.areas[index].columns,
-        size: JSON.stringify(plan.requests.slice(starts[index], starts[index + 1])).length,
+        size: dmvUtf8Bytes_(JSON.stringify(plan.requests.slice(starts[index], starts[index + 1]))),
       };
     });
     throw large;
@@ -115,7 +206,58 @@ function dmvWriteReportsUnlocked_(spreadsheet, outputs, beforeCommit, extra) {
   if (beforeCommit) beforeCommit();
   var journalKey = 'dmv:v1:write-journal:' + spreadsheet.getId();
   properties.setProperty(journalKey, dmvCheckRecordSize_({ receipts: plan.receipts }));
-  Sheets.Spreadsheets.batchUpdate({ requests: plan.requests }, spreadsheet.getId());
+  var batch = plan.requests,
+    sent = false;
+  var send = function () {
+    Sheets.Spreadsheets.batchUpdate({ requests: batch }, spreadsheet.getId());
+    sent = true;
+    batch = [];
+    size = 0;
+  };
+  try {
+    plan.rewrites.forEach(function (item) {
+      var request = null;
+      item.matrix.forEach(function (line, index) {
+        var row = dmvOutputRow_(line),
+          bytes = dmvUtf8Bytes_(JSON.stringify(row)) + 1;
+        // 300 bytes hold a request's range and the batch around it.
+        if (size + bytes + 300 > DMV_LIMITS.maxBytes) {
+          send();
+          request = null;
+        }
+        if (!request) {
+          var at = item.area.row - 1 + index;
+          request = {
+            updateCells: {
+              range: {
+                sheetId: item.area.sheetId,
+                startRowIndex: at,
+                endRowIndex: at,
+                startColumnIndex: item.area.column - 1,
+                endColumnIndex: item.area.column - 1 + item.area.columns,
+              },
+              rows: [],
+              fields: 'userEnteredValue',
+            },
+          };
+          batch.push(request);
+          size += 300;
+        }
+        request.updateCells.rows.push(row);
+        request.updateCells.range.endRowIndex++;
+        size += bytes;
+      });
+    });
+    send();
+  } catch (error) {
+    if (!sent) throw error;
+    // The journal stays, so the next write takes these outputs back and writes them whole.
+    var partial = new Error(
+      'The output tabs were updated, but not all of their rows. Refresh again to write them.'
+    );
+    partial.sheetUpdated = true;
+    throw partial;
+  }
   try {
     plan.receipts.forEach(function (receipt) {
       properties.setProperty(receipt.key, JSON.stringify(receipt.area));
@@ -175,6 +317,9 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
     maxColumns = grids[sheetId].columns;
     old = null;
   }
+  // A rewritten output (a dashboard's data tab) owns its area outright: it is replaced without
+  // being read back, so a refresh of many rows stays fast. Only cells it grows into are read.
+  var rewrite = report.rewrite === true;
   var area = {
     sheetId: sheetId,
     row: anchor.row,
@@ -188,23 +333,20 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
     var ownershipError =
       'The previous report output was edited or moved. Choose a new empty output area before refreshing.';
     if (
-      !old.digest ||
+      (!old.digest && !rewrite) ||
       old.row + old.rows - 1 > maxRows ||
       old.column + old.columns - 1 > maxColumns
     )
       throw new Error(ownershipError);
-    var previousRange = sheet.getRange(old.row, old.column, old.rows, old.columns);
-    var previousValues = previousRange.getValues(),
-      previousFormulas = previousRange.getFormulas();
-    if (
-      previousFormulas.some(function (row) {
-        return row.some(function (formula) {
-          return formula !== '';
-        });
-      }) ||
-      dmvOutputDigest_(previousValues) !== old.digest
-    )
-      throw new Error(ownershipError);
+    if (!rewrite) {
+      var previousRange = sheet.getRange(old.row, old.column, old.rows, old.columns);
+      if (
+        dmvOutputDigest_(
+          dmvOutputEntered_(previousRange.getValues(), previousRange.getFormulas())
+        ) !== old.digest
+      )
+        throw new Error(ownershipError);
+    }
   }
   var all = plan.all;
   Object.keys(all)
@@ -234,24 +376,33 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
     throw new Error(
       'The report would exceed this spreadsheet cell capacity. Choose a smaller report.'
     );
-  var physical = plan.physicalGrids[sheetId] || { rows: 0, columns: 0 };
-  var readRows = Math.min(area.rows, Math.max(0, physical.rows - area.row + 1));
-  var readColumns = Math.min(area.columns, Math.max(0, physical.columns - area.column + 1));
-  if (sheet && readRows && readColumns) {
-    var existingRange = sheet.getRange(area.row, area.column, readRows, readColumns);
-    var existing = existingRange.getValues(),
-      formulas = existingRange.getFormulas();
-    for (var r = 0; r < readRows; r++)
-      for (var c = 0; c < readColumns; c++) {
-        var owned = old && r < old.rows && c < old.columns;
-        if (!owned && (existing[r][c] !== '' || formulas[r][c] !== ''))
-          throw new Error(
-            'The tab "' +
-              report.target.sheetName +
-              '" contains existing data where this output goes. Choose an empty area or a new tab name.'
-          );
-      }
-  }
+  // Cells the output does not own yet must be empty: the whole area, or the rows and columns it
+  // grows into, as far as the tab has them.
+  var physical = plan.physicalGrids[sheetId] || { rows: 0, columns: 0 },
+    ownedRows = old ? old.rows : 0,
+    ownedColumns = old ? old.columns : 0;
+  [
+    [ownedRows, 0, area.rows - ownedRows, area.columns],
+    [0, ownedColumns, Math.min(ownedRows, area.rows), area.columns - ownedColumns],
+  ].forEach(function (part) {
+    var rows = Math.min(part[2], physical.rows - area.row - part[0] + 1),
+      columns = Math.min(part[3], physical.columns - area.column - part[1] + 1);
+    if (!sheet || rows < 1 || columns < 1) return;
+    var range = sheet.getRange(area.row + part[0], area.column + part[1], rows, columns);
+    var formulas = range.getFormulas();
+    if (
+      range.getValues().some(function (line, r) {
+        return line.some(function (value, c) {
+          return value !== '' || formulas[r][c] !== '';
+        });
+      })
+    )
+      throw new Error(
+        'The tab "' +
+          report.target.sheetName +
+          '" contains existing data where this output goes. Choose an empty area or a new tab name.'
+      );
+  });
   var range = function (row, column, rows, columns) {
     return {
       sheetId: area.sheetId,
@@ -390,26 +541,20 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
       });
     }
   }
-  // Normalize once: validation, output hashing and cell writes use the same typed values.
-  var rows = result.matrix.map(function (row) {
-    return {
-      values: row.map(function (value) {
-        if (value === '') return {};
-        if (typeof value === 'number') return { userEnteredValue: { numberValue: value } };
-        if (typeof value === 'boolean') return { userEnteredValue: { boolValue: value } };
-        return { userEnteredValue: { stringValue: value } };
-      }),
-    };
-  });
-  area.digest = dmvOutputDigest_(result.matrix);
+  if (rewrite) {
+    area.rewrite = true;
+    plan.rewrites.push({ area: area, matrix: result.matrix });
+  } else {
+    area.digest = dmvOutputDigest_(dmvOutputEntered_(result.matrix));
+    requests.push({
+      updateCells: {
+        range: range(area.row, area.column, area.rows, area.columns),
+        rows: result.matrix.map(dmvOutputRow_),
+        fields: 'userEnteredValue',
+      },
+    });
+  }
   area.writtenAt = Date.now();
-  requests.push({
-    updateCells: {
-      range: range(area.row, area.column, area.rows, area.columns),
-      rows: rows,
-      fields: 'userEnteredValue',
-    },
-  });
   if (old && old.rows > area.rows)
     requests.push({
       updateCells: {
@@ -439,26 +584,14 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
     });
     return found;
   };
-  // Number patterns follow the written values: '#,##0.###' showed whole numbers as "2,494.".
-  // An explicit pattern wins.
+  // Number patterns follow the written values; an explicit pattern wins.
   var numberFormat = function (type, written, pattern) {
     if (pattern !== undefined)
       return {
-        type: type === 'percent' ? 'PERCENT' : 'NUMBER',
+        type: type === 'percent' ? 'PERCENT' : type === 'date' ? 'DATE' : 'NUMBER',
         pattern: dmvLayoutPattern_(pattern),
       };
-    if (type === 'number') {
-      var numbers = written.filter(function (value) {
-        return typeof value === 'number';
-      });
-      var whole = numbers.every(function (value) {
-        return value % 1 === 0;
-      });
-      var small = numbers.every(function (value) {
-        return Math.abs(value) < 1;
-      });
-      return { type: 'NUMBER', pattern: whole ? '#,##0' : small ? '0.0000' : '#,##0.00' };
-    }
+    if (type === 'number') return { type: 'NUMBER', pattern: dmvNumberPattern_(written) };
     return type === 'currency'
       ? { type: 'NUMBER', pattern: '#,##0.00' }
       : type === 'percent'
@@ -1018,16 +1151,12 @@ function dmvRecoverOutputJournal_(spreadsheet, properties) {
       area.column + area.columns - 1 > sheet.getMaxColumns()
     )
       return;
+    // A rewritten area is never compared: it is its own again while its tab still holds it.
     var range = sheet.getRange(area.row, area.column, area.rows, area.columns);
     if (
-      range.getFormulas().some(function (row) {
-        return row.some(function (value) {
-          return value !== '';
-        });
-      })
+      area.rewrite ||
+      dmvOutputDigest_(dmvOutputEntered_(range.getValues(), range.getFormulas())) === area.digest
     )
-      return;
-    if (dmvOutputDigest_(range.getValues()) === area.digest)
       properties.setProperty(receipt.key, JSON.stringify(area));
   });
   try {

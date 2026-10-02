@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { createHash } from 'node:crypto';
 import { gzipSync, gunzipSync, inflateRawSync } from 'node:zlib';
+import { evaluateFormula, serialDate } from './sheet-formulas.mjs';
+import { watchDashboardPages } from './dashboard-goldens.mjs';
 
 export const plain = (value) => JSON.parse(JSON.stringify(value));
 
@@ -283,6 +285,11 @@ const MORE_REQUESTS = ['copyPaste', 'cutPaste', 'insertDimension', 'deleteDimens
 
 const ERROR_TEXT = { ERROR: '#ERROR!', NULL_VALUE: '#NULL!', DIVIDE_BY_ZERO: '#DIV/0!', VALUE: '#VALUE!', REF: '#REF!', NAME: '#NAME?', NUM: '#NUM!', N_A: '#N/A', LOADING: 'Loading...' };
 
+// Every sandbox made in this process and not yet checked. In a test file (not a tool that
+// borrows the sandbox), the dashboards each test leaves are checked against their goldens.
+const sandboxes = [];
+if (/\.test\.mjs$/.test(process.argv[1] || '')) watchDashboardPages(sandboxes);
+
 export function createDatamoovSandbox(settings = {}) {
   let now = Date.parse('2026-09-18T12:00:00Z');
   let serial = 0, sheetSerial = 10;
@@ -309,7 +316,7 @@ export function createDatamoovSandbox(settings = {}) {
     user, script, document, cache, books: new Map(), opened: [], batches: [], legacyWrites: [], clears: [],
     flushes: 0, lockAcquires: 0, lockReleases: 0, lockAvailable: true, triggers: [],
     scriptLockAcquires: 0, scriptLockReleases: 0, scriptLockAvailable: true, scriptLockWaits: [],
-    createdTriggers: [], deletedTriggers: [], http: [], responses: [], sleeps: [], charts: [], gets: [],
+    createdTriggers: [], deletedTriggers: [], http: [], responses: [], sleeps: [], charts: [], gets: [], reads: [],
     failBatch: false, failTrigger: false, failProperty: null,
   };
   class ClockDate extends Date {
@@ -327,14 +334,16 @@ export function createDatamoovSandbox(settings = {}) {
   }
   function range(sheet, row, column, rows = 1, columns = 1) {
     if (row < 1 || column < 1 || rows < 1 || columns < 1 || row + rows - 1 > sheet.maxRows || column + columns - 1 > sheet.maxColumns) throw new Error('Range exceeds sheet grid');
+    // Every read of cells is recorded, so a test can tell which tabs a run read back.
+    const read = (method) => state.reads.push({ sheet: sheet.name, method, row, column, rows, columns });
     const result = {
-      getValues: () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => cell(sheet, row + r, column + c).value)),
+      getValues: () => (read('getValues'), Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => cell(sheet, row + r, column + c).value))),
       // Text as the sheet shows it; a date stands in for its number format as yyyy-mm-dd.
-      getDisplayValues: () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => {
+      getDisplayValues: () => (read('getDisplayValues'), Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => {
         const value = cell(sheet, row + r, column + c).value;
         return value instanceof Date ? value.toISOString().slice(0, 10) : value === null || value === undefined ? '' : String(value);
-      })),
-      getFormulas: () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => cell(sheet, row + r, column + c).formula)),
+      }))),
+      getFormulas: () => (read('getFormulas'), Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => cell(sheet, row + r, column + c).formula))),
       getSheet: () => sheet,
       getNumRows: () => rows,
       getNumColumns: () => columns,
@@ -449,20 +458,31 @@ export function createDatamoovSandbox(settings = {}) {
     return trigger;
   }
   function applyBatch(body, spreadsheetId) {
-    state.batches.push({ body: plain(body), spreadsheetId });
+    // The Sheets API refuses a request body over 10 MB of UTF-8, whatever it holds.
+    const text = JSON.stringify(body);
+    if (Buffer.byteLength(text) > 10485760) throw new Error('Request payload size exceeds the limit: 10485760 bytes.');
+    state.batches.push({ body: JSON.parse(text), spreadsheetId });
     if (state.failBatch) throw new Error('Simulated atomic batch failure');
     const book = state.books.get(spreadsheetId);
     if (!book) throw new Error('Unknown spreadsheet');
     // Sheet additions, cells, metadata and charts are published together only after every request succeeds.
+    // A tab's cells, formats and cell fields are copied when the batch first reaches them, so a
+    // batch over one large tab copies no other; copied keeps each staged tab's copies.
     const originals = new Map(book.sheets.map((sheet) => [sheet.id, sheet]));
-    const staged = new Map(book.sheets.map((sheet) => [sheet.id, { ...sheet, cells: new Map(sheet.cells), formats: new Map(sheet.formats), merges: sheet.merges.slice(),
-      pixelSizes: { ROWS: new Map(sheet.pixelSizes.ROWS), COLUMNS: new Map(sheet.pixelSizes.COLUMNS) } }]));
-    for (const sheet of staged.values()) {
-      sheet.meta = new Map(sheet.meta);
-      sheet.conditionalFormats = plain(sheet.conditionalFormats);
-      sheet.groupDepths = { ROWS: sheet.groupDepths.ROWS.slice(), COLUMNS: sheet.groupDepths.COLUMNS.slice() };
-      sheet.developerMetadata = sheet.developerMetadata.slice();
-    }
+    const copied = new Map();
+    const stage = (sheet) => {
+      const copy = { ...sheet, merges: sheet.merges.slice(), pixelSizes: { ROWS: new Map(sheet.pixelSizes.ROWS), COLUMNS: new Map(sheet.pixelSizes.COLUMNS) },
+        conditionalFormats: plain(sheet.conditionalFormats), groupDepths: { ROWS: sheet.groupDepths.ROWS.slice(), COLUMNS: sheet.groupDepths.COLUMNS.slice() },
+        developerMetadata: sheet.developerMetadata.slice() };
+      const own = {};
+      copied.set(copy, own);
+      for (const key of ['cells', 'formats', 'meta']) {
+        delete copy[key];
+        Object.defineProperty(copy, key, { configurable: true, get: () => (own[key] ??= new Map(sheet[key])), set: (value) => { own[key] = value; } });
+      }
+      return copy;
+    };
+    const staged = new Map(book.sheets.map((sheet) => [sheet.id, stage(sheet)]));
     let namedRanges = plain(book.namedRanges || []), requestIndex = -1;
     const order = book.sheets.map((sheet) => sheet.id);
     const stagedCharts = [];
@@ -1417,7 +1437,7 @@ export function createDatamoovSandbox(settings = {}) {
     if (staged.size && [...staged.values()].every((sheet) => sheet.hidden)) throw new Error("You can't hide or remove all the visible sheets in a document.");
     for (const sheet of staged.values()) {
       const existing = originals.get(sheet.id);
-      if (existing) Object.assign(existing, sheet);
+      if (existing) Object.assign(existing, sheet, copied.get(sheet));
       else book.sheets.push(sheet);
     }
     if (!staged.size) throw new Error('A spreadsheet must keep at least one sheet');
@@ -1615,17 +1635,49 @@ export function createDatamoovSandbox(settings = {}) {
         } };
     } },
   };
+  // A cell's value for formulas: null when empty, the result of a formula a batch wrote, else as
+  // stored. memo keeps the range reads of the formulas evaluated with it (sheet-formulas.mjs).
+  function computed(sheet, row, column, memo) {
+    const entry = sheet.cells.get(address(row, column));
+    if (!entry || entry.value === '' || entry.value === null || entry.value === undefined) return null;
+    if (!entry.formula || entry.value !== entry.formula) return entry.value;
+    const book = [...state.books.values()].find((server) => server.sheets.includes(sheet));
+    return evaluateFormula(entry.formula, (name, r, c) => {
+      const target = name === null ? sheet : book.sheets.find((item) => item.name === name);
+      if (!target) return { error: '#REF!' };
+      return computed(target, r, c, memo);
+    }, memo);
+  }
+  // The memo shared by the cells read inside reading(); each other read has its own.
+  let sharedMemo = null;
   const context = vm.createContext(fakeServices, { codeGeneration: { strings: false, wasm: false } });
-  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_welcome.js', 'dmv_credentials.js', 'dmv_connections.js', 'dmv_credential_import.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js', 'dmv_continuation.js', 'dmv_ai.js', 'dmv_formulas.js', 'dmv_chat_tools.js', 'dmv_chat_sheets.js', 'dmv_chat_pivots.js', 'dmv_chat_sheet_actions.js', 'dmv_chat_sheet_conditions.js', 'dmv_chat_sheet_formulas.js', 'dmv_chat_sheet_safety.js', 'dmv_dashboards.js', 'dmv_chat_dashboards.js', 'dmv_chat_reports.js', 'dmv_chat.js']) {
+  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_welcome.js', 'dmv_credentials.js', 'dmv_connections.js', 'dmv_credential_import.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js', 'dmv_continuation.js', 'dmv_ai.js', 'dmv_formulas.js', 'dmv_chat_tools.js', 'dmv_chat_sheets.js', 'dmv_chat_pivots.js', 'dmv_chat_sheet_actions.js', 'dmv_chat_sheet_conditions.js', 'dmv_chat_sheet_formulas.js', 'dmv_chat_sheet_safety.js', 'dmv_dashboards.js', 'dmv_dashboard_cells.js', 'dmv_chat_dashboards.js', 'dmv_chat_reports.js', 'dmv_chat.js']) {
     new vm.Script(readFileSync(new URL(`../../src/${filename}`, import.meta.url), 'utf8'), { filename }).runInContext(context, { timeout: 1000 });
   }
   const book = addSpreadsheet();
-  return {
+  const sandbox = {
     api: context, state, book, addSpreadsheet, addTrigger, tab: findTab, reopen,
     setActive: (spreadsheet) => { activeSpreadsheet = spreadsheet; },
     advance: (milliseconds) => { now += milliseconds; },
     setCell(sheet, row, column, value, formula = '') { sheet.cells.set(address(row, column), { value, formula }); },
     value: (sheet, row, column) => cell(sheet, row, column).value,
+    // What a cell shows, typed: the result of a formula written by a batch (sheet-formulas.mjs
+    // evaluates the formulas a dashboard writes), a number formatted as a date as yyyy-mm-dd, and
+    // any other value as stored.
+    shown(sheet, row, column) {
+      const value = computed(sheet, row, column, sharedMemo || new Map());
+      return typeof value === 'number' && sheet.formats.get(address(row, column))?.numberFormat?.type === 'DATE' ? serialDate(value) : value ?? '';
+    },
+    // Runs read(), whose shown() calls share their range reads: many formulas over one large tab
+    // read it once. Nothing may change a cell meanwhile.
+    reading(read) {
+      sharedMemo = new Map();
+      try {
+        return read();
+      } finally {
+        sharedMemo = null;
+      }
+    },
     formula: (sheet, row, column) => cell(sheet, row, column).formula,
     // Rows and columns are 1-based, like value(): the cell's userEnteredFormat ({} when unset),
     // the tab's merges in A1 notation, and a row height or column width (Sheets defaults when unset).
@@ -1652,4 +1704,6 @@ export function createDatamoovSandbox(settings = {}) {
     readReport: (id) => JSON.parse(user.getProperty(`dmv:v1:report:${id}`)),
     readOutput: (id, spreadsheetId = book.id) => JSON.parse(user.getProperty(`dmv:v1:output:${spreadsheetId}:${id}`) || 'null'),
   };
+  sandboxes.push(sandbox);
+  return sandbox;
 }

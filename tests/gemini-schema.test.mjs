@@ -98,7 +98,7 @@ function pageOf(f, name) {
   const out = [];
   for (let r = 1; r <= sheet.getLastRow(); r++) {
     const row = [];
-    for (let c = 1; c <= sheet.maxColumns; c++) if (f.value(sheet, r, c) !== '') row.push(f.value(sheet, r, c));
+    for (let c = 1; c <= sheet.maxColumns; c++) if (f.shown(sheet, r, c) !== '') row.push(f.shown(sheet, r, c));
     out.push(row);
   }
   return out;
@@ -476,7 +476,7 @@ test('a Gemini tool round saves and runs a two-dataset dashboard with underscore
     f.state.charts.map((chart) => [chart.spec.altText, chart.spec.basicChart.chartType]),
     [['Spend by campaign', 'BAR']]
   );
-  assert.equal(f.value(f.tab('Account 2 Data'), 5, 1), 'meadow');
+  assert.equal(f.shown(f.tab('Account 2 Data'), 5, 1), 'meadow');
   assert.equal(JSON.stringify(reply).includes(SOURCE_KEY), false);
   assert.equal(JSON.stringify(reply).includes(AI_KEY), false);
 });

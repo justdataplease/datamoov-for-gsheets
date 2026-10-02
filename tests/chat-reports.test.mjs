@@ -202,6 +202,16 @@ test('save_report rejects a stale revision and a row limit above the chat cap be
   assert.equal(f.fetched.length, 1);
 });
 
+// A saved report is written in one Sheets request, so it keeps fewer rows than chat may fetch
+// for a dashboard dataset.
+test('a chat report keeps at most the row limit of a saved report when the chat cap is higher', () => {
+  const f = fixture();
+  f.api.dmvSaveAiSettings({ provider: 'anthropic', maxRows: 100000 });
+  const saved = saveReportInChat(f).results.get('save').value;
+  assert.equal(f.readReport(saved.id).maxRows, 30000);
+  assert.equal(f.fetched[0].maxRows, 30000);
+});
+
 test('chat dashboards are drafts too: no schedule until kept, kept when the user asked for a schedule', () => {
   const f = fixture();
   const plan = {

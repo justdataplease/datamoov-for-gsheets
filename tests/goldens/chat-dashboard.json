@@ -1,0 +1,35 @@
+{
+ "one chat turn builds every data tab, the scorecards, the charts and their tables in one atomic write": [
+  {
+   "data: Google Ads Data": "99f66cedb438a8aa",
+   "data: Facebook Ads Data": "1ff130249cf1147b",
+   "data: Ad groups Data": "e0367b6d0350367b",
+   "charts: Paid media Dashboard (chart data)": "80a00b3e1f28078e",
+   "page: Paid media Dashboard": "13eefb9679bd2962"
+  }
+ ],
+ "save_dashboard offers compare lists, highlight rules and polarity, and run_dashboard returns highlights": [
+  {
+   "data: Google Ads Data": "99f66cedb438a8aa",
+   "data: Facebook Ads Data": "1ff130249cf1147b",
+   "data: Ad groups Data": "e0367b6d0350367b",
+   "data: Google Ads Previous Data": "f66119ac4707df7c",
+   "charts: Paid media Dashboard (chart data)": "80a00b3e1f28078e",
+   "page: Paid media Dashboard": "0bd486122df6af79"
+  }
+ ],
+ "an eight-dataset plan with wide field lists fits one private record and refreshes in one batch": [
+  {
+   "data: Data 0": "d01a52559ab538e7",
+   "data: Data 1": "ce4c3eb82664abaa",
+   "data: Data 2": "3f9de36dc8f5e18d",
+   "data: Data 3": "e34bd4d2dd79ee8a",
+   "data: Data 4": "8d194a78559613bb",
+   "data: Data 5": "3182b3ba2ef42e8a",
+   "data: Data 6": "613ff243ee2f1aa0",
+   "data: Data 7": "46410862c57ba2f8",
+   "charts: Wide Dashboard (chart data)": "b6b3be3982aca2cc",
+   "page: Wide Dashboard": "238594138a5b5833"
+  }
+ ]
+}

@@ -611,6 +611,14 @@ function dmvChatCombine_(session, input, minimum) {
     labels = Object.create(null);
   var money = false,
     shape = null;
+  var tooLarge = function (cells) {
+    if (cells > DMV_LIMITS.maxCells)
+      throw new Error(
+        'Combined results exceed ' +
+          DMV_LIMITS.maxCells.toLocaleString() +
+          ' cells. Narrow each report first.'
+      );
+  };
   sources.forEach(function (item) {
     if (!item || typeof item !== 'object')
       throw new Error('Each source needs resultId, label and columns.');
@@ -671,12 +679,8 @@ function dmvChatCombine_(session, input, minimum) {
           })[0].additive = false;
       });
     }
-    if (rows.length + result.rows.length > DMV_LIMITS.maxRows)
-      throw new Error(
-        'Combined results exceed ' +
-          DMV_LIMITS.maxRows.toLocaleString() +
-          ' rows. Narrow each report first.'
-      );
+    // A row holds the source and every mapped column, and perhaps a currency added below.
+    tooLarge((rows.length + result.rows.length) * (mapping.length + 1));
     result.rows.forEach(function (original) {
       var row = { source: label };
       mapping.forEach(function (entry) {
@@ -732,9 +736,11 @@ function dmvChatCombine_(session, input, minimum) {
     }),
   };
   if (money) metadata.currencyColumn = 'currency';
+  tooLarge(rows.length * columns.length);
+  // The cell budget, not a row count, bounds a combined result.
   var normalized = dmvNormalizeResult_(
     { columns: columns, rows: rows, metadata: metadata },
-    DMV_LIMITS.maxRows
+    rows.length
   );
   var stored = {
     columns: normalized.columns,
@@ -966,8 +972,6 @@ function dmvChatSummarize_(session, input) {
         }),
       };
       order.push(id);
-      if (order.length > DMV_CHAT_RESULTS.maxSummaryRows)
-        throw new Error('Too many groups. Add filters or fewer groupBy columns.');
     }
     group.count++;
     metrics.forEach(function (metric, index) {
@@ -1304,7 +1308,7 @@ function dmvChatWriteSheet_(session, input) {
   var cell = dmvCell_(input.startCell || 'A1');
   var normalized = dmvNormalizeResult_(
     { columns: result.columns, rows: result.rows, metadata: { complete: true } },
-    DMV_LIMITS.maxRows
+    DMV_LIMITS.reportRows
   );
   var report = {
     id: 'chat-' + dmvOutputDigest_(sheetName + '!' + cell.a1).slice(0, 16),

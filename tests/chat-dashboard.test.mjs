@@ -194,7 +194,7 @@ function rowsOf(f, name) {
   const out = [];
   for (let r = 1; r <= sheet.getLastRow(); r++) {
     const row = [];
-    for (let c = 1; c <= 12; c++) row.push(f.value(sheet, r, c));
+    for (let c = 1; c <= 12; c++) row.push(f.shown(sheet, r, c));
     while (row.length && row[row.length - 1] === '') row.pop();
     out.push(row);
   }
@@ -209,7 +209,7 @@ function pageOf(f, name) {
   const out = [];
   for (let r = 1; r <= sheet.getLastRow(); r++) {
     const row = [];
-    for (let c = 1; c <= sheet.maxColumns; c++) if (f.value(sheet, r, c) !== '') row.push(f.value(sheet, r, c));
+    for (let c = 1; c <= sheet.maxColumns; c++) if (f.shown(sheet, r, c) !== '') row.push(f.shown(sheet, r, c));
     out.push(row);
   }
   return out;
@@ -231,7 +231,7 @@ function assertInCard(f, sheet, chart) {
   const position = chart.position.overlayPosition,
     anchor = position.anchorCell;
   assert.equal(anchor.sheetId, sheet.getSheetId());
-  assert.equal(f.value(sheet, anchor.rowIndex, anchor.columnIndex + 1), chart.spec.altText, 'the card title is right above its chart');
+  assert.equal(f.shown(sheet, anchor.rowIndex, anchor.columnIndex + 1), chart.spec.altText, 'the card title is right above its chart');
   assert.ok(position.offsetXPixels >= 8 && position.offsetYPixels >= 0);
   assert.ok(position.offsetYPixels + position.heightPixels <= f.pixelSize(sheet, 'ROWS', anchor.rowIndex + 1));
 }

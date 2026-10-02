@@ -388,10 +388,10 @@ test('a dashboard plan with formulas saves and runs in one chat turn', () => {
   const lines = [];
   for (let r = 1; r <= sheet.getLastRow(); r++) {
     const line = [];
-    for (let c = 1; c <= sheet.maxColumns; c++) if (f.value(sheet, r, c) !== '') line.push(f.value(sheet, r, c));
+    for (let c = 1; c <= sheet.maxColumns; c++) if (f.shown(sheet, r, c) !== '') line.push(f.shown(sheet, r, c));
     lines.push(line);
   }
-  assert.deepEqual(lines.find((line) => line[0] === 'Total'), ['Total', 2380, 5320, precise(7700 / 1.05 / 2380)]);
+  assert.deepEqual(lines.find((line) => line[0] === 'Total'), ['Total', 2380, 5320, 7700 / 1.05 / 2380]);
   // The refused save is marked recovered by the saved one, and the plan keeps its formulas.
   assert.deepEqual(reply.events.map((event) => event.kind), ['error', 'dashboard', 'report', 'report', 'dashboard']);
   assert.equal(reply.events[0].recovered, true);

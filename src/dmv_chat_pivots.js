@@ -962,7 +962,9 @@ function dmvChatPivotTools_() {
     {
       name: 'create_pivot',
       description:
-        'Create a real native Google Sheets pivot in a NEW tab (or at targetCell of an existing tab, over empty cells), linked to an explicit source range including its header. At most 30,000 data rows and 80 source columns. Source cells are not changed. Choose 1 to 6 row groups, 0 to 6 column groups and 1 to 8 value aggregations, optionally shown as a percent of a total; optional filters, per-group sort and totals; no formulas. For money include and group by a currency-code column; totals and percentages that would add up different currencies are left out or refused. Native date buckets need actual date cells. Empty future rows within the existing source grid may be included.',
+        'Create a real native Google Sheets pivot in a NEW tab (or at targetCell of an existing tab, over empty cells), linked to an explicit source range including its header. At most ' +
+        DMV_LIMITS.maxRows.toLocaleString() +
+        ' data rows and 80 source columns. Source cells are not changed. Choose 1 to 6 row groups, 0 to 6 column groups and 1 to 8 value aggregations, optionally shown as a percent of a total; optional filters, per-group sort and totals; no formulas. For money include and group by a currency-code column; totals and percentages that would add up different currencies are left out or refused. Native date buckets need actual date cells. Empty future rows within the existing source grid may be included.',
       input_schema: {
         type: 'object',
         properties: {
