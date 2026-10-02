@@ -674,13 +674,23 @@ function installPreview(initial) {
     },
     dmvPreviewReport(report) {
       const columns = sampleColumns(report);
+      // A recording supplies its own rows, keyed by column label; other columns stay samples.
+      const given = window.DATAMOOV_PREVIEW_REPORT_ROWS;
       return {
         columns,
-        rows: Array.from({ length: 8 }, (_, index) =>
-          Object.fromEntries(columns.map((field) => [field.key, sampleValue(field, index)]))
+        rows: Array.from({ length: given ? given.length : 8 }, (_, index) =>
+          Object.fromEntries(
+            columns.map((field) => [
+              field.key,
+              given && field.label in given[index]
+                ? given[index][field.label]
+                : sampleValue(field, index),
+            ])
+          )
         ),
-        totalRows: 8,
-        metadata: {
+        totalRows: given ? given.length : 8,
+        // Supplied rows come with their own metadata (their currency, no sample-data warning).
+        metadata: window.DATAMOOV_PREVIEW_REPORT_META || {
           currency: 'EUR',
           timezone: 'Europe/Athens',
           warnings: [
@@ -1202,11 +1212,12 @@ function installPreview(initial) {
         return result;
       }
       report.lastRun = new Date().toISOString();
-      report.lastRowCount = 8;
+      // A recording names the rows its sheet shows; the stub otherwise reports 8.
+      report.lastRowCount = window.DATAMOOV_PREVIEW_RUN_ROWS || 8;
       report.status = 'success';
       delete report.lastError;
       delete report.fetchedRowCount;
-      return { ok: true, rowCount: 8, updatedAt: report.lastRun };
+      return { ok: true, rowCount: report.lastRowCount, updatedAt: report.lastRun };
     },
   };
   function runner(success, failure) {

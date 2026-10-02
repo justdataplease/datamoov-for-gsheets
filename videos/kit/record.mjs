@@ -255,7 +255,39 @@ function director({ page, stageCall, sidebarFrame, format, renderDir, slug }) {
     },
     async click(selector) {
       await pointAt(selector, true);
-      await side.locator(selector).first().click();
+      // The camera may frame only part of the app, leaving the element outside the page viewport,
+      // where Playwright will not click; the element's own click is the same user action.
+      await side
+        .locator(selector)
+        .first()
+        .evaluate((element) => element.click());
+    },
+    async select(selector, value) {
+      await pointAt(selector, true);
+      await side.locator(selector).first().selectOption(value);
+    },
+    async fill(selector, text, cps = 30) {
+      await pointAt(selector, true);
+      const field = side.locator(selector).first();
+      await field.fill('');
+      await field.pressSequentially(String(text), { delay: 1000 / cps });
+    },
+    // Hands the sidebar preview a value, e.g. DATAMOOV_PREVIEW_REPORT_ROWS for the builder.
+    async sidebarSet(name, value) {
+      await sidebarFrame().evaluate(([key, data]) => (window[key] = data), [name, value]);
+    },
+    // Frames the sidebar around one element, `h` world pixels tall, so a long form stays readable.
+    async lookAt(selector, { h = 520, ms = 1000 } = {}) {
+      const box = await side.locator(selector).first().boundingBox();
+      if (!box) throw new Error('Not visible: ' + selector);
+      const at = await stageCall('toWorld', box.x + box.width / 2, box.y + box.height / 2);
+      const r = await stageCall('rect', 'sidebar');
+      await stageCall('look', { x: r.x - 16, y: at.y - h / 2, w: r.w + 32, h }, ms, format.reserve);
+    },
+    // Scrolls a sidebar element into view inside the panel.
+    async scrollTo(selector) {
+      await side.locator(selector).first().scrollIntoViewIfNeeded();
+      await wait(450);
     },
     async type(selector, text, { cps = 32, paste = '' } = {}) {
       await pointAt(selector, true);
@@ -405,10 +437,14 @@ async function recordOne({
     })();
 
     const d = director({ page, stageCall, sidebarFrame, format, renderDir, slug });
-    await storyboard.default(d);
-    await scanFrames(page, guard);
-    scanning = false;
-    await scanner;
+    // A failing storyboard must stop the scan loop too, or the process never exits.
+    try {
+      await storyboard.default(d);
+      await scanFrames(page, guard);
+    } finally {
+      scanning = false;
+      await scanner;
+    }
     const end = Date.now() / 1000;
     await cdp.send('Page.stopScreencast');
     await Promise.all(writes);
@@ -476,7 +512,7 @@ async function recordOne({
       '-i',
       base + '.mp4',
       '-vf',
-      `fps=1/2,scale=${formatName === 'landscape' ? 384 : 270}:-1,tile=6x5:padding=6:color=0x222222`,
+      `fps=1/2,scale=${formatName === 'landscape' ? 384 : 270}:-1,tile=6x${Math.ceil((end - frames[0].at) / 12)}:padding=6:color=0x222222`,
       '-frames:v',
       '1',
       base + '-contact.png',
@@ -497,6 +533,9 @@ function defaultSetup(data) {
   const ads = data.connections.find((item) => item.connectorId === 'google_ads');
   const ga4 = data.connections.find((item) => item.connectorId === 'ga4');
   const named = (base, id, label) => ({ ...base, id, label, values: {} });
+  // A new report opens on the first source; Google Ads first keeps BigQuery's byte-limit default
+  // (a long number) off screen.
+  data.catalog.sort((a, b) => (b.id === 'google_ads') - (a.id === 'google_ads'));
   data.connections = [
     named(ads, 'demo-store-us', 'Demo Store US'),
     named(ads, 'demo-store-eu', 'Demo Store EU'),
@@ -554,6 +593,27 @@ async function main() {
     if (run.status !== 0) throw new Error('Dashboard render failed:\n' + run.stderr + run.stdout);
     const html = readFileSync(path.join(renderDir, 'dashboard', 'dashboard.html'), 'utf8');
     guard.check(html.replace(/<[^>]+>/g, ' '), 'dashboard render');
+  }
+  // A report scene draws the tab a real report run writes: { type, tab } of the fixture's reports.
+  if (storyboard.report) {
+    const run = spawnSync(
+      process.execPath,
+      [
+        path.join(root, 'tools/dashboard-preview.mjs'),
+        '--report',
+        storyboard.report.type,
+        '--tab',
+        storyboard.report.tab,
+        '--fixture',
+        path.resolve(videoDir, storyboard.report.fixture || '../kit/demo-fixture.mjs'),
+        '--out',
+        path.join(renderDir, 'dashboard'),
+      ],
+      { cwd: root, encoding: 'utf8' }
+    );
+    if (run.status !== 0) throw new Error('Report render failed:\n' + run.stderr + run.stdout);
+    const html = readFileSync(path.join(renderDir, 'dashboard', 'report.html'), 'utf8');
+    guard.check(html.replace(/<[^>]+>/g, ' '), 'report render');
   }
 
   const stage = await serve(STAGE_PORT, staticFrom({ kit, render: path.join(kit, '.render') }));

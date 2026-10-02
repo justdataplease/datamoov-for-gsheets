@@ -1887,6 +1887,53 @@ const slug = (text) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
 
+// --report <type>: a report built by hand in the sidebar, saved with a daily refresh and run once,
+// drawn as the tab the writer fills (report.html). Ranked reports keep their top 300.
+async function previewReport(reportType, sourceRoot, args) {
+  const fields = REPORT_FIELDS[reportType];
+  if (!fields) throw new Error('--report takes ' + Object.keys(REPORT_FIELDS).join(', '));
+  const sandbox = path.join(sourceRoot, 'tests', 'helpers', 'datamoov-sandbox.mjs');
+  const { createDatamoovSandbox } = await import(pathToFileURL(sandbox).href);
+  const f = createDatamoovSandbox();
+  f.book.timezone = 'America/Los_Angeles';
+  f.advance(Date.parse('2026-10-01T10:29:00Z') - f.api.Date.now());
+  const [connection] = registerFixture(f);
+  const before = f.book.sheets.map((sheet) => ({
+    id: sheet.id,
+    title: sheet.name,
+    rows: sheet.maxRows,
+    columns: sheet.maxColumns,
+  }));
+  const ranked = reportType === 'keyword' || reportType === 'ad_asset';
+  const saved = plain(
+    f.api.dmvSaveReport({
+      name: LABELS[0] + ' ' + reportType.replace('_', ' '),
+      connectorId: 'google_ads_fixture',
+      connectionId: connection.id,
+      reportType,
+      fields: fields.map((item) => item.key),
+      config: ranked ? { top: 300 } : {},
+      dateRange: { preset: 'lastMonth' },
+      target: {
+        sheetName: args.includes('--tab') ? args[args.indexOf('--tab') + 1] : 'Report',
+        startCell: 'A1',
+      },
+      maxRows: 1000,
+      schedule: 'daily',
+      at: { hour: 7 },
+    })
+  );
+  const result = plain(f.api.dmvRunReport(saved.id));
+  const model = replay(f.state.batches, before);
+  const sheet = [...model.sheets.values()].find(
+    (item) => item.props.title === saved.target.sheetName
+  );
+  await mkdir(outDir, { recursive: true });
+  const html = path.join(outDir, 'report.html');
+  await writeFile(html, renderSheet(sheet, model, { maxRows: DATA_TAB_ROWS }));
+  console.log(`${saved.name}: ${result.rowCount} rows into ${saved.target.sheetName}  ${html}`);
+}
+
 // A fixture module exports any of these; what it leaves out keeps the built-in value.
 function useFixture(fixture) {
   ({
@@ -1918,6 +1965,10 @@ async function main() {
     const fixturePath = path.resolve(args[args.indexOf('--fixture') + 1]);
     useFixture(await import(pathToFileURL(fixturePath).href));
     console.log('Fixture from ' + fixturePath);
+  }
+  if (args.includes('--report')) {
+    await previewReport(args[args.indexOf('--report') + 1], sourceRoot, args);
+    return;
   }
   const run = await buildDashboard({ tier, refresh: args.includes('--refresh'), sourceRoot });
   for (const attempt of run.attempts)

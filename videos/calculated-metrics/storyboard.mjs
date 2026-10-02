@@ -40,7 +40,7 @@ export default async function (d) {
 
   /* ---- The ask ---- */
   await d.look('app', 0);
-  await d.side.locator('#tab-chat').click();
+  await d.click('#tab-chat');
   await d.say('Ask for the numbers you actually track');
   await d.look('chat', 1200);
   await d.chatScript(
