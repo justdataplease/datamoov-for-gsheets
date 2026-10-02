@@ -349,15 +349,19 @@ test('an array result is checked for room before writing and its cells are kept 
     /the result fills B2:D3, but 2 cells there hold data \(D2, C3\)/
   );
   assert.throws(
-    () => f.edit([['={1,2,3}']], 'Y1'),
-    /^Error: Y1: the result fills 1 rows × 3 columns from Y1, past the end of the tab \(1000 rows × 26 columns\)\./
-  );
-  assert.throws(
     () => f.edit([['=SEQUENCE(3)'], ['=1']], 'F1:F2'),
     /^Error: F1: the result fills F1:F3, which overlaps other cells this edit writes\./
   );
   assert.throws(() => f.edit([["=TRANSPOSE('Campaign Data'!A1:A3)", '=1']], 'E1:F1'), /fills E1:G1/);
   assert.equal(f.state.batches.length, 0);
+  // Past the end of the tab: the edit adds the columns the result needs first.
+  assert.equal(f.edit([['={1,2,3}']], 'Y1').ok, true);
+  assert.deepEqual(f.state.batches.at(-1).body.requests[0], {
+    appendDimension: { sheetId: f.work.id, dimension: 'COLUMNS', length: 1 },
+  });
+  assert.equal(f.work.maxColumns, 27);
+  assert.equal(plain(f.api.dmvChatUndoSheetEdit_(f.session, { action: 'undo' })).ok, true);
+  assert.equal(f.formula(f.work, 1, 25), '');
   // Room below: written, and undo restores the cells the result filled as they were.
   f.setMeta(f.work, 12, 7, { note: 'kept note' });
   const result = f.edit([['=SEQUENCE(3,2)']], 'F10');
@@ -372,6 +376,14 @@ test('an array result is checked for room before writing and its cells are kept 
   assert.deepEqual(f.meta(f.work, 12, 7), { note: 'kept note' });
   // A result of unknown size is left to Sheets, which never spills over data.
   assert.equal(f.edit([['=FILTER(A1:A10,A1:A10>0)']], 'B3').ok, true);
+  // A result too big to guard is left to Sheets too, and never grows the tab.
+  const batches = f.state.batches.length;
+  assert.equal(f.edit([['=SEQUENCE(60000)']], 'A1').ok, true);
+  assert.equal(
+    f.state.batches.slice(batches).some((batch) => batch.body.requests.some((request) => request.appendDimension)),
+    false
+  );
+  assert.equal(f.work.maxRows, 1000);
 });
 
 test('an array result may not spill onto report output', () => {

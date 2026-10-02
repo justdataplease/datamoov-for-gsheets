@@ -283,6 +283,11 @@ const MORE_REQUESTS = ['copyPaste', 'cutPaste', 'insertDimension', 'deleteDimens
 
 const ERROR_TEXT = { ERROR: '#ERROR!', NULL_VALUE: '#NULL!', DIVIDE_BY_ZERO: '#DIV/0!', VALUE: '#VALUE!', REF: '#REF!', NAME: '#NAME?', NUM: '#NUM!', N_A: '#N/A', LOADING: 'Loading...' };
 
+// settings.gridData answers spreadsheets.get like the API (see apiGet). settings.formulaResult
+// stands in for Sheets' calculation: given a formula updateCells wrote and { sheet, row, column }
+// (1-based), it returns the formula's value, or the rows of an array result, which spill into
+// empty cells as values without an entered value (blocked or past the grid, the formula shows
+// #REF!, as in Sheets); undefined leaves the formula text as its value.
 export function createDatamoovSandbox(settings = {}) {
   let now = Date.parse('2026-09-18T12:00:00Z');
   let serial = 0, sheetSerial = 10;
@@ -308,6 +313,8 @@ export function createDatamoovSandbox(settings = {}) {
   const state = {
     user, script, document, cache, books: new Map(), opened: [], batches: [], legacyWrites: [], clears: [],
     flushes: 0, lockAcquires: 0, lockReleases: 0, lockAvailable: true, triggers: [],
+    // Cells the app read: getValues, getDisplayValues and getFormulas, and grid data of spreadsheets.get.
+    cellsRead: 0,
     scriptLockAcquires: 0, scriptLockReleases: 0, scriptLockAvailable: true, scriptLockWaits: [],
     createdTriggers: [], deletedTriggers: [], http: [], responses: [], sleeps: [], charts: [], gets: [],
     failBatch: false, failTrigger: false, failProperty: null,
@@ -327,14 +334,15 @@ export function createDatamoovSandbox(settings = {}) {
   }
   function range(sheet, row, column, rows = 1, columns = 1) {
     if (row < 1 || column < 1 || rows < 1 || columns < 1 || row + rows - 1 > sheet.maxRows || column + columns - 1 > sheet.maxColumns) throw new Error('Range exceeds sheet grid');
+    const counted = (read) => () => { state.cellsRead += rows * columns; return read(); };
     const result = {
-      getValues: () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => cell(sheet, row + r, column + c).value)),
+      getValues: counted(() => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => cell(sheet, row + r, column + c).value))),
       // Text as the sheet shows it; a date stands in for its number format as yyyy-mm-dd.
-      getDisplayValues: () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => {
+      getDisplayValues: counted(() => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => {
         const value = cell(sheet, row + r, column + c).value;
         return value instanceof Date ? value.toISOString().slice(0, 10) : value === null || value === undefined ? '' : String(value);
-      })),
-      getFormulas: () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => cell(sheet, row + r, column + c).formula)),
+      }))),
+      getFormulas: counted(() => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => cell(sheet, row + r, column + c).formula))),
       getSheet: () => sheet,
       getNumRows: () => rows,
       getNumColumns: () => columns,
@@ -533,10 +541,34 @@ export function createDatamoovSandbox(settings = {}) {
       return { sheet, cells: sheet.cells, startRow, startColumn, endRow, endColumn };
     };
     const put = (cells, row, column, input) => {
+      const key = address(row + 1, column + 1);
+      // A replaced formula takes the rest of its array result with it.
+      if (cells.get(key)?.formula) for (const [other, entry] of cells) if (entry.spilledFrom === key) cells.delete(other);
       const entry = input?.userEnteredValue;
       if (!entry || !Object.keys(entry).length) { cells.delete(address(row + 1, column + 1)); return; }
       if (Object.hasOwn(entry, 'formulaValue')) cells.set(address(row + 1, column + 1), { value: entry.formulaValue, formula: entry.formulaValue });
       else cells.set(address(row + 1, column + 1), { value: entry.stringValue ?? entry.numberValue ?? entry.boolValue ?? '', formula: '' });
+    };
+    // settings.formulaResult for a formula just written (0-based row and column).
+    const calculate = (target, row, column) => {
+      const key = address(row + 1, column + 1), entry = target.cells.get(key);
+      if (!entry?.formula || !settings.formulaResult) return;
+      const result = settings.formulaResult(entry.formula, { sheet: target.sheet.name, row: row + 1, column: column + 1 });
+      if (result === undefined || result === null) return;
+      const lines = Array.isArray(result) ? result : [[result]];
+      const blocked = (r, c) => (r || c) && lines[r][c] !== '' && target.cells.has(address(row + r + 1, column + c + 1));
+      if (row + lines.length > target.sheet.maxRows || column + Math.max(...lines.map((line) => line.length)) > target.sheet.maxColumns) {
+        target.cells.set(key, { ...entry, value: '#REF!', error: { type: 'REF', message: 'Result was not automatically expanded, please insert more rows.' } });
+        return;
+      }
+      if (lines.some((line, r) => line.some((_, c) => blocked(r, c)))) {
+        target.cells.set(key, { ...entry, value: '#REF!', error: { type: 'REF', message: 'Array result was not expanded because it would overwrite data.' } });
+        return;
+      }
+      target.cells.set(key, { ...entry, value: lines[0][0] });
+      lines.forEach((line, r) => line.forEach((value, c) => {
+        if ((r || c) && value !== '') target.cells.set(address(row + r + 1, column + c + 1), { value, formula: '', spilledFrom: key });
+      }));
     };
 
     // Requests of the analyst sheet tools. A failure names the request the way the API does
@@ -1265,6 +1297,7 @@ export function createDatamoovSandbox(settings = {}) {
             put(target.cells, r, c, update.rows?.[r - target.startRow]?.values?.[c - target.startColumn]);
             eraseChips(target.sheet, r, c);
           }
+          for (let r = target.startRow; r < target.endRow; r++) for (let c = target.startColumn; c < target.endColumn; c++) calculate(target, r, c);
         }
         const paths = formatPaths(update.fields), rows = paths.length ? plain(update.rows || []) : [];
         if (paths.length)
@@ -1342,6 +1375,9 @@ export function createDatamoovSandbox(settings = {}) {
         if (append.dimension === 'ROWS') sheet.maxRows += append.length;
         else if (append.dimension === 'COLUMNS') sheet.maxColumns += append.length;
         else throw new Error('Invalid appended dimension');
+      } else if (request.setBasicFilter) {
+        const filter = request.setBasicFilter.filter;
+        findSheet(filter.range.sheetId).filter = plain(filter);
       } else if (request.updateSheetProperties) {
         const props = request.updateSheetProperties.properties, sheet = findSheet(props.sheetId);
         if (props.title !== undefined) {
@@ -1456,7 +1492,8 @@ export function createDatamoovSandbox(settings = {}) {
     const key = address(row + 1, column + 1), entry = sheet.cells.get(key), format = sheet.formats.get(key), data = {};
     if (entry && (entry.formula || entry.error || (entry.value !== '' && entry.value !== null && entry.value !== undefined))) {
       const error = entry.error ? { errorValue: { type: entry.error.type, message: entry.error.message } } : null;
-      data.userEnteredValue = entry.formula ? { formulaValue: entry.formula } : error || typedValue(entry.value, timezone);
+      // A cell an array result filled has a value but nothing entered.
+      if (!entry.spilledFrom) data.userEnteredValue = entry.formula ? { formulaValue: entry.formula } : error || typedValue(entry.value, timezone);
       if (error || entry.value !== '') {
         data.effectiveValue = error || typedValue(entry.value, timezone);
         data.formattedValue = error ? ERROR_TEXT[entry.error.type] : typeof entry.value === 'boolean' ? (entry.value ? 'TRUE' : 'FALSE')
@@ -1502,6 +1539,8 @@ export function createDatamoovSandbox(settings = {}) {
         charts: state.charts.filter((chart) => chart.spreadsheetId === book.id && (chart.position?.overlayPosition?.anchorCell?.sheetId ?? 0) === sheet.id)
           .map(({ spreadsheetId: _, ...chart }) => chart),
       };
+      if (wantsData) for (const area of areas.length ? areas.filter((item) => item.sheet === sheet) : [{ endRow: sheet.maxRows, endColumn: sheet.maxColumns }])
+        state.cellsRead += (area.endRow - (area.startRow || 0)) * (area.endColumn - (area.startColumn || 0));
       if (wantsData) entry.data = (areas.length ? areas.filter((area) => area.sheet === sheet) : [{ sheet, startRow: 0, endRow: sheet.maxRows, startColumn: 0, endColumn: sheet.maxColumns }])
         .map((area) => ({
           startRow: area.startRow, startColumn: area.startColumn,

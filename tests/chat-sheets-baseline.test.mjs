@@ -357,7 +357,7 @@ test('baseline: inspect_sheet ranges are explicit, same-tab and at most 1,000 ce
   const f = fixture();
   const shape = /^Error: Use an explicit same-tab A1 range, such as B2 or A1:F20\.$/;
   const caps = /^Error: Inspect or edit at most 1,000 cells, 200 rows and 30 columns at a time\.$/;
-  for (const range of ['Output!A1', 'A:A', 'A1:B', '1:2', 'A0', '', 'A1:B2:C3', 'NamedRange'])
+  for (const range of ['Other!A1', 'A:A', 'A1:B', '1:2', 'A0', '', 'A1:B2:C3', 'NamedRange'])
     assert.throws(() => f.inspect(range), shape, range);
   for (const range of ['A1:AE1', 'A1:A201', 'A1:Z39', 'B2:A1', 'A2:A1'])
     assert.throws(() => f.inspect(range), caps, range);
@@ -460,7 +460,8 @@ test('baseline: set_values sends one exact updateCells request, keeps text liter
 test('baseline: set_values refuses wrong shapes, non-literals and oversized edits before any write', () => {
   const f = fixture();
   const inspected = f.inspect('A1:B2');
-  const shape = /^Error: The cell matrix must match the inspected range exactly\.$/;
+  const shape =
+    /^Error: The cell matrix must match the inspected range exactly: A1:B2 is 2 rows × 2 columns\.$/;
   for (const values of [
     [[1, 2]],
     [[1], [2]],
@@ -581,9 +582,9 @@ test('baseline: every edit needs a matching, fresh, unchanged inspection and the
     'format',
     'sort',
     'filter',
-    'freeze',
     'rename_sheet',
   ]) {
+    // freeze is a tab action (chat-sheet-dashboard-flow), like create_sheet.
     assert.throws(
       () => f.api.dmvChatEditSheet_(f.session, { action, sheetName: 'Output', range: 'A1' }),
       missing,
@@ -782,11 +783,7 @@ test('baseline: set_formulas refuses external, custom and indirect functions and
     '=SUM(INDIRECT("A1:A2"))',
     '=IF(TRUE,IMPORTDATA("https://example.com"),0)',
     '=MYCUSTOMFUNCTION(A1)',
-    'SUM(A1:A2)',
     ' =SUM(A1:A2)',
-    '',
-    42,
-    null,
   ]) {
     assert.throws(
       () => f.edit('set_formulas', { formulas: [[formula]] }, f.inspect('D1')),
@@ -798,7 +795,18 @@ test('baseline: set_formulas refuses external, custom and indirect functions and
   assert.equal(f.sheet.cells.size, 0);
   assert.throws(
     () => f.edit('set_formulas', { formulas: [['=1', '=2']] }, f.inspect('D1')),
-    /^Error: The cell matrix must match the inspected range exactly\.$/
+    /^Error: The cell matrix must match the inspected range exactly: D1 is 1 rows × 1 columns\.$/
+  );
+  // Lifted for KPI blocks: cells without = are literal labels, numbers and blanks.
+  f.edit('set_formulas', { formulas: [['SUM(A1:A2)', '', 42, null]] }, f.inspect('D1:G1'));
+  assert.deepEqual(
+    [4, 5, 6, 7].map((column) => [f.value(f.sheet, 1, column), f.formula(f.sheet, 1, column)]),
+    [
+      ['SUM(A1:A2)', ''],
+      ['', ''],
+      [42, ''],
+      ['', ''],
+    ]
   );
 });
 
@@ -1160,7 +1168,8 @@ test('baseline: freeze sends one exact updateSheetProperties within the grid', (
       },
     ],
   });
-  assertIncludes(result, { ok: true, action: 'freeze', sheetName: 'Output', range: 'A1:B3' });
+  // A tab action: the inspection's range is left out.
+  assertIncludes(result, { ok: true, action: 'freeze', sheetName: 'Output', range: null });
   assert.equal(f.sheet.frozenRows, 1);
   assert.equal(f.sheet.frozenColumns, 2);
   f.edit('freeze', { frozenRows: 0 });
@@ -1214,7 +1223,7 @@ test('baseline: create_sheet sends one exact addSheet, needs no inspection and m
     action: 'create_sheet',
     sheetName: '  Analysis  ',
     url: url(tab.id, 'A1'),
-    range: null,
+    range: 'A1:Z38',
   });
   const event = plain(f.session.events.at(-1));
   assertIncludes(event, {
@@ -1241,8 +1250,9 @@ test('baseline: create_sheet sends one exact addSheet, needs no inspection and m
     [{ newName: 'a/b' }, /^Error: The output tab name contains unsupported characters\.$/],
     [{ newName: '' }, /^Error: Output tab is required\.$/],
     [{ newName: 'x'.repeat(101) }, /^Error: Output tab is too long\.$/],
+    // sheetName, range and editToken are left out (chat-sheet-dashboard-flow); others refused.
     [
-      { newName: 'Fine', sheetName: 'Output' },
+      { newName: 'Fine', values: [['x']] },
       /^Error: Use only the documented fields for this sheet action\.$/,
     ],
   ])
@@ -2210,12 +2220,13 @@ test('baseline: the sheet tools run through the chat tool runner with JSON resul
   });
   assert.equal(failed.isError, true);
   assert.deepEqual(JSON.parse(failed.content), {
-    error: 'The cell matrix must match the inspected range exactly.',
+    error: 'The cell matrix must match the inspected range exactly: A1 is 1 rows × 1 columns.',
+    next: 'Nothing changed, and the editToken still holds for Output!A1: correct the call and repeat it with that token.',
   });
   assert.deepEqual(plain(f.session.events.at(-1)), {
     kind: 'error',
     tool: 'edit_sheet',
-    text: 'edit_sheet: The cell matrix must match the inspected range exactly.',
+    text: 'edit_sheet: The cell matrix must match the inspected range exactly: A1 is 1 rows × 1 columns.',
   });
   const done = f.api.dmvChatRunTool_(f.session, tools, {
     name: 'edit_sheet',

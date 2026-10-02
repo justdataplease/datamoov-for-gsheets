@@ -7,10 +7,11 @@
    named functions) is refused by name, and a LET or LAMBDA name is never called: NAME(...) on
    one could reach a custom function of that name. Text inside string literals is data: a QUERY
    string that says IMPORTRANGE is not a call. When the size of a formula's result can be worked
-   out from the formula alone (an array literal, a bounded range, SEQUENCE or MAKEARRAY with
-   literal sizes, TRANSPOSE or ARRAYFORMULA over those), its spill area is guarded, kept for undo
-   and refused when it holds data; other array results are left to Sheets, which never spills
-   over data and shows #REF! instead, and the read-back reports it.
+   out from the formula alone (a bounded range, SEQUENCE or MAKEARRAY with literal sizes,
+   TRANSPOSE or ARRAYFORMULA over those, array literals of them side by side or stacked), its
+   spill area is guarded, kept for undo, refused when it holds data and added to the tab when it
+   runs past its end; other array results are left to Sheets, which never spills over data and
+   shows #REF! instead, and the read-back reports it.
 
    dmvChatSheetFormulaCheck_(session, formula, options) is the same policy for one formula, for
    other formulas chat writes, such as custom conditional-format rules: it throws a message
@@ -185,6 +186,33 @@ function dmvChatFormulaTokens_(formula, fail) {
   return tokens;
 }
 
+// A ) or } that closes the other kind of bracket names the call or bracket still open, so a
+// dropped ) in a long nested formula is found at once. Other bracket errors are the parser's.
+function dmvChatFormulaBrackets_(tokens, fail) {
+  var open = [];
+  tokens.forEach(function (token, index) {
+    if (token.type !== 'op') return;
+    if (token.text === '(' || token.text === '{') open.push(index);
+    else if ((token.text === ')' || token.text === '}') && open.length) {
+      var at = open.pop(),
+        opener = tokens[at];
+      if ((opener.text === '(') === (token.text === ')')) return;
+      var call = opener.text === '(' && at > 0 && tokens[at - 1].type === 'function';
+      fail(
+        (call ? tokens[at - 1].text + '(' : '"' + opener.text + '"') +
+          ' from character ' +
+          ((call ? tokens[at - 1].at : opener.at) + 1) +
+          ' is still open at this "' +
+          token.text +
+          '": a "' +
+          (opener.text === '(' ? ')' : '}') +
+          '" is missing',
+        token.at
+      );
+    }
+  });
+}
+
 function dmvChatFormulaReference_(match, at, fail) {
   var token = { type: 'ref', text: match[0], at: at, sheet: null, shape: null };
   if (match[1])
@@ -225,6 +253,7 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
     fail('a formula can be at most ' + DMV_FORMULA.maxLength + ' characters');
   var tokens = dmvChatFormulaTokens_(formula, fail);
   if (!tokens.length) fail('the formula is empty');
+  dmvChatFormulaBrackets_(tokens, fail);
   var index = 0,
     depth = 0,
     used = { functions: [], names: [], tabs: [] };
@@ -367,15 +396,14 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
     if (token.table) deny({ text: token.table, at: token.at });
     return token.shape;
   }
+  // Values side by side (,) share a height and rows (;) a width, as Sheets stacks them, such as
+  // a header row above MAKEARRAY(1000, 9, ...).
   function array(open, scope, arrays) {
     nest(open.at);
-    var rows = [[]],
-      plain = true;
+    var rows = [[]];
     if (is(peek(), '}')) fail('an array literal needs at least one value', open.at);
     do {
-      var shape = expression(scope, arrays);
-      if (!scalar(shape)) plain = false;
-      rows[rows.length - 1].push(shape);
+      rows[rows.length - 1].push(expression(scope, arrays));
       var token = tokens[index++];
       if (is(token, ';')) rows.push([]);
       else if (is(token, '}')) break;
@@ -388,15 +416,19 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
         );
     } while (true);
     depth--;
-    var width = rows[0].length;
-    if (
-      !plain ||
-      rows.some(function (row) {
-        return row.length !== width;
-      })
-    )
-      return null;
-    return { rows: rows.length, columns: width };
+    var size = { rows: 0, columns: null };
+    for (var r = 0; r < rows.length; r++) {
+      var height = rows[r][0] && rows[r][0].rows,
+        width = 0;
+      for (var c = 0; c < rows[r].length; c++) {
+        if (!rows[r][c] || rows[r][c].rows !== height) return null;
+        width += rows[r][c].columns;
+      }
+      if (size.columns !== null && width !== size.columns) return null;
+      size.rows += height;
+      size.columns = width;
+    }
+    return size;
   }
   // Arguments: { shape, from, to } with the token range, so literal arguments can be read.
   function argumentsOf(scope, arrays) {
@@ -621,18 +653,33 @@ function dmvChatSheetFormulaTools_() {
 
 // Called by set_formulas once the matrix has the inspected shape: every formula is checked, and
 // the spill area of each exact array result is checked against the grid, the other written cells
-// and the data already there. Returns the spill cells as touches (guarded and kept for undo).
+// and the data already there. Cells not beginning with = are literal labels, numbers or blanks,
+// except text that Sheets would read as a formula. Returns the spill cells as touches (guarded and
+// kept for undo) and the requests that add the rows or columns a result needs past the tab's end.
 function dmvChatSheetFormulaPolicy_(session, sheet, area, formulas) {
   var cache = {},
     grid = area.grid,
     spills = [],
-    unknown = [];
+    unknown = [],
+    maxRows = sheet.getMaxRows(),
+    maxColumns = sheet.getMaxColumns(),
+    grow = { rows: 0, columns: 0 };
   formulas.forEach(function (line, r) {
     line.forEach(function (formula, c) {
       if ((r * area.columns + c) % 50 === 0) dmvChatSheetDeadline_(session);
       var row = grid.startRowIndex + r,
         column = grid.startColumnIndex + c,
         cell = dmvChatA1_(row + 1, column + 1);
+      if (typeof formula !== 'string' || formula.charAt(0) !== '=') {
+        if (typeof formula === 'string' && dmvChatActionFormulaLike_(formula))
+          throw new Error(
+            cell +
+              ': text starting with ' +
+              formula.trim().charAt(0) +
+              ' reads as a formula in Sheets. Begin a formula with =, or write the label another way.'
+          );
+        return;
+      }
       var shape = dmvChatSheetFormulaCheck_(session, formula, {
         sheet: sheet,
         cell: cell,
@@ -651,28 +698,22 @@ function dmvChatSheetFormulaPolicy_(session, sheet, area, formulas) {
         startColumnIndex: column,
         endColumnIndex: column + shape.columns,
       };
-      if (spill.endRowIndex > sheet.getMaxRows() || spill.endColumnIndex > sheet.getMaxColumns())
-        throw new Error(
-          cell +
-            ': the result fills ' +
-            shape.rows +
-            ' rows × ' +
-            shape.columns +
-            ' columns from ' +
-            cell +
-            ', past the end of the tab (' +
-            sheet.getMaxRows() +
-            ' rows × ' +
-            sheet.getMaxColumns() +
-            ' columns). Start it higher or add rows or columns first.'
-        );
       if (shape.rows * shape.columns > DMV_FORMULA.maxSpillCells) {
         unknown.push([row, column]);
         return;
       }
+      // Sheets shows #REF! for a result past the end of the tab, so the edit adds the rows and
+      // columns a guarded result needs first; undo leaves them, empty.
+      grow.rows = Math.max(grow.rows, spill.endRowIndex - maxRows);
+      grow.columns = Math.max(grow.columns, spill.endColumnIndex - maxColumns);
       // Results start at their own cell and grow right and down, so two of them can only meet
-      // over a cell this edit writes.
-      if (dmvChatFormulaOverlap_(spill, grid, row, column))
+      // over a cell this edit writes: a value there, or a blank another result already fills.
+      if (
+        dmvChatFormulaOverlap_(spill, grid, formulas) ||
+        spills.some(function (other) {
+          return dmvChatSheetRuleOverlap_(spill, other);
+        })
+      )
         throw new Error(
           cell +
             ': the result fills ' +
@@ -682,26 +723,30 @@ function dmvChatSheetFormulaPolicy_(session, sheet, area, formulas) {
       spills.push(spill);
     });
   });
-  // The cells each result fills besides its own: the rest of its first row, then the rows below.
+  // The cells each result fills besides its own, within the tab as it is (the rows and columns
+  // the edit adds are empty): the rest of its first row, then the rows below.
   var touches = [];
   spills.forEach(function (spill) {
-    spill.grids = [];
-    if (spill.endColumnIndex - spill.startColumnIndex > 1)
-      spill.grids.push({
+    var bottom = Math.min(spill.endRowIndex, maxRows),
+      right = Math.min(spill.endColumnIndex, maxColumns);
+    spill.grids = [
+      {
         sheetId: spill.sheetId,
         startRowIndex: spill.startRowIndex,
         endRowIndex: spill.startRowIndex + 1,
         startColumnIndex: spill.startColumnIndex + 1,
-        endColumnIndex: spill.endColumnIndex,
-      });
-    if (spill.endRowIndex - spill.startRowIndex > 1)
-      spill.grids.push({
+        endColumnIndex: right,
+      },
+      {
         sheetId: spill.sheetId,
         startRowIndex: spill.startRowIndex + 1,
-        endRowIndex: spill.endRowIndex,
+        endRowIndex: bottom,
         startColumnIndex: spill.startColumnIndex,
-        endColumnIndex: spill.endColumnIndex,
-      });
+        endColumnIndex: right,
+      },
+    ].filter(function (part) {
+      return dmvChatGridCells_(part) > 0;
+    });
     touches = touches.concat(spill.grids);
   });
   if (touches.length) {
@@ -712,8 +757,16 @@ function dmvChatSheetFormulaPolicy_(session, sheet, area, formulas) {
       spill.grids.forEach(function (part) {
         read[at++].cells.forEach(function (line, r) {
           line.forEach(function (cell, c) {
-            if (cell.userEnteredValue && Object.keys(cell.userEnteredValue).length)
-              taken.push(dmvChatA1_(part.startRowIndex + r + 1, part.startColumnIndex + c + 1));
+            var row = part.startRowIndex + r,
+              column = part.startColumnIndex + c;
+            // Cells this edit writes are blank by now (dmvChatFormulaOverlap_).
+            var written =
+              row >= grid.startRowIndex &&
+              row < grid.endRowIndex &&
+              column >= grid.startColumnIndex &&
+              column < grid.endColumnIndex;
+            if (!written && cell.userEnteredValue && Object.keys(cell.userEnteredValue).length)
+              taken.push(dmvChatA1_(row + 1, column + 1));
           });
         });
       });
@@ -734,6 +787,19 @@ function dmvChatSheetFormulaPolicy_(session, sheet, area, formulas) {
   }
   return {
     touches: touches,
+    // The appendDimension requests that make room, sent before the formulas.
+    append: [
+      ['ROWS', grow.rows],
+      ['COLUMNS', grow.columns],
+    ]
+      .filter(function (item) {
+        return item[1] > 0;
+      })
+      .map(function (item) {
+        return {
+          appendDimension: { sheetId: grid.sheetId, dimension: item[0], length: item[1] },
+        };
+      }),
     spills: spills.map(function (spill) {
       return {
         cell: spill.cell,
@@ -749,30 +815,35 @@ function dmvChatSheetFormulaPolicy_(session, sheet, area, formulas) {
       ? {
           sheetId: grid.sheetId,
           startRowIndex: grid.startRowIndex,
-          endRowIndex: Math.min(sheet.getMaxRows(), grid.endRowIndex + DMV_FORMULA.probeRows),
+          endRowIndex: Math.min(maxRows, grid.endRowIndex + DMV_FORMULA.probeRows),
           startColumnIndex: grid.startColumnIndex,
-          endColumnIndex: Math.min(
-            sheet.getMaxColumns(),
-            grid.endColumnIndex + DMV_FORMULA.probeColumns
-          ),
+          endColumnIndex: Math.min(maxColumns, grid.endColumnIndex + DMV_FORMULA.probeColumns),
         }
       : null,
   };
 }
 
-// Whether a spill overlaps another grid, apart from the formula's own cell.
-function dmvChatFormulaOverlap_(spill, other, row, column) {
+// Whether a spill covers a cell this edit fills (grid holds the cells written), apart from the
+// formula's own cell. A blank written there leaves room for the result.
+function dmvChatFormulaOverlap_(spill, grid, cells) {
   for (
-    var r = Math.max(spill.startRowIndex, other.startRowIndex);
-    r < Math.min(spill.endRowIndex, other.endRowIndex);
+    var r = Math.max(spill.startRowIndex, grid.startRowIndex);
+    r < Math.min(spill.endRowIndex, grid.endRowIndex);
     r++
   )
     for (
-      var c = Math.max(spill.startColumnIndex, other.startColumnIndex);
-      c < Math.min(spill.endColumnIndex, other.endColumnIndex);
+      var c = Math.max(spill.startColumnIndex, grid.startColumnIndex);
+      c < Math.min(spill.endColumnIndex, grid.endColumnIndex);
       c++
-    )
-      if (r !== row || c !== column) return true;
+    ) {
+      var value = cells[r - grid.startRowIndex][c - grid.startColumnIndex];
+      if (
+        (r !== spill.startRowIndex || c !== spill.startColumnIndex) &&
+        value !== '' &&
+        value !== null
+      )
+        return true;
+    }
   return false;
 }
 
@@ -931,7 +1002,7 @@ function dmvChatSheetFormulaReadBack_(session, written) {
     result.formulaErrors = errors;
     result.errorCount = errorCount;
     result.next =
-      'Some formulas returned errors. Nothing was rolled back: inspect the range again and fix them with set_formulas, or undo the edit with undo_sheet_edit.';
+      'Some formulas returned errors. Nothing was rolled back: fix them with set_formulas and the editToken returned, or undo the edit with undo_sheet_edit.';
   }
   return result;
 }

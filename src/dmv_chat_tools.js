@@ -1575,7 +1575,7 @@ function dmvChatCreateChart_(session, input) {
     var sheetName = dmvSheetName_(input.sheetName);
     var sheet = dmvChatSheetTarget_(session, sheetName);
     var match = /^([A-Z]{1,3})([1-9][0-9]{0,6}):([A-Z]{1,3})([1-9][0-9]{0,6})$/.exec(
-      String(input.range || '').toUpperCase()
+      String(dmvChatOwnTabA1_(sheet, input.range) || '').toUpperCase()
     );
     if (!match)
       throw new Error(
@@ -1585,9 +1585,10 @@ function dmvChatCreateChart_(session, input) {
       end = dmvCell_(match[3] + match[4]);
     if (end.row <= start.row || end.column < start.column)
       throw new Error('range must cover a header row and at least one data row.');
+    // As the sheet shows them: a formula's result, a date as formatted.
     var headers = sheet
       .getRange(start.row, start.column, 1, end.column - start.column + 1)
-      .getValues()[0];
+      .getDisplayValues()[0];
     area = {
       sheetName: sheetName,
       sheetId: sheet.getSheetId(),
@@ -1595,7 +1596,7 @@ function dmvChatCreateChart_(session, input) {
       column: start.column,
       rows: end.row - start.row + 1,
       columns: headers.map(function (header, index) {
-        var label = String(header || 'Column ' + (index + 1));
+        var label = header || 'Column ' + (index + 1);
         return { key: label, label: label };
       }),
     };

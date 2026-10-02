@@ -736,7 +736,10 @@ test('a chat turn asks, the next turn answers yes and the edit happens once', ()
     const body = JSON.parse(options.payload);
     for (const message of body.messages)
       for (const block of Array.isArray(message.content) ? message.content : [])
-        if (block.type === 'tool_result') Object.assign(seen, JSON.parse(block.content));
+        // EDIT stays the inspection's token: a replay repeats the call as it was, not with the
+        // fresh token the edit returned.
+        if (block.type === 'tool_result')
+          Object.assign(seen, JSON.parse(block.content), seen.editToken && { editToken: seen.editToken });
     for (const block of f.state.responses[0]?.body?.content || [])
       if (block.type === 'tool_use') {
         if (block.input.editToken === 'EDIT') block.input.editToken = seen.editToken;
@@ -1076,10 +1079,10 @@ test('the formula policy hook checks formulas, guards its spill and reads result
     () => f.edit('set_formulas', { formulas: [['=IMPORTRANGE("x","y")']] }, f.inspect('C1')),
     /IMPORTRANGE is not allowed/
   );
-  assert.throws(
-    () => f.edit('set_formulas', { formulas: [[1]] }, f.inspect('C1')),
-    /text beginning with =/
-  );
+  // A number is a literal value beside formulas.
+  assert.equal(f.edit('set_formulas', { formulas: [[1]] }, f.inspect('C1')).ok, true);
+  assert.equal(f.value(f.sheet, 1, 3), 1);
+  f.undo({ action: 'undo' });
   // Undo restores the range and the spill area it touched.
   f.undo({ action: 'undo' });
   assert.equal(f.formula(f.sheet, 1, 1), '');

@@ -20,6 +20,7 @@ var DMV_CHAT_PIVOT = {
 /* Shared by both paths */
 
 function dmvChatPivotArea_(sheet, address) {
+  address = dmvChatOwnTabA1_(sheet, address);
   if (
     typeof address !== 'string' ||
     !/^[A-Za-z]{1,3}[1-9][0-9]{0,6}:[A-Za-z]{1,3}[1-9][0-9]{0,6}$/.test(address)
@@ -30,11 +31,9 @@ function dmvChatPivotArea_(sheet, address) {
     end = dmvCell_(parts[1]);
   var rows = end.row - start.row + 1,
     columns = end.column - start.column + 1;
-  if (rows < 2 || rows > DMV_LIMITS.maxRows + 1 || columns < 1 || columns > 80)
+  if (rows < 2 || columns < 1 || columns > 80)
     throw new Error(
-      'A pivot source needs one header row and 1 to ' +
-        DMV_LIMITS.maxRows.toLocaleString() +
-        ' data rows, with at most 80 columns.'
+      'A pivot source needs one header row and at least one data row, with at most 80 columns.'
     );
   if (end.row > sheet.getMaxRows() || end.column > sheet.getMaxColumns())
     throw new Error('The pivot source range must fit inside the existing sheet grid.');
@@ -46,6 +45,9 @@ function dmvChatPivotArea_(sheet, address) {
     column: start.column,
     rows: rows,
     columns: columns,
+    // The data rows the checks read: every row of any report output, the first rows of a larger
+    // tab, which the native pivot still covers whole.
+    checked: Math.min(rows - 1, DMV_LIMITS.maxRows),
     grid: {
       sheetId: sheet.getSheetId(),
       startRowIndex: start.row - 1,
@@ -142,15 +144,15 @@ function dmvChatPivotGroups_(groups, width, used, rows, extended) {
   });
 }
 
-// Reads one source column below its header on first use. Only the bounded columns needed for
-// checks and layout are read, and their rows never reach the model.
+// Reads area.checked rows of one source column below its header on first use. Only the columns
+// needed for checks and layout are read, and their rows never reach the model.
 function dmvChatPivotReader_(session, source, area) {
   var read = Object.create(null);
   return function (offset) {
     if (!Object.prototype.hasOwnProperty.call(read, offset)) {
       dmvChatSheetDeadline_(session);
       read[offset] = source
-        .getRange(area.row + 1, area.column + offset, area.rows - 1, 1)
+        .getRange(area.row + 1, area.column + offset, area.checked, 1)
         .getValues()
         .map(function (row) {
           return row[0];
@@ -158,6 +160,14 @@ function dmvChatPivotReader_(session, source, area) {
     }
     return read[offset];
   };
+}
+
+// A reader of every data row, for what must hold on all of them (currencies, the groups of
+// chartRange); it is data itself when the checks already read every row.
+function dmvChatPivotEveryRow_(session, source, area, data) {
+  return area.checked < area.rows - 1
+    ? dmvChatPivotReader_(session, source, Object.assign({}, area, { checked: area.rows - 1 }))
+    : data;
 }
 
 function dmvChatPivotFilled_(value) {
@@ -196,9 +206,11 @@ function dmvChatPivotCheckTypes_(data, numeric, groups) {
   });
 }
 
-// Money needs a currency-code column, every numeric row an explicit code, and money or mixed
-// currencies must be grouped by that column. Returns the currency columns with several codes.
-function dmvChatPivotCurrencies_(headers, numeric, used, data) {
+// A source without a currency column holds one currency, as its tab formats it. With one (report
+// output of several accounts), every numeric row needs an explicit code, and money or mixed
+// currencies must be grouped by it. Checked on every row (all, dmvChatPivotEveryRow_). Returns
+// the currency columns with several codes.
+function dmvChatPivotCurrencies_(headers, numeric, used, all) {
   var currencyColumns = [];
   headers.forEach(function (header, offset) {
     if (/currency/i.test(header)) currencyColumns.push(offset);
@@ -208,15 +220,13 @@ function dmvChatPivotCurrencies_(headers, numeric, used, data) {
       headers[value.sourceColumnOffset]
     );
   });
-  if (money && !currencyColumns.length)
-    throw new Error('Include an explicit currency-code column before creating a money pivot.');
   var mixed = [];
   currencyColumns.forEach(function (offset) {
     if (!numeric.length) return;
     var codes = Object.create(null);
-    data(offset).forEach(function (entry, index) {
+    all(offset).forEach(function (entry, index) {
       var hasValue = numeric.some(function (value) {
-        return dmvChatPivotFilled_(data(value.sourceColumnOffset)[index]);
+        return dmvChatPivotFilled_(all(value.sourceColumnOffset)[index]);
       });
       if (!hasValue) return;
       if (typeof entry !== 'string' || !/^[A-Z]{3}$/.test(entry))
@@ -317,17 +327,18 @@ function dmvChatCreatePivot_(session, input) {
     });
     dmvChatPivotNamed_(headers, rows.concat(columns, values));
     // Empty future rows remain part of the native source range.
-    var data = dmvChatPivotReader_(session, source, area);
+    var data = dmvChatPivotReader_(session, source, area),
+      all = dmvChatPivotEveryRow_(session, source, area, data);
     var numeric = values.filter(function (value) {
       return DMV_CHAT_PIVOT.numeric.indexOf(value.summarizeFunction) >= 0;
     });
     dmvChatPivotCheckTypes_(data, numeric, rows.concat(columns));
-    dmvChatPivotCurrencies_(headers, numeric, grouped, data);
+    dmvChatPivotCurrencies_(headers, numeric, grouped, all);
     var columnKeys = Object.create(null),
       labels = Object.create(null),
       columnCount = 1;
     if (columns.length) {
-      for (var r = 0; r < area.rows - 1; r++)
+      for (var r = 0; r < area.checked; r++)
         columnKeys[
           JSON.stringify(
             columns.map(function (group) {
@@ -337,7 +348,7 @@ function dmvChatCreatePivot_(session, input) {
         ] = true;
       columnCount = Object.keys(columnKeys).length;
     }
-    var outputRows = Math.max(100, area.rows + columns.length + 2);
+    var outputRows = Math.max(100, area.checked + 1 + columns.length + 2);
     var outputColumns = Math.max(26, rows.length + columnCount * values.length + values.length);
     if (outputColumns > 512 || outputRows * outputColumns > 1000000)
       throw new Error(
@@ -352,6 +363,10 @@ function dmvChatCreatePivot_(session, input) {
       values: values,
       valueLayout: 'HORIZONTAL',
     };
+    var chartRange = dmvChatPivotChartRange_(session, all, area, pivot, {
+      row: 1,
+      column: 1,
+    });
     var requests = [
       {
         addSheet: {
@@ -382,7 +397,7 @@ function dmvChatCreatePivot_(session, input) {
       text:
         'Created a native pivot table on ' + target + ' from ' + source.getName() + '!' + area.a1,
     });
-    return {
+    var result = {
       ok: true,
       sheetName: target,
       anchorCell: 'A1',
@@ -395,6 +410,8 @@ function dmvChatCreatePivot_(session, input) {
       valueColumns: values.length,
       note: 'The native pivot stays linked to this bounded source range. No source cells were changed; currency-mixing totals are disabled.',
     };
+    if (chartRange) result.chartRange = chartRange;
+    return result;
   });
 }
 
@@ -622,6 +639,20 @@ function dmvChatPivotLines_(session, labels, data, rowCount, list) {
   };
 }
 
+// The summary create_chart reads from a pivot anchored at { row, column }: its header row and a
+// row per group, above any grand total. Given for one row group with no column groups or filters,
+// whose rows are then its groups, counted over every source row (all, dmvChatPivotEveryRow_), so
+// a group further down is never left out.
+function dmvChatPivotChartRange_(session, all, area, pivot, anchor) {
+  if (pivot.rows.length !== 1 || pivot.columns.length || pivot.filterSpecs) return null;
+  var groups = dmvChatPivotLines_(session, Object.create(null), all, area.rows - 1, pivot.rows);
+  return (
+    dmvChatA1_(anchor.row, anchor.column) +
+    ':' +
+    dmvChatA1_(anchor.row + groups.leaves, anchor.column + pivot.values.length)
+  );
+}
+
 // The create_pivot plan for dmvChatSheetRunAction_. Source checks match the original options;
 // totals and percentages that would add up different currencies are left out or refused.
 function dmvChatPivotPlan_(session, input) {
@@ -667,22 +698,21 @@ function dmvChatPivotPlan_(session, input) {
     // With no buckets, Sheets sorts by the value's grand total across the other axis.
     group.valueBucket = { valuesIndex: index - 1 };
   });
-  var data = dmvChatPivotReader_(session, source, area);
+  var data = dmvChatPivotReader_(session, source, area),
+    all = dmvChatPivotEveryRow_(session, source, area, data);
   var filterSpecs = dmvChatPivotFilters_(input.filters, area, headers, data);
   dmvChatPivotNamed_(headers, rows.concat(columns, values, filterSpecs));
   var numeric = values.filter(function (value) {
     return DMV_CHAT_PIVOT.numeric.indexOf(value.summarizeFunction) >= 0;
   });
   dmvChatPivotCheckTypes_(data, numeric, rows.concat(columns));
-  var mixed = dmvChatPivotCurrencies_(headers, numeric, used, data);
+  var mixed = dmvChatPivotCurrencies_(headers, numeric, used, all);
   var withheld = dmvChatPivotTotals_(input, rows, columns, values, mixed, headers);
   // Row groups are only read when a placed pivot or subtotals need their size.
   var labels = Object.create(null);
   var down =
-      placed || input.totals
-        ? dmvChatPivotLines_(session, labels, data, area.rows - 1, rows)
-        : null,
-    across = dmvChatPivotLines_(session, labels, data, area.rows - 1, columns);
+      placed || input.totals ? dmvChatPivotLines_(session, labels, data, area.checked, rows) : null,
+    across = dmvChatPivotLines_(session, labels, data, area.checked, columns);
   var outputColumns =
     rows.length + values.length * (columns.length ? across.leaves + across.above + 1 : 1);
   var pivot = {
@@ -731,6 +761,14 @@ function dmvChatPivotPlan_(session, input) {
     totals: !!input.totals,
     note: notes.join(' '),
   };
+  var chartRange = dmvChatPivotChartRange_(
+    session,
+    all,
+    area,
+    pivot,
+    cell || { row: 1, column: 1 }
+  );
+  if (chartRange) result.chartRange = chartRange;
   var layout = {
     source: source,
     area: area,
@@ -886,7 +924,7 @@ function dmvChatPivotNewTab_(layout, tabs) {
   var area = layout.area;
   var gridRows = Math.max(
     100,
-    area.rows + layout.columnGroups + 2 + (layout.totals ? layout.down.above : 0)
+    area.checked + 1 + layout.columnGroups + 2 + (layout.totals ? layout.down.above : 0)
   );
   var gridColumns = Math.max(26, layout.outputColumns);
   if (gridColumns > 512 || gridRows * gridColumns > 1000000)
@@ -962,7 +1000,7 @@ function dmvChatPivotTools_() {
     {
       name: 'create_pivot',
       description:
-        'Create a real native Google Sheets pivot in a NEW tab (or at targetCell of an existing tab, over empty cells), linked to an explicit source range including its header. At most 30,000 data rows and 80 source columns. Source cells are not changed. Choose 1 to 6 row groups, 0 to 6 column groups and 1 to 8 value aggregations, optionally shown as a percent of a total; optional filters, per-group sort and totals; no formulas. For money include and group by a currency-code column; totals and percentages that would add up different currencies are left out or refused. Native date buckets need actual date cells. Empty future rows within the existing source grid may be included.',
+        'Create a real native Google Sheets pivot in a NEW tab (or at targetCell of an existing tab, over empty cells), linked to an explicit source range including its header (a whole tab or a formula result). At most 80 source columns. Source cells are not changed. Choose 1 to 6 row groups, 0 to 6 column groups and 1 to 8 value aggregations, optionally shown as a percent of a total; optional filters, per-group sort and totals; no formulas. Money beside a currency-code column is grouped by it; totals and percentages that would add up different currencies are left out or refused. Native date buckets need actual date cells. Empty future rows within the existing source grid may be included. With one row group, its result gives chartRange, the summary for create_chart: no inspection needed.',
       input_schema: {
         type: 'object',
         properties: {

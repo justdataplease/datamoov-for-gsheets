@@ -170,9 +170,14 @@ with `search_sheets`, inspects a range, then edits it with `edit_sheet`, `create
 Chat lists tabs, inspects a range and only then edits it. Each range edit is limited to an
 explicit range of at most 1,000 cells, 200 rows and 30 columns. A private token binds the edit to
 the exact user, spreadsheet, tab, range and inspected contents/formatting for five minutes. The
-tool checks again under the shared write lock and applies one atomic batch. If the sheet changed,
-chat must inspect it again. Actions on whole rows, columns or tabs name the tab (and a start and
-count) instead of an inspected range.
+tool checks again under the shared write lock and applies one atomic batch. An edit may act on
+the inspected range or a part of it (the whole inspected range must be unchanged). Each token
+acts once; an edit returns a fresh one for the whole inspected range as the edit left it, so the
+next edits there need no new inspection. A refused edit changes nothing and spends no token, so
+its error says the token still holds for that range. If the sheet changed, chat must inspect it
+again. A range may name its own tab (`Sales!A1:F20` with `sheetName` Sales), as models often write
+it; one naming another tab is refused. Actions on whole rows, columns or tabs name the tab (and a
+start and count) instead of an inspected range.
 
 `search_sheets` changes nothing. In `find` mode it looks for text, a number (also matched by its
 value) or a regular expression in values or formulas, with match case and whole cell, across the
@@ -192,10 +197,10 @@ ignoring case and surrounding spaces unless asked.
 | Action | What it does | Limits |
 | --- | --- | --- |
 | `set_values` | Literal values; text beginning with = stays text | Inspected range |
-| `set_formulas` | Formulas (see [Formulas](#formulas)) | Inspected range, 8,000 characters each |
-| `format`, `sort`, `filter`, `freeze` | Number format (currency shows a code only when given one, such as EUR), bold, colours, alignment and wrap; sort by columns; a basic filter; frozen rows and columns | Inspected range |
-| `create_sheet`, `rename_sheet` | A new tab, or a new name for one | A tab a saved report or dashboard uses must have its destination updated before it is renamed |
-| `copy_range`, `move_range` | Copy or move the inspected range to a top-left cell on this tab or another; a copy pastes all, values, formats or formulas, while a move always takes everything, because Sheets empties the whole source, and takes the formulas that point at it along; a move over cells that formulas refer to by address (checked across the spreadsheet's formulas, up to 200,000 cells, or when that check cannot finish) always asks first, since Sheets turns those references into #REF! and undo cannot repair them | Inspected range |
+| `set_formulas` | Formulas (see [Formulas](#formulas)); cells without = are written as values (labels beside KPI formulas), and text Sheets would read as a formula (+B1, -SUM(…)) is refused | Inspected range, 8,000 characters each |
+| `format`, `sort`, `filter`, `freeze` | Number format (currency shows a code only when given one, such as EUR), bold, colours, alignment and wrap; sort by columns; a basic filter, which without a range is a tab action over the tab's data (from A1 to its last row and column, however large); frozen rows and columns, a tab action that takes only the tab | Inspected range; `filter` without a range the tab's data; `freeze` the tab's grid |
+| `create_sheet`, `rename_sheet` | A new tab (with `count` rows, default 1,000, at most 200,000, for a helper tab of formulas over a large source), whose result carries an `editToken` for its empty first block (A1:Z38), so the edits that fill it need no inspection; or a new name for one | A tab a saved report or dashboard uses must have its destination updated before it is renamed |
+| `copy_range`, `move_range` | Copy or move the inspected range to a top-left cell on this tab or another; a copy pastes all, values, formats or formulas, while a move always takes everything, because Sheets empties the whole source, and takes the formulas that point at it along; a move over cells that formulas refer to by address (checked across the spreadsheet's formulas, up to 200,000 cells, or when that check cannot finish) always asks first, since Sheets turns those references into #REF! and undo cannot repair them; values pasted onto the range itself freeze its formulas without asking, and an array formula in its first cell (a generated table) is frozen whole, as the sheet shows it, however little of its result the range covers, unless that area holds another entry outside the range, which is refused | Inspected range |
 | `insert_rows`, `insert_columns` | Insert before a 1-based `start` | 500 per call |
 | `delete_rows`, `delete_columns` | Delete from `start`; always asks first, and refuses to delete every row or column that is not frozen, as Sheets does | 500 per call; undoable up to 50,000 cells |
 | `group_rows`, `group_columns`, `ungroup_rows`, `ungroup_columns` | Outline groups, at most 8 levels; ungroup only where every row or column is grouped | The tab's grid |
@@ -326,21 +331,27 @@ documented; a named LAMBDA can still be handed to MAP, BYROW, REDUCE and the lik
 HYPERLINK takes a literal https address. The built-in list is kept in
 `src/dmv_chat_sheet_formulas.js`.
 
-When the size of an array result follows from the formula (array literals, bounded ranges,
-SEQUENCE or MAKEARRAY with literal sizes), its spill area must be empty, inside the tab and off
-protected output, and it is kept for undo. Other array results (FILTER, QUERY, and lookups or
-conditional counts such as VLOOKUP, MATCH or COUNTIF over a range of keys inside ARRAYFORMULA)
-are left to Sheets, which never writes over data and shows #REF! instead. After writing, chat reads the
-cells back and returns each error with its cell and Sheets' message (#REF!, #N/A, #VALUE!,
+When the size of an array result follows from the formula (bounded ranges, SEQUENCE or
+MAKEARRAY with literal sizes, and array literals of them side by side or stacked, such as a
+header row above MAKEARRAY(1000, 9, …)) and it fills at most 50,000 cells, its spill area must
+be empty and off protected output, and it is kept for undo. Such a result running past the end
+of the tab adds the rows or columns it needs in the same edit (Sheets would show #REF!); undo
+leaves them, empty. Larger results, like those below, never grow the tab. Other
+array results (FILTER, QUERY, and lookups or conditional counts such as VLOOKUP, MATCH or
+COUNTIF over a range of keys inside ARRAYFORMULA) are left to Sheets, which never writes over
+data and shows #REF! instead. After writing, chat reads the cells back and returns each error with its cell and Sheets' message (#REF!, #N/A, #VALUE!,
 #DIV/0!, #NAME?, #ERROR!), a sample of the results and where arrays spilled, so it can fix the
 formula in the same turn. Nothing written is rolled back automatically, but undo is available.
+A bracket closed out of order is reported with the call left open (`MAKEARRAY( from character
+14 is still open at this "}"`), and a matrix of the wrong shape with the shape its range takes.
 Literal values beginning with = stay text. Internal report settings remain excluded.
 
 ### Native pivot tables
 
 Ask, for example: "Create a pivot of Marketing data with campaign as rows and summed clicks as values."
-Chat creates a real Sheets pivot in a new tab, using an explicit source range with headers, up to
-30,000 data rows and 80 columns. Each column the pivot uses needs a header of its own; other
+Chat creates a real Sheets pivot in a new tab, using an explicit source range with headers (a whole
+tab or a formula's result) of any length and up to 80 columns; its checks read only the columns
+they need, at most the first 30,000 data rows. Each column the pivot uses needs a header of its own; other
 columns in the range may have any header or none, and a number or date header counts as its text. It validates the requested fields and numeric aggregates first.
 The range may include future blank rows within the existing sheet grid, so later values inside
 that range participate automatically. Data outside it requires a larger source range.
@@ -351,9 +362,13 @@ Pivots also take MEDIAN, values shown as a percent of the row, column or grand t
 buckets, a sort per group (by its labels or by a value), up to 6 filters (chosen text values, or a
 condition that shows every value meeting it; number and date columns take a condition, since a
 pivot lists their values as it displays them), totals, and a `targetCell` on an existing tab whose cells the pivot could fill are
-empty and not report output (at most 50,000 cells; undo removes it). Money needs a currency-code
-column to group by; with several currencies, totals that would add them up are left out (the
-result says which) and percentages that would mix them are refused. Calls with only the original
+empty and not report output (at most 50,000 cells; undo removes it). A source without a
+currency-code column holds one currency; money beside one must be grouped by it, every numeric row needs a code there, and with several currencies, totals that would add them up are left out (the
+result says which) and percentages that would mix them are refused. A pivot with one row group and
+no column groups or filters returns `chartRange`: its header row and one row per group, above any
+grand total, so `create_chart` can chart it without an inspection. Its groups are counted on every
+source row, so past the first 30,000 rows that one column is read whole, as are the currency
+column and the numeric columns for the currency checks. Calls with only the original
 options run the original path unchanged.
 
 ## Dashboards
@@ -364,7 +379,8 @@ to *see* performance: it fetches 1 to 8 datasets, writes each to its own tab, an
 **(chart data)** tab. You do not create reports first; the dashboard carries its own queries.
 A dashboard over data already in a tab (a pasted sales table, say) is not a saved dashboard: Chat
 builds a new tab in several small steps, with KPI formulas over your tab, a native pivot table and
-charts, which recalculate with the sheet and have no **Refresh dashboard** card.
+charts over its summary, then formats it in a call or two, so the build finishes before the polish.
+These recalculate with the sheet and have no **Refresh dashboard** card.
 
 For example: **"Create a performance dashboard for Google Ads and Facebook Ads for the last 3
 months, every week."** Chat saves the plan and runs it once. You get:
@@ -679,8 +695,8 @@ Values that come back from providers are framed as data, not instructions.
   it has and says what is missing.
 - If the AI provider fails after a tool already wrote to the sheet, the answer says so and
   lists the completed steps; nothing that happened is hidden.
-- A tool call the provider cannot use (Gemini's `MALFORMED_FUNCTION_CALL`, `UNEXPECTED_TOOL_CALL`
-  or `TOO_MANY_TOOL_CALLS`) never runs. Chat tells the model, with only that reason code, to call
+- A tool call the provider cannot use (Gemini's `MALFORMED_FUNCTION_CALL`, `MALFORMED_RESPONSE`,
+  `UNEXPECTED_TOOL_CALL` or `TOO_MANY_TOOL_CALLS`) never runs. Chat tells the model, with only that reason code, to call
   again in smaller steps, at most twice per request (across its executions); a third such reply
   ends the request as a failed answer that lists any steps already completed.
 - A reply with no answer and no tool call is a failed answer, naming the provider's reason code

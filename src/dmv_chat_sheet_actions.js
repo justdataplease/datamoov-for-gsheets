@@ -208,7 +208,8 @@ function dmvChatSheetActionSchema_() {
       pasteType: {
         type: 'string',
         enum: ['all', 'values', 'formats', 'formulas'],
-        description: 'copy_range; move_range takes only all.',
+        description:
+          'copy_range; move_range takes only all. values onto itself freezes formulas, array results whole.',
       },
       start: {
         type: 'integer',
@@ -219,7 +220,8 @@ function dmvChatSheetActionSchema_() {
       count: {
         type: 'integer',
         minimum: 1,
-        description: 'How many rows or columns; at most 500 inserted or deleted.',
+        description:
+          'How many rows or columns; at most 500 inserted or deleted. create_sheet: its rows (default 1000).',
       },
       find: { type: 'string', description: 'find_replace: text (or regex) to find.' },
       replacement: text(),
@@ -229,7 +231,7 @@ function dmvChatSheetActionSchema_() {
       wholeSheet: {
         type: 'boolean',
         description:
-          "find_replace: search the whole tab's data, not just the inspected range. remove_/highlight_duplicates: compare the rows of the whole tab's data (from row 1, at most 50,000 cells), for tables larger than one inspection; never dedupe such a table range by range.",
+          "find_replace, remove_/highlight_duplicates: the whole tab's data (from row 1, at most 50,000 cells), not just the inspected range; never dedupe a larger table range by range.",
       },
       keyColumns: {
         type: 'array',
@@ -641,9 +643,14 @@ function dmvChatActionPaste_(context, move) {
     startColumnIndex: left,
     endColumnIndex: left + area.columns,
   };
-  if (dmvChatGridKey_(destination) === dmvChatGridKey_(area.grid))
+  // Values onto the source itself turn its formulas into the values they show, so the cells look
+  // the same and nothing is asked.
+  var source = area.grid,
+    frozen = dmvChatGridKey_(destination) === dmvChatGridKey_(source);
+  if (frozen && (move || type !== 'values'))
     throw new Error('The destination is the source itself. Choose another place.');
-  var from = sheet.getName() + '!' + area.a1,
+  if (frozen) source = destination = dmvChatActionFreezeArea_(context);
+  var from = sheet.getName() + '!' + dmvChatGridA1_(source),
     to = target.sheet.getName() + '!' + dmvChatGridA1_(destination);
   var plan = {
     sheetName: target.sheet.getName(),
@@ -665,7 +672,7 @@ function dmvChatActionPaste_(context, move) {
     plan.requests = [
       {
         copyPaste: {
-          source: area.grid,
+          source: source,
           destination: destination,
           pasteType: DMV_SHEET_ACTIONS.paste[type],
           pasteOrientation: 'NORMAL',
@@ -673,7 +680,7 @@ function dmvChatActionPaste_(context, move) {
       },
     ];
     plan.touches = [destination];
-    plan.overwrite = true;
+    plan.overwrite = !frozen;
     if (type === 'all' || type === 'formats')
       plan.undo = dmvChatActionCopyUndo_(context.session, area.grid, destination, type === 'all');
     return plan;
@@ -746,6 +753,83 @@ function dmvChatActionPaste_(context, move) {
     plan.undo.note =
       'The block is back where it was. Formulas that referred to cells the move pasted over still show #REF!; fix them by hand.';
   return plan;
+}
+
+// The range copy_range values freezes onto itself: the inspected range, grown to the whole array
+// result of a formula in its first cell, which can be larger than an inspection, so no result is
+// frozen in part. The result's size is read from the sheet, which shows it even when the formula
+// alone does not tell (QUERY, a computed MAKEARRAY): the cells right of and below the formula
+// that show a value nobody entered, up to the first entered cell, so an empty value inside the
+// result is kept too. Any other entry in the grown area outside the inspection is refused.
+function dmvChatActionFreezeArea_(context) {
+  var grid = context.area.grid,
+    entry = context.snapshot.cells[0][0].userEnteredValue;
+  if (!entry || !entry.formulaValue) return grid;
+  var row = grid.startRowIndex,
+    column = grid.startColumnIndex;
+  var right = {
+      sheetId: grid.sheetId,
+      startRowIndex: row,
+      endRowIndex: row + 1,
+      startColumnIndex: column + 1,
+      endColumnIndex: context.sheet.getMaxColumns(),
+    },
+    below = {
+      sheetId: grid.sheetId,
+      startRowIndex: row + 1,
+      endRowIndex: context.sheet.getMaxRows(),
+      startColumnIndex: column,
+      endColumnIndex: column + 1,
+    };
+  var strips = [right, below].filter(function (strip) {
+    return dmvChatGridCells_(strip) > 0;
+  });
+  var extent = { right: 0, below: 0 };
+  dmvChatSheetCells_(context.session, strips, 'userEnteredValue,effectiveValue').forEach(
+    function (read) {
+      var across = read.grid === right,
+        line = across
+          ? read.cells[0]
+          : read.cells.map(function (cells) {
+              return cells[0];
+            });
+      for (var i = 0; i < line.length; i++) {
+        if (line[i].userEnteredValue && Object.keys(line[i].userEnteredValue).length) break;
+        if (line[i].effectiveValue) extent[across ? 'right' : 'below'] = i + 1;
+      }
+    }
+  );
+  var grown = Object.assign({}, grid, {
+    endRowIndex: Math.max(grid.endRowIndex, row + 1 + extent.below),
+    endColumnIndex: Math.max(grid.endColumnIndex, column + 1 + extent.right),
+  });
+  if (dmvChatGridKey_(grown) === dmvChatGridKey_(grid)) return grid;
+  // Past an empty value the cells may belong to something else: an entry there, which the freeze
+  // would turn into a value, means the result's end is not known. (Undo restores any other
+  // formula's array result this still reaches.)
+  var taken = [];
+  dmvChatSheetCells_(context.session, [grown], 'userEnteredValue')[0].cells.forEach(
+    function (line, r) {
+      line.forEach(function (cell, c) {
+        var inspected = row + r < grid.endRowIndex && column + c < grid.endColumnIndex;
+        if (!inspected && cell.userEnteredValue && Object.keys(cell.userEnteredValue).length)
+          taken.push(dmvChatA1_(row + r + 1, column + c + 1));
+      });
+    }
+  );
+  if (taken.length)
+    throw new Error(
+      dmvChatA1_(row + 1, column + 1) +
+        ': the result seems to fill ' +
+        dmvChatGridA1_(grown) +
+        ', but ' +
+        dmvChatActionListed_(taken) +
+        (taken.length === 1
+          ? ' there holds an entry of its own'
+          : ' there hold entries of their own') +
+        ', so where it ends is not clear. Copy its values to another place instead.'
+    );
+  return grown;
 }
 
 // The undo of a copy of everything or of formats: besides the destination's cells, the copy

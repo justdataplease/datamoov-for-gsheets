@@ -92,3 +92,10 @@ test('Anthropic caches the system prompt up to its last paragraph, which changes
   const single = plain(f.api.dmvAiAnthropic_.build(settings, { system: 'One paragraph.', messages }).body);
   assert.deepEqual(single.system, [{ type: 'text', text: 'One paragraph.', cache_control: { type: 'ephemeral' } }]);
 });
+
+test('a Gemini MALFORMED_RESPONSE, a reply it could not form, is retried like a malformed call', () => {
+  const f = createDatamoovSandbox();
+  const parsed = gemini(f, { finishReason: 'MALFORMED_RESPONSE' });
+  assert.equal(parsed.stop, 'tool_error');
+  assert.equal(parsed.reason, 'MALFORMED_RESPONSE');
+});

@@ -934,7 +934,8 @@ var dmvAiOpenAi_ = {
 };
 
 // Gemini finish reasons the chat loop acts on. A tool_error reply holds no usable call: the
-// model wrote one Gemini could not read, one it did not declare, or too many.
+// model wrote one Gemini could not read, a reply it could not form, one it did not declare, or
+// too many.
 var DMV_AI_GEMINI_STOPS = {
   STOP: 'end',
   SAFETY: 'refusal',
@@ -943,6 +944,7 @@ var DMV_AI_GEMINI_STOPS = {
   PROHIBITED_CONTENT: 'refusal',
   SPII: 'refusal',
   MALFORMED_FUNCTION_CALL: 'tool_error',
+  MALFORMED_RESPONSE: 'tool_error',
   UNEXPECTED_TOOL_CALL: 'tool_error',
   TOO_MANY_TOOL_CALLS: 'tool_error',
 };

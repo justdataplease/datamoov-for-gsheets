@@ -17,8 +17,9 @@ export const ORCHARD_COLUMNS = [
 //   { columns, rows (f.rows, read on every fetch), label, metadata, token }
 // options.sortRange adds a stand-in the shared sandbox leaves to each test.
 // options.setup(f) prepares tabs before the session starts, since a session keeps the tab names.
+// options.formulaResult computes written formulas (see createDatamoovSandbox).
 export function chatSheetFixture(options = {}) {
-  const f = createDatamoovSandbox({ gridData: true });
+  const f = createDatamoovSandbox({ gridData: true, formulaResult: options.formulaResult });
   f.sheet = f.book.sheets[0];
   if (options.setup) options.setup(f);
   if (options.sortRange) sortRanges(f);

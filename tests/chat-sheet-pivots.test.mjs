@@ -230,6 +230,31 @@ test('an analyst pivot sends the exact native pivot: filters, sort by value, tot
   assert.ok(f.session.sheetNames.includes('Spend pivot'), 'later tools this turn see the tab');
 });
 
+test('the currency checks read every source row, past the first rows the other checks read', () => {
+  // Every row USD up to the rows the other checks read, then one more row below them.
+  const big = (last) => {
+    const f = fixture();
+    const rows = f.api.DMV_LIMITS.maxRows + 1;
+    f.source.maxRows = rows + 3;
+    for (let r = 0; r < rows; r++)
+      [new Date('2026-08-01T12:00:00Z'), 'Brand', r === rows - 1 ? last : 'USD', 1, 1].forEach(
+        (value, c) => f.setCell(f.source, r + 4, c + 2, value)
+      );
+    f.input.sourceRange = 'B3:F' + (rows + 3);
+    return f;
+  };
+  const f = big('EUR');
+  const result = f.pivot({ totals: true });
+  assert.deepEqual(
+    f.requests()[1].updateCells.rows[0].values[0].pivotTable.rows.map((group) => group.showTotals),
+    [false, true]
+  );
+  assert.match(result.note, /Totals were left out for Currency/);
+  const g = big('');
+  assert.throws(() => g.pivot({ totals: true }), /three-letter currency code/);
+  assert.equal(g.state.batches.length, 0);
+});
+
 test('with several currencies, totals and percentages never add up different currencies', () => {
   // Currency is the outer row group: its own total and the grand total would mix EUR and USD.
   const f = fixture();

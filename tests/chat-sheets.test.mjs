@@ -410,7 +410,7 @@ test('freeze and new-tab creation are bounded, while rename protects saved repor
 
 test('bounds, malformed actions and concurrent workbook work fail before mutation', () => {
   const f = fixture();
-  for (const range of ['A1:Z100', 'A0', 'Output!A1', 'A1:A101'])
+  for (const range of ['A1:Z100', 'A0', 'Other!A1', 'A1:A101'])
     assert.throws(() => f.inspect(range));
   const inspected = f.inspect('A1');
   assert.throws(() => f.edit('set_values', { values: [[1, 2]] }, inspected), /match/);

@@ -114,7 +114,7 @@ test('source ranges must be explicit, bounded and inside the existing grid', () 
   for (const range of [
     'B3',
     'B:F',
-    'Source!B3:F8',
+    'Other!B3:F8',
     'B3:F3',
     'F8:B3',
     'B3:F101',
@@ -195,12 +195,29 @@ test('money pivots require explicit currency grouping and disable mixed-currency
     /currency column/
   );
   assert.equal(f.state.batches.length, 0);
-  f.setCell(f.source, 3, 4, 'Region');
-  assert.throws(() => f.api.dmvChatCreatePivot_(f.session, f.input), /currency-code column/);
-  f.setCell(f.source, 3, 4, 'Currency');
   f.setCell(f.source, 4, 4, '');
   assert.throws(() => f.api.dmvChatCreatePivot_(f.session, f.input), /three-letter currency code/);
   assert.equal(f.state.batches.length, 0);
+});
+
+test('a money pivot over a source without any currency column is one currency and is created', () => {
+  // A retail tab: one currency, as the tab formats it. Only report output that combines
+  // accounts carries a currency column, and that one still has to be grouped.
+  for (const analyst of [false, true]) {
+    const f = fixture();
+    [['Date', 'Department', 'Region', 'Total Amount', 'Quantity']].forEach((row) =>
+      row.forEach((value, c) => f.setCell(f.source, 3, c + 2, value))
+    );
+    for (let row = 4; row <= 8; row++) f.setCell(f.source, row, 4, row % 2 ? 'North' : 'South');
+    const result = f.api.dmvChatCreatePivot_(f.session, {
+      ...f.input,
+      rows: [{ column: 2 }],
+      values: [{ column: 4, summarize: 'SUM' }],
+      ...(analyst ? { totals: true } : {}),
+    });
+    assert.equal(result.ok, true);
+    assert.equal(f.state.batches.length, 1);
+  }
 });
 
 test('native month grouping uses YEAR_MONTH and never freezes ISO text into manual date buckets', () => {

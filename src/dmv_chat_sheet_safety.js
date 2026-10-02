@@ -1553,13 +1553,15 @@ function dmvChatSheetRunAction_(session, input, spec) {
   return dmvWorkbookLocked_(function () {
     dmvChatSheetDeadline_(session);
     var context = { session: session, input: input, sheet: null, area: null, snapshot: null },
-      tokenKey = null;
+      tokenKey = null,
+      whole = null;
     if (target === 'range') {
       var inspected = dmvChatSheetInspected_(session, input);
       context.sheet = inspected.sheet;
       context.area = inspected.area;
       context.snapshot = inspected.snapshot;
       tokenKey = inspected.tokenKey;
+      whole = inspected.whole;
     } else if (target === 'sheet') context.sheet = dmvChatSheetTarget_(session, input.sheetName);
     var plan = spec.plan(context) || {};
     if (!Array.isArray(plan.requests) || !plan.requests.length)
@@ -1664,17 +1666,17 @@ function dmvChatSheetRunAction_(session, input, spec) {
         ].concat(plan.details || [])
       ),
     });
-    return Object.assign(
-      {
-        ok: true,
-        action: input.action,
-        sheetName: sheetName,
-        url: url,
-        range: range || null,
-        undoId: undoId,
-      },
-      plan.result || {},
-      extra
-    );
+    var result = {
+      ok: true,
+      action: input.action,
+      sheetName: sheetName,
+      url: url,
+      range: range || null,
+      undoId: undoId,
+    };
+    // After an edit of the range given (not a copy elsewhere), as built-in edits do.
+    if (tokenKey && sheetName === context.sheet.getName() && range === context.area.a1)
+      result.editToken = dmvChatSheetRetoken_(session, context.sheet, whole);
+    return Object.assign(result, plan.result || {}, extra);
   });
 }
