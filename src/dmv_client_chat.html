@@ -513,9 +513,49 @@
     function addMessage(role, text, extra = {}) {
       const node = el('div', 'chat-message ' + role + (extra.error ? ' error' : ''));
       node.append(role === 'assistant' ? markdown(text) : el('div', 'chat-text', text));
-      if (extra.options?.length) {
+      // A sheet change that waits for the user's yes. Yes answers it (with the offered token when
+      // there is one change, so only that one is approved); No drops it. The model's own Yes/No
+      // options would send "Use Yes.", which the server does not read as a yes, so they give way.
+      // What Yes approves is the server's own summary of each change, shown above the chips, so
+      // a reply worded by the model cannot hide it.
+      const offers = (extra.events || [])
+        .map((event) => {
+          const token =
+            event?.kind === 'summary' && typeof event.ref === 'string'
+              ? /^confirmToken (c[a-f0-9]{32})$/.exec(event.ref)?.[1]
+              : null;
+          if (!token) return null;
+          const summary = String(event.text || '').replace(/^Asked to confirm: /, '');
+          return { token, summary };
+        })
+        .filter(Boolean);
+      const confirmations = offers.map((offer) => offer.token);
+      let options = extra.options || [];
+      if (confirmations.length) {
+        const what = el('div', 'chat-confirm-what');
+        what.append(
+          el(
+            'div',
+            'chat-confirm-label',
+            offers.length === 1 ? 'Yes approves this change:' : 'Yes approves all these changes:'
+          )
+        );
+        const list = el('ul');
+        for (const offer of offers) list.append(el('li', '', offer.summary));
+        what.append(list);
+        node.append(what);
+        const row = el('div', 'chip-row chat-confirm');
+        const token = confirmations.length === 1 ? confirmations[0] : undefined;
+        row.append(
+          button('Yes', 'chip', () => send('Yes', { confirmToken: token })),
+          button('No', 'chip', () => send('No'))
+        );
+        node.append(row);
+        options = options.filter((option) => !/^(?:yes|no)\b/i.test(String(option).trim()));
+      }
+      if (options.length) {
         const row = el('div', 'chip-row');
-        for (const option of extra.options)
+        for (const option of options)
           row.append(button(option, 'chip', () => send('Use ' + option + '.')));
         node.append(row);
       }
@@ -718,11 +758,14 @@
       };
       turn.timer = window.setTimeout(poll, 1200);
     }
-    async function send(text) {
+    async function send(text, answer = {}) {
       text = String(text || '').trim();
       if (!text || chat.busy || !chat.ai?.configured) return;
       const generation = chat.generation;
       let turn;
+      // Only the next message answers a confirmation, so older Yes and No chips stop working.
+      for (const chip of $('chat-messages').querySelectorAll('.chat-confirm button'))
+        chip.disabled = true;
       setBusy(true);
       $('chat-input').value = '';
       $('chat-suggestions').replaceChildren();
@@ -743,6 +786,7 @@
           transcript: chat.transcript,
           connectionIds: selectedSourceIds(),
           requestId: turn.requestId,
+          ...(answer.confirmToken ? { confirmToken: answer.confirmToken } : {}),
         });
         // A request longer than one Apps Script execution continues in the next one.
         while (reply?.pending && currentTurn(turn))

@@ -56,6 +56,7 @@ var DMV_CHAT_PROGRESS_LABELS = {
   list_sheets: 'Checking spreadsheet tabs',
   inspect_sheet: 'Inspecting selected cells',
   edit_sheet: 'Updating the spreadsheet',
+  undo_sheet_edit: 'Undoing a sheet edit',
   create_chart: 'Creating a chart',
   create_pivot: 'Creating a pivot table',
   save_dashboard: 'Saving the dashboard plan',
@@ -97,7 +98,7 @@ function dmvChatProgressStep_(progress, label) {
     state: 'running',
     text: Object.prototype.hasOwnProperty.call(DMV_CHAT_PROGRESS_LABELS, label)
       ? DMV_CHAT_PROGRESS_LABELS[label]
-      : DMV_CHAT_PROGRESS_LABELS.action,
+      : dmvChatSheetToolLabel_(label) || DMV_CHAT_PROGRESS_LABELS.action,
   };
   progress.snapshot.steps.push(step);
   if (progress.snapshot.steps.length > 60) progress.snapshot.steps.shift();
@@ -401,7 +402,7 @@ function dmvChatSystemPrompt_(session) {
     '- DRAFTS. Reports and dashboards you save land under Reports > Drafts unless the user asked for a schedule; a draft can be refreshed by hand but not scheduled until the user saves it. Never set a schedule the user did not ask for. The sidebar adds the draft location and its Save and Remove steps under your answer, so state only that it was saved as a draft (or saved with its schedule) and what it holds.',
     "- GUIDANCE. When the user asks what you or DataMoov can do, or how to do something in the sidebar, answer from the CAPABILITIES section and the catalog only, in two to four sentences with the next click, naming the user's actual selected sources; suggest one or two example requests. Never describe a feature that is not listed there. To point to a place in the sidebar, write a link whose address is sidebar:<place> with place one of reports, drafts, dashboards, chat, connections or settings, for example [Reports > Drafts](sidebar:drafts).",
     '- When the user requests a pivot table, use create_pivot to create a native pivot in a new tab. Keep currencies separate when aggregating money from mixed currencies; use supported date grouping for monthly, weekly or other date summaries.',
-    '- Both creating reports and editing existing sheets are supported. Only edit existing cells, formulas, formatting, sorting, filters, freeze panes or tab names when the user specifically requests that change. Use list_sheets and inspect_sheet before edit_sheet; pass its exact fresh editToken, sheetName and range, and reinspect after each edit. Report fetches still use run_report and write_to_sheet. Formula support is limited to common scalar built-ins and same-tab references, not every Sheets function. Sheet edits are bounded to 1000 cells, 200 rows and 30 columns; never sort independent subranges and claim a whole-sheet sort. Explain the limit and ask for a narrower range when necessary.',
+    '- Both creating reports and editing existing sheets are supported. Only change existing sheets when the user specifically requests that change. Use list_sheets (search_sheets to locate data) and inspect_sheet before edit_sheet; pass its exact fresh editToken, sheetName and range, and reinspect after each edit. Report fetches still use run_report and write_to_sheet. Work like an analyst: lookups across tabs, pivots, conditional_format and cleanup actions, preferring formulas over pasted numbers when the user wants a live sheet, and fix the formula errors edit_sheet reports. Never edit report or dashboard output (change the report instead), except to format it, add conditional formats or a filter, or freeze panes, which a refresh keeps; a needsConfirmation result changed nothing, so ask and repeat the call only after a yes. Range edits are bounded to 1000 cells, 200 rows and 30 columns; never sort independent subranges and claim a whole-sheet sort. Explain the limit and ask for a narrower range when necessary.',
     '- Earlier turns list their results as [Actions taken: … [rXXXXXXXX]]. Reuse such a resultId with summarize, write_to_sheet or create_chart instead of running the same report again; if it has expired the tool says so.',
     '- Columns marked additive:false (user counts, reach, rates, averages) must not be summed; use avg, min or max, or compute the rate as a ratio of the summed underlying counts.',
     '',
@@ -478,11 +479,11 @@ function dmvChatCapabilities_(session) {
     "Reports (sidebar:reports): a report is one source, one report type, chosen fields and dates written to one tab, refreshed on demand with Run, or hourly, daily or weekly at a chosen hour from the user's account without AI. The + button builds one by hand; chat saves one with save_report. Edit opens it in the form.",
     'Dashboards (sidebar:dashboards): built in chat only. 1 to 8 datasets, each on its own tab, plus a Dashboard tab with scorecards and their change against the previous period, highlights, native charts and tables, rebuilt by Refresh dashboard without AI, with the same schedules as reports. Remove deletes the dashboard and the tabs it created.',
     'Drafts (sidebar:drafts): everything chat saves lands under Drafts in the Reports tab, for reports and dashboards alike, unless the user asked for a schedule. A draft can be run or refreshed by hand, edited, saved with its Save button (which unlocks schedules) or removed. Building with the + form saves outright.',
-    'Chat (sidebar:chat) can: answer questions with numbers from any selected source; rank and compare campaigns, periods or accounts, currencies kept apart; compute calculated metrics over totals such as profit, net ROAS or margin; write tables to a tab; add native charts; read existing tabs; save reports and dashboards; edit cells, formulas, formatting, sorting, filters, freeze panes and tab names in bounded ranges; create native pivot tables; and ask when a request is ambiguous. Each fetched report holds at most ' +
+    'Chat (sidebar:chat) can: answer questions with numbers from any selected source; rank and compare campaigns, periods or accounts, currencies kept apart; compute calculated metrics over totals such as profit, net ROAS or margin; write tables to a tab; add native charts; read existing tabs; save reports and dashboards; search tabs for values or duplicates; edit cells, formulas (any Sheets built-in except external-data ones, across tabs), formatting, conditional formats, sorting, filters, freeze panes, rows and columns, duplicates, find and replace, validation, notes, links, named ranges and tabs, asking before destructive changes and, on report or dashboard output, only formatting, conditional formats, filters and freeze panes, and undo its recent sheet edits; create native pivot tables with filters, totals and percentages; and ask when a request is ambiguous. Each fetched report holds at most ' +
       rows +
       ' rows (Settings > AI provider changes it) and a request is bounded by the time limit in Settings.',
     'Settings (sidebar:settings): AI provider, API key and model (Anthropic, OpenAI or Gemini), maximum rows per chat report, time limit per request, standing instructions and the completed-actions debug view. Per-source chat instructions live in the source form.',
-    'Not possible: sending data anywhere except the configured providers; scheduling a draft; deleting tabs from chat; currency conversion; summing rates, averages or user counts; editing report output by hand without stopping its next refresh; connecting a source that is not in the catalog.',
+    'Not possible: sending data anywhere except the configured providers; scheduling a draft; deleting from chat a tab that a saved report or dashboard writes to; currency conversion; summing rates, averages or user counts; editing report output by hand without stopping its next refresh; connecting a source that is not in the catalog.',
   ].join('\n');
 }
 
@@ -1146,11 +1147,17 @@ function dmvChatExecute_(input, progress, spreadsheet) {
     session.events = state.events;
     session.written = state.written;
     session.reportResults = state.reportResults || undefined;
+    session.confirm = state.confirm || null;
     // Replies of another provider or model are replayed from their neutral content.
     if (state.model !== model)
       state.messages.forEach(function (message) {
         delete message.raw;
       });
+  } else {
+    // A new request is the user's answer to confirmations the previous one asked for. It also
+    // deletes hidden undo copies of deleted tabs whose undo window ended.
+    dmvChatConfirmBegin_(session, text, input.confirmToken);
+    dmvChatUndoSweep_(session);
   }
   var system = dmvChatSystemPrompt_(session);
   var tools = dmvChatTools_(session);
@@ -1276,6 +1283,7 @@ function dmvChatExecute_(input, progress, spreadsheet) {
             events: session.events,
             written: session.written,
             reportResults: session.reportResults || null,
+            confirm: session.confirm || null,
             selectedConnectionIds: session.connections.map(function (connection) {
               return connection.id;
             }),

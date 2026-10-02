@@ -262,6 +262,7 @@ test('pivot tool exposes bounded native schema and rejects arbitrary request ext
     'AVERAGE',
     'MIN',
     'MAX',
+    'MEDIAN',
   ]);
   assert.throws(
     () => f.api.dmvChatCreatePivot_(f.session, { ...f.input, requests: [] }),

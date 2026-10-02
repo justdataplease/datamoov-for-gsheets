@@ -61,6 +61,9 @@ source fetches; multi-account and period comparisons can require several fetches
 - **Chart**: "Chart weekly spend by campaign" adds a native Sheets chart beside the table.
 - **Use existing tabs**: "Summarize the Orders tab by month" reads your own data (header row
   plus up to 500 rows × 30 columns).
+- **Work in your sheets like an analyst**: "Clean this export: trim, dedupe on email, split name
+  and add a status dropdown", lookups across tabs, pivots and conditional formats. Destructive
+  changes ask first and recent edits can be undone; see [Editing existing sheets](#editing-existing-sheets).
 - **Facebook Ads below the campaign**: the **Insights** report answers ad set and ad questions,
   weekly or monthly reach, and splits by age, gender, country, platform or placement; the
   selected fields decide the level, the period and the breakdowns.
@@ -156,23 +159,144 @@ or **"margin by campaign"**. The model writes the expression; it never computes 
 ## Editing existing sheets
 
 Ask directly, for example: "Make the header bold, format column C as percentages and freeze the
-first row", "Sort A1:F100 by spend descending", or "Put =SUM(B2:B20) in B21". Chat can list tabs,
-inspect a range, replace literal cell values, enter supported formulas, format cells, sort a range,
-add a basic filter, freeze rows or columns, and create or rename tabs.
+first row", "Sort A1:F100 by spend descending", "Put =SUM(B2:B20) in B21", or a whole job such
+as "Clean this export: trim, dedupe on email, split name, add a status dropdown, pivot spend by
+campaign and month on a new tab, colour CPA > 50 red". Chat works like an analyst: it finds data
+with `search_sheets`, inspects a range, then edits it with `edit_sheet`, `create_pivot` or
+`conditional_format`, and can undo its recent edits with `undo_sheet_edit`.
 
-Each edit is limited to an explicit range of at most 1,000 cells, 200 rows and 30 columns. Chat
-inspects that range first; a private token binds the edit to the exact user, spreadsheet, tab,
-range and inspected contents/formatting for five minutes. The tool checks again under the shared
-write lock and applies one atomic batch. If the sheet changed, chat must inspect it again.
-Report output continues to use its existing protected writer. Editing report values yourself or
-through chat makes the next refresh stop until the report is moved to a fresh output area.
+### Reading before writing
 
-Formula support covers common scalar built-ins such as SUM, COUNTIF, AVERAGE, ROUND and IF using
-same-tab cell references. Arbitrary script code, external-data functions, custom functions, named
-ranges, references to other tabs and formulas that spill arrays are not supported. Dependencies
-are checked too. Literal values beginning with = stay text. Internal report settings remain
-excluded. Tab deletion is not exposed; a tab used by a saved report or dashboard must have its saved
-destination updated before it can be renamed.
+Chat lists tabs, inspects a range and only then edits it. Each range edit is limited to an
+explicit range of at most 1,000 cells, 200 rows and 30 columns. A private token binds the edit to
+the exact user, spreadsheet, tab, range and inspected contents/formatting for five minutes. The
+tool checks again under the shared write lock and applies one atomic batch. If the sheet changed,
+chat must inspect it again. Actions on whole rows, columns or tabs name the tab (and a start and
+count) instead of an inspected range.
+
+`search_sheets` changes nothing. In `find` mode it looks for text, a number (also matched by its
+value) or a regular expression in values or formulas, with match case and whole cell, across the
+visible tabs, chosen tabs (a hidden tab only when named) or one range. It returns up to 200
+matches as `Tab!cell` with value and formula, the total and counts per tab, and scans at most
+200,000 cells per call; tabs that would go over are skipped and named, with a hint to narrow the
+search. A regular expression that repeats a group holding a repeat or alternatives, such as
+(a+)+ or (a|b)+, is refused, because it can run for minutes; cells longer than 5,000 characters
+are left out of a regular-expression search and counted. In `duplicates` mode it reports the
+duplicate rows of one range by key columns (groups, counts and up to 10 row numbers each),
+ignoring case and surrounding spaces unless asked.
+
+### Edit actions
+
+`edit_sheet` keeps its original actions and adds the analyst ones:
+
+| Action | What it does | Limits |
+| --- | --- | --- |
+| `set_values` | Literal values; text beginning with = stays text | Inspected range |
+| `set_formulas` | Formulas (see [Formulas](#formulas)) | Inspected range, 8,000 characters each |
+| `format`, `sort`, `filter`, `freeze` | Number format, bold, colours, alignment and wrap; sort by columns; a basic filter; frozen rows and columns | Inspected range |
+| `create_sheet`, `rename_sheet` | A new tab, or a new name for one | A tab a saved report or dashboard uses must have its destination updated before it is renamed |
+| `copy_range`, `move_range` | Copy or move the inspected range to a top-left cell on this tab or another; a copy pastes all, values, formats or formulas, while a move always takes everything, because Sheets empties the whole source, and takes the formulas that point at it along | Inspected range |
+| `insert_rows`, `insert_columns` | Insert before a 1-based `start` | 500 per call |
+| `delete_rows`, `delete_columns` | Delete from `start`; always asks first, and refuses to delete every row or column that is not frozen, as Sheets does | 500 per call; undoable up to 50,000 cells |
+| `group_rows`, `group_columns`, `ungroup_rows`, `ungroup_columns` | Outline groups, at most 8 levels; ungroup only where every row or column is grouped | The tab's grid |
+| `find_replace` | Text or a regular expression, match case and whole cell, in the inspected range or the whole tab's data; never touches formulas and never makes one; dates and numbers are checked both by their number and by what they show (3/15/2023), so the count and the checks never undercount what Sheets changes; a regular-expression replacement refers to groups as $1 to $9 and has no backslashes or other $ signs, so the text checked is the text Sheets writes | 50,000 cells; the whole tab or more than 200 changed cells asks first |
+| `remove_duplicates` | Keep the first or last row of each key (`keyColumns`), below `headerRows`; always asks first | Inspected range |
+| `highlight_duplicates` | One live conditional-format rule that colours repeated keys; an error cell (#N/A) counts as no match, so it never turns the rule off for every row | Inspected range |
+| `trim_whitespace` | Trims spaces in text cells | Inspected range |
+| `split_columns` | Splits one column to the right by comma, semicolon, period, space, a custom separator or auto; dates and numbers split by what they show; asks before writing over filled cells, and refuses when a piece would start with =, + or - followed by text, which Sheets would enter as a formula | Inspected range |
+| `data_validation` | Dropdown from a list (up to 500 values) or a range of this spreadsheet, checkbox, number or date conditions, strict or not; `clear` removes it; rows a filter hides are included | Inspected range |
+| `set_notes`, `set_links` | Notes, or rich-text links on literal text (https only; an empty URL removes the link) | Inspected range |
+| `named_range` | Add, update (rename or move) or delete a named range | One name per call |
+| `duplicate_sheet`, `delete_sheet`, `hide_sheet`, `show_sheet` | Tab operations; delete always asks, and never removes a tab a saved report or dashboard uses or the last visible tab; a tab too large to copy within the spreadsheet's 10 million cells is deleted without an undo copy, and the question says so | One tab per call |
+
+`create_pivot` makes a real Sheets pivot, by default in a new tab (see
+[Native pivot tables](#native-pivot-tables)). `conditional_format` adds, lists and deletes
+conditional-format rules on a cell, a range, a column to its last row (`D2:D`) or whole columns
+(`D:F`): number comparisons (greater, less, equal, between and their opposites), text contains,
+does not contain, starts with, ends with or equals (text starting with = or + is refused, since Sheets reads it as a formula; pivot filters follow the same rule), dates before, after, on or between (as YYYY-MM-DD or relative
+dates), blank or not blank, a custom formula under the same rules as `set_formulas` but on cells of its own tab only (Sheets does not allow other tabs there), and 2- or 3-point colour scales by min, max, number, percent or percentile. A rule sets a
+background colour, text colour, bold, italic or strikethrough. A new rule goes after the
+existing ones, as in the Sheets editor, and the result says when an earlier rule covers the same
+cells. `list` returns each rule with a `ruleId`; `delete` removes the rule with that id.
+
+### Protected output
+
+Report output continues to use its existing protected writer. Chat refuses to change the values,
+formulas, order or structure of saved report and dashboard output (and anything on a
+dashboard's page or chart data tab): set values, formulas, sorting, copy or move onto it,
+inserting or deleting rows and columns through it, find and replace, deduplicating, trimming,
+splitting, validation, notes or links on it, deleting its tab, or placing a pivot or an array
+result of known size over it. The error names the report or dashboard to change
+instead. Formatting, conditional formats, filters and frozen panes stay allowed, because a
+refresh keeps them, and report output may be the source of a pivot. Tables chat wrote with
+write_to_sheet remain yours to edit. Editing report values by hand still makes the next refresh
+stop until the report is moved to a fresh output area.
+
+### Confirmation
+
+Destructive or wide changes return a question instead of acting, for example replacing more than 200
+non-empty cells, deleting rows, columns or a tab, removing duplicates, find and replace over a
+whole tab or more than 200 cells, and anything that cannot be undone here. The tool answers
+`{needsConfirmation, confirmToken, summary}` and changes nothing; chat asks you, and the sidebar
+shows **Yes** and **No** under the question, above them DataMoov's own summary of each change
+Yes approves (not the model's wording). The change happens only when your next message is
+a yes, typed or sent with the Yes button (which carries the offered token, so only that change
+is approved), for that exact change, once, within that request. If the cells it would change
+are no longer as they were when chat asked, the yes does not cover it and chat asks again. A token the model passes on its
+own, for other input, a second time or after 30 minutes is refused. A typed yes approves every
+change offered in the previous answer, and only a plain one counts: it starts with yes, ok,
+sure, confirm, go ahead or similar and has no question mark and no word such as no, not, don't,
+wait, hold, stop, cancel or but. Any other answer, or pressing No, drops the question.
+
+### Undo
+
+Chat keeps what each cell edit replaced (values with formulas as formulas, formats, notes,
+validation) in your private cache for six hours, the last ten edits per spreadsheet. Ask "undo
+that" and `undo_sheet_edit` restores the latest edit, or one named from its list, in one batch;
+it refuses when those cells changed since, naming the range, and when rows or columns of their tab
+were inserted or deleted since or a later chat edit moved cells there (undo that one first), since
+the cells are then no longer where they were; group and ungroup undo follow the same rows and
+columns rule. Undoing a named range edit is refused once the name
+was changed since, and undoing `duplicate_sheet` once the copy's data grew or shrank. Structural changes are reversed
+where feasible: inserted rows and columns are deleted while untouched, deleted ones are
+re-inserted with their cells, a move is moved back, groups, validation, notes, links, named
+ranges, conditional-format rules, hidden tabs and a pivot placed on an existing tab are put back.
+Undoing a conditional-format change is refused once the tab's rules changed since, because the
+rule is found by its position. Undoing `format` is allowed over report output, like the edit.
+Undoing an insert or delete is refused, like the edit itself, when report or dashboard output
+now sits in the rows or columns it would move.
+A deleted tab is kept as a hidden "DataMoov undo · <name>" copy for its six-hour undo window;
+the first chat request after that deletes it, and the delete result says so, since editors can
+show hidden tabs. Formulas elsewhere that pointed at it stay #REF!. A snapshot too large to keep
+(over 50,000 cells or about 900,000 characters packed) is not undoable here, so chat asks first and says so;
+Sheets version history can still restore it. Undo does not restore row heights, merges or
+basic filters, and a pivot on a new tab is removed by deleting its tab.
+
+### Formulas
+
+`set_formulas` accepts every Google Sheets built-in function except a short denylist: nesting,
+LET and LAMBDA with MAP, BYROW, BYCOL, REDUCE, SCAN and MAKEARRAY, XLOOKUP, QUERY (its query
+string is data), FILTER, SORT, UNIQUE, ARRAYFORMULA, REGEX functions, SUMPRODUCT, array literals
+such as {1,2;3,4}, references to other tabs ('Tab name'!A:C), whole and open ranges (A:A, 2:2,
+A2:A) and named ranges of this spreadsheet, up to 8,000 characters per formula. Refused anywhere
+outside quoted text: IMPORTRANGE, IMPORTDATA, IMPORTHTML, IMPORTXML, IMPORTFEED, IMAGE,
+GOOGLEFINANCE, GOOGLETRANSLATE, DETECTLANGUAGE, INDIRECT and AI, which fetch from or send data
+outside the spreadsheet or hide what a formula reads. A function that is not a Sheets built-in
+(custom, Apps Script and named functions) is refused by name, as are unknown names and tabs. A
+LET name counts as defined only after its value, so `LET(F, F(A1), F)` calls the global `F` and is
+refused like it.
+HYPERLINK takes a literal https address. The built-in list is kept in
+`src/dmv_chat_sheet_formulas.js`.
+
+When the size of an array result follows from the formula (array literals, bounded ranges,
+SEQUENCE or MAKEARRAY with literal sizes), its spill area must be empty, inside the tab and off
+protected output, and it is kept for undo. Other array results (FILTER, QUERY, and lookups or
+conditional counts such as VLOOKUP, MATCH or COUNTIF over a range of keys inside ARRAYFORMULA)
+are left to Sheets, which never writes over data and shows #REF! instead. After writing, chat reads the
+cells back and returns each error with its cell and Sheets' message (#REF!, #N/A, #VALUE!,
+#DIV/0!, #NAME?, #ERROR!), a sample of the results and where arrays spilled, so it can fix the
+formula in the same turn. Nothing written is rolled back automatically, but undo is available.
+Literal values beginning with = stay text. Internal report settings remain excluded.
 
 ### Native pivot tables
 
@@ -183,6 +307,14 @@ The range may include future blank rows within the existing sheet grid, so later
 that range participate automatically. Data outside it requires a larger source range.
 Native date grouping requires actual Sheets date cells; ISO dates written as text cannot be
 passed as native date groups. An already prepared month column can be an ordinary pivot group.
+
+Pivots also take MEDIAN, values shown as a percent of the row, column or grand total, quarter
+buckets, a sort per group (by its labels or by a value), up to 6 filters (chosen values or a
+condition), totals, and a `targetCell` on an existing tab whose cells the pivot could fill are
+empty and not report output (at most 50,000 cells; undo removes it). Money needs a currency-code
+column to group by; with several currencies, totals that would add them up are left out (the
+result says which) and percentages that would mix them are refused. Calls with only the original
+options run the original path unchanged.
 
 ## Dashboards
 
@@ -480,6 +612,10 @@ Values that come back from providers are framed as data, not instructions.
   the same anchor and that were not edited since, are ever replaced. Formulas and manual edits
   stop a rewrite.
 - Charts are native Sheets charts over the written table; delete them like any chart.
+- Sheet edits are typed, bounded requests built by the add-on, never raw API requests. They
+  never change the values, order or structure of saved report or dashboard output (formatting,
+  conditional formats, filters and frozen panes there are fine), ask before destructive changes, and keep undo
+  snapshots only in your private cache for six hours.
 - A turn is bounded by **Time limit per chat request** (initially 600 seconds) and by 8 tool
   rounds per 200 seconds of that limit. Apps Script stops any single execution at 6 minutes,
   so each execution works for about 200 seconds, and every tool in it shares that deadline (a
@@ -522,8 +658,11 @@ Values that come back from providers are framed as data, not instructions.
 | `ask_user` | Ask one clarifying question with up to six options; ends the turn |
 | `list_sheets` | List ordinary tabs and grid sizes |
 | `inspect_sheet` | Inspect a bounded range and issue a private, short-lived edit token |
-| `edit_sheet` | Apply validated values, scalar formulas, formatting, sorting, filters, freeze panes, or tab creation/rename |
-| `create_pivot` | Create a native pivot on a new tab from a validated source range |
+| `search_sheets` | Read-only: find text, numbers or a regex across tabs (up to 200 matches, 200,000 cells scanned), or report duplicate rows of a range by key columns |
+| `edit_sheet` | Apply validated values, formulas (any built-in except the denylist), formatting, sorting, filters, freeze panes, tab creation/rename, and the analyst actions: copy/move, insert/delete/group rows and columns, find and replace, duplicates, trim, split, validation, notes, links, named ranges and tab duplicate/delete/hide/show; all through the output guard, confirmation and undo |
+| `undo_sheet_edit` | List or undo recent chat sheet edits of this spreadsheet (last 10, six hours) |
+| `create_pivot` | Create a native pivot on a new tab (or at a cell of an existing tab) from a validated source range, with filters, totals, per-group sort, percentages, MEDIAN and quarters |
+| `conditional_format` | Add, list or delete conditional-format rules: number, text, date, blank, custom formula and colour scales |
 | `list_dashboards` | List private saved dashboards for this spreadsheet |
 | `save_dashboard` | Save a plan: up to 8 datasets (a query, a tab and optional shared column names each), tiles (kpi, chart or table over one or more datasets; `compare` names the current and previous dataset ids, one id or a list each; tables take `highlight` rules with a numeric `value` or an `ofTotal` multiple on a metric, ratio or formula, or a text `value` on a groupBy column; any tile takes `formulas`, calculated metrics whose keys charts, tables, scorecards, rules and polarity lists name like ratio keys), the dashboard-level `lowerIsBetter` and `neutral` metric lists, and the dashboard tab |
 | `run_dashboard` | Fetch every dataset and atomically rebuild all tabs, cards, charts and tables; return scorecard values, the `highlights` sentences, a short preview of each tile and tab links |
@@ -533,7 +672,7 @@ Values that come back from providers are framed as data, not instructions.
 Providers are adapted in `src/dmv_ai.js`: Anthropic Messages API, OpenAI Chat Completions
 and Gemini `generateContent`, each with its own tool-call format, normalized to one shape for
 the loop in `src/dmv_chat.js`. Tool implementations live in `src/dmv_chat_tools.js`, `src/dmv_chat_sheets.js`,
-`src/dmv_chat_pivots.js`, `src/dmv_chat_dashboards.js` and `src/dmv_chat_reports.js`. The capability
+`src/dmv_chat_sheet_safety.js`, `src/dmv_chat_sheet_actions.js`, `src/dmv_chat_sheet_conditions.js`, `src/dmv_chat_sheet_formulas.js`, `src/dmv_chat_pivots.js`, `src/dmv_chat_dashboards.js` and `src/dmv_chat_reports.js`. The capability
 description the model answers "what can you do?" from is `dmvChatCapabilities_` in `src/dmv_chat.js`;
 keep it in step with this document and the README. Saved dashboard plans execute in
 `src/dmv_dashboards.js`, which lays out the dashboard tab and builds its charts itself.

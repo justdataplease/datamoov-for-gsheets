@@ -21,8 +21,12 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | src/dmv_chat.js | One chat turn: system prompt from the live catalog, tool schemas, bounded tool loop, private live progress, transcript replay, budget-exhausted final answer |
 | src/dmv_chat_tools.js | Chat tools, complete-query reuse within one turn, combination, per-group ranking, ratios and calculated metrics, protected sheet output with tab links; result IDs available through a one-hour private cache |
 | src/dmv_formulas.js | Calculated metrics: the strict expression parser (no eval), limits, positioned errors, money/number/percent unit rules, references to summable columns, ratios and earlier formulas, and evaluation over per-group sums with blanks for division by zero |
-| src/dmv_chat_sheets.js | Bounded sheet inspection and atomic typed edits, stale-range tokens, scalar formula validation and protected-tab checks |
-| src/dmv_chat_pivots.js | Native pivot creation from explicit validated sheet ranges |
+| src/dmv_chat_sheets.js | Bounded sheet inspection and the built-in typed edits (values, formulas, format, sort, filter, freeze, create and rename tab), stale-range tokens, protected-tab checks and the edit_sheet schema the analyst actions extend |
+| src/dmv_chat_pivots.js | The create_pivot tool: native pivot creation from explicit validated sheet ranges, on a new tab with the original options, or through the edit pipeline with the analyst options (filters, totals, per-group sort, percentages, MEDIAN, quarters, a cell of an existing tab) |
+| src/dmv_chat_sheet_safety.js | Shared core of chat sheet edits: the guard that keeps report and dashboard output untouched, undo snapshots in the private cache with undo_sheet_edit, server-side confirmation tokens with the plain-yes check, the check that refuses slow regular expressions, and the pipeline that runs analyst actions with those guarantees |
+| src/dmv_chat_sheet_actions.js | Registered analyst edit_sheet actions (copy/move, rows and columns, cleanup, validation, notes, named ranges, tab operations) and the action spec they follow |
+| src/dmv_chat_sheet_conditions.js | Conditions shared by pivot filters and conditional formats, and the conditional_format tool (add, list, delete, each undoable) |
+| src/dmv_chat_sheet_formulas.js | The set_formulas policy (every built-in except the denylist, cross-tab and named references, spill checks), formula read-back of errors and spills, and the read-only search_sheets tool |
 | src/dmv_dashboards.js | Private dashboard plans (datasets, tiles, period comparisons checked against their resolved dates, highlight rules on numbers or text, change polarity, calculated metrics checked at save and recomputed from summed parts on every tile kind), fresh dataset execution, the dashboard page on its twelve-column grid with runtime highlights, native charts and the atomic multi-tab refresh |
 | src/dmv_chat_dashboards.js | Chat adapters for saving, listing and running the dashboard runtime |
 | src/dmv_chat_reports.js | Chat adapters for listing saved reports and saving one as a draft through the report runtime |
@@ -30,7 +34,7 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | src/dmv_welcome.js | The one-time "Start here" page: what DataMoov does and the order to do it in |
 | src/dmv_sidebar.html | Sidebar structure |
 | src/dmv_client.html | Browser state, forms, connection form with its chat instructions, saved dashboard cards and server calls |
-| src/dmv_client_chat.html | Chat panel: AI and general settings, safe Markdown and output links, live activity, default-on completed actions and option chips |
+| src/dmv_client_chat.html | Chat panel: AI and general settings, safe Markdown and output links, live activity, default-on completed actions, option chips and the Yes/No chips that answer a sheet-edit confirmation under the server's summary of what Yes approves |
 | src/dmv_styles.html | Sidebar styles |
 | src/appsscript.json | Google scopes, runtime and Sheets service |
 | tests/ | Real implementation exercised with offline services and provider fixtures |

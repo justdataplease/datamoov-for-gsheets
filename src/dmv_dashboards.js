@@ -1279,21 +1279,27 @@ function dmvDeleteDashboard(id, keepTabs) {
         });
         var live = (
           Sheets.Spreadsheets.get(dashboard.spreadsheetId, {
-            fields: 'sheets.properties.sheetId',
+            fields: 'sheets.properties(sheetId,hidden)',
           }).sheets || []
         ).map(function (item) {
-          return item.properties.sheetId;
+          return item.properties;
         });
         var requests = live
-          .filter(function (sheetId) {
-            return owned[sheetId];
+          .filter(function (properties) {
+            return owned[properties.sheetId];
           })
-          .map(function (sheetId) {
-            return { deleteSheet: { sheetId: sheetId } };
+          .map(function (properties) {
+            return { deleteSheet: { sheetId: properties.sheetId } };
           });
         if (!requests.length) return 0;
-        // A spreadsheet must keep one tab.
-        if (requests.length === live.length) requests.unshift({ addSheet: { properties: {} } });
+        // A spreadsheet must keep one visible tab; hidden ones, such as chat's undo copies of
+        // deleted tabs, do not count.
+        if (
+          !live.some(function (properties) {
+            return !owned[properties.sheetId] && !properties.hidden;
+          })
+        )
+          requests.unshift({ addSheet: { properties: {} } });
         Sheets.Spreadsheets.batchUpdate({ requests: requests }, dashboard.spreadsheetId);
         return requests.filter(function (request) {
           return request.deleteSheet;

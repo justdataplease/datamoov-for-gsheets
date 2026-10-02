@@ -62,7 +62,7 @@ In Chat, the **Sources** dropdown selects one or more saved sources for each con
 
 Repeated identical report queries within one chat turn reuse complete results and show **Reused** in Actions. A dashboard refresh always fetches fresh source data.
 
-Chat can also edit existing cells when asked: enter common scalar formulas, format ranges, sort, add filters, freeze rows or columns, and create or rename tabs. It inspects the target first and rejects stale edits. Each edit supports up to 1,000 cells; formulas use supported built-ins and same-tab references. See [chat capabilities and limits](docs/chat.md).
+Chat can also work in existing sheets when asked, like an analyst: formulas with any Sheets built-in except external-data ones (lookups across tabs, QUERY, LET and LAMBDA), formatting and conditional formats, sorting and filters, copy and move, rows and columns, find and replace, duplicates, trimming and splitting, dropdowns, notes, links, named ranges, tab operations, native pivots and a read-only search across tabs. It inspects the target first and rejects stale edits, never changes the values or order of report or dashboard output (formatting, conditional formats, filters and frozen panes there are fine), asks before destructive changes, and can undo its recent edits for six hours. Each range edit supports up to 1,000 cells. See [editing existing sheets](docs/chat.md#editing-existing-sheets).
 
 ### Reports and dashboards: how they fit together
 

@@ -148,7 +148,7 @@ test('a full Anthropic turn runs a report, summarizes, writes the table, charts 
   assert.match(first.system[0].text, /connectionId "id-\d+": Orchard main \(Orchard Ads; account=acct-1\)/);
   assert.match(first.system[0].text, /reportType "daily"/);
   assert.match(first.system[0].text, /spend "Spend" \[currency, metric, default\]/);
-  assert.deepEqual(first.tools.map((tool) => tool.name), ['run_report', 'discover_fields', 'describe_database', 'combine_results', 'summarize', 'write_to_sheet', 'read_sheet', 'create_chart', 'ask_user', 'list_sheets', 'inspect_sheet', 'edit_sheet', 'create_pivot', 'list_dashboards', 'save_dashboard', 'run_dashboard', 'list_reports', 'save_report']);
+  assert.deepEqual(first.tools.map((tool) => tool.name), ['run_report', 'discover_fields', 'describe_database', 'combine_results', 'summarize', 'write_to_sheet', 'read_sheet', 'create_chart', 'ask_user', 'list_sheets', 'inspect_sheet', 'edit_sheet', 'undo_sheet_edit', 'conditional_format', 'search_sheets', 'create_pivot', 'list_dashboards', 'save_dashboard', 'run_dashboard', 'list_reports', 'save_report']);
   assert.equal(first.tools[0].input_schema.properties.config.properties.region.type, 'string');
   const second = payload(calls[1]);
   assert.deepEqual(second.messages[1].content, [{ type: 'text', text: 'Pulling the data.' }, toolUse('t1', 'run_report', { connectionId: f.connection.id, reportType: 'daily', dateRange: { preset: 'last7' } })]);

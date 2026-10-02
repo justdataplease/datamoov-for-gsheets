@@ -212,46 +212,57 @@ test('changed values, formulas, formatting and validation invalidate a prior ins
   }
 });
 
-test('safe scalar formulas and aggregate ranges work without allowing arrays or external data', () => {
+// Changed with the analyst formula policy (dmv_chat_sheet_formulas.js): arrays, other tabs and
+// named ranges of this spreadsheet are now accepted; external, custom and indirect functions,
+// unknown names and missing tabs are still refused, each by name.
+test('formulas take built-ins, arrays and ranges, never external, custom or indirect functions', () => {
   const f = fixture();
   f.setCell(f.sheet, 2, 1, 2);
   f.setCell(f.sheet, 3, 1, 4);
   f.edit('set_formulas', { formulas: [['=SUM(A2:A3)', '=IF(A2>0,A2,0)']] }, f.inspect('B1:C1'));
   assert.equal(f.formula(f.sheet, 1, 2), '=SUM(A2:A3)');
   assert.equal(f.formula(f.sheet, 1, 3), '=IF(A2>0,A2,0)');
-  for (const formula of [
-    '=IMPORTDATA("https://example.com")',
-    '=IMAGE("https://example.com")',
-    '=GOOGLEFINANCE("X")',
-    '=CUSTOM(A1)',
-    '=INDIRECT("A1")',
-    '=NamedRange',
-    '=Other!A1',
-    "='DataMoovReports'!A1",
-    '=A1:A3',
-    '=IF(TRUE,A1:A3,0)',
-    '=IF(TRUE,{1,2},0)',
-    '=SUMIF(A1:A3,B1:B3,C1:C3)',
-    '=COUNTIFS(A1:A3,B1:B3)',
+  for (const [formula, refusal] of [
+    ['=IMPORTDATA("https://example.com")', /IMPORTDATA is not allowed/],
+    ['=IMAGE("https://example.com")', /IMAGE is not allowed/],
+    ['=GOOGLEFINANCE("X")', /GOOGLEFINANCE is not allowed/],
+    ['=CUSTOM(A1)', /unknown function CUSTOM/],
+    ['=INDIRECT("A1")', /INDIRECT is not allowed/],
+    ['=NamedRange', /unknown name NAMEDRANGE/],
+    ['=Other!A1', /No tab named "Other"/],
+    ["='DataMoovReports'!A1", /No tab named "DataMoovReports"/],
   ]) {
     assert.throws(
       () => f.edit('set_formulas', { formulas: [[formula]] }, f.inspect('D1')),
-      /supported scalar/,
+      refusal,
       formula
     );
   }
   assert.equal(f.state.batches.length, 1);
+  for (const [column, formula] of [
+    [4, '=A1:A3'],
+    [5, '=IF(TRUE,A1:A3,0)'],
+    [6, '=IF(TRUE,{1,2},0)'],
+    [7, '=SUMIF(A1:A3,B1:B3,C1:C3)'],
+    [8, '=COUNTIFS(A1:A3,B1:B3)'],
+  ]) {
+    f.edit('set_formulas', { formulas: [[formula]] }, f.inspect('DEFGH'[column - 4] + '1'));
+    assert.equal(f.formula(f.sheet, 1, column), formula);
+  }
+  assert.equal(f.state.batches.length, 6);
 });
 
-test('same-tab references cannot indirectly reach unsafe existing formulas', () => {
+// Changed with the analyst formula policy: the old validator walked the formulas of referenced
+// cells, which whole columns and other tabs make impossible. Reading a cell's result fetches
+// nothing new; only the formulas chat writes are checked.
+test('a formula may refer to cells whatever formulas they already hold', () => {
   const f = fixture();
   f.setCell(f.sheet, 1, 1, '=B1', '=B1');
   f.setCell(f.sheet, 1, 2, '=INDIRECT("DataMoovReports!A1")', '=INDIRECT("DataMoovReports!A1")');
-  assert.throws(
-    () => f.edit('set_formulas', { formulas: [['=A1']] }, f.inspect('C1')),
-    /supported scalar/
-  );
-  assert.equal(f.state.batches.length, 0);
+  f.edit('set_formulas', { formulas: [['=A1']] }, f.inspect('C1'));
+  assert.equal(f.formula(f.sheet, 1, 3), '=A1');
+  assert.equal(f.formula(f.sheet, 1, 2), '=INDIRECT("DataMoovReports!A1")');
+  assert.equal(f.state.batches.length, 1);
 });
 
 test('sort preserves its header and rows outside the explicit range', () => {
@@ -344,9 +355,6 @@ test('freeze and new-tab creation are bounded, while rename protects saved repor
     () => f.api.dmvChatEditSheet_(f.session, { action: 'create_sheet', newName: 'New output' }),
     /already exists/
   );
-  f.api.dmvReadDefinitions_ = () => ({ definitions: [{ target: { sheetName: 'Output' } }] });
-  assert.throws(() => f.edit('rename_sheet', { newName: 'Renamed' }), /saved report/);
-  f.api.dmvReadDefinitions_ = () => ({ definitions: [] });
   f.api.dmvList_ = (kind) =>
     kind === 'report' ? [{ spreadsheetId: f.book.id, target: { sheetName: 'Output' } }] : [];
   assert.throws(() => f.edit('rename_sheet', { newName: 'Renamed' }), /saved report/);
@@ -378,7 +386,7 @@ test('bounds, malformed actions and concurrent workbook work fail before mutatio
     /documented fields/
   );
   assert.throws(
-    () => f.api.dmvChatEditSheet_(f.session, { action: 'delete_sheet' }),
+    () => f.api.dmvChatEditSheet_(f.session, { action: 'delete_spreadsheet' }),
     /supported sheet action/
   );
   assert.throws(
@@ -430,4 +438,13 @@ test('registered tools expose typed operations and fixed actual progress labels'
   assert.equal(f.api.DMV_CHAT_PROGRESS_LABELS.edit_sheet, 'Updating the spreadsheet');
   const schema = tools.find((tool) => tool.name === 'edit_sheet').input_schema;
   assert.ok(!schema.properties.requests);
+});
+
+test('rename_sheet runs against the real runtime, with no stand-in for removed report stores', () => {
+  // rename_sheet once read workbook report definitions through a function no file defines any
+  // more; with nothing stubbed, renaming a free tab must work and a saved report's tab must not.
+  const f = fixture();
+  assert.equal(typeof f.api.dmvReadDefinitions_, 'undefined');
+  f.edit('rename_sheet', { newName: 'Renamed' });
+  assert.ok(f.tab('Renamed'));
 });
