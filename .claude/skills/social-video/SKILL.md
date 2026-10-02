@@ -29,6 +29,9 @@ video).
   (`123-456-7890`, any run of 7+ digits), e-mails outside example.com, and every ID found in the
   private files under `data/` and `.local/`. A hit fails the run and deletes that render. Never
   weaken these checks to make a render pass; change what is on screen.
+- The check joins digits across a dash or a line break, so ISO dates (2026-03-14) and an ID beside
+  a date can match dates in those files: pick fictional months that pass, and leave text the camera
+  never shows (hidden rows) out of a rendered page.
 
 ## Steps
 
@@ -55,11 +58,23 @@ video).
    frames of key shots with ffmpeg (`-ss <t> -frames:v 1`) and read them. Check: captions match
    the shot, sections are the right ones, text is readable at phone size, nothing real, no
    developer chrome (the preview banner is hidden by the recorder). Fix and re-render until it
-   is right; then render `--format all`.
+   is right; then render `--format all`, and check landscape on its own: it keeps no room under
+   the shot, so a caption lies on the sheet there. A caption never sits on blank grid or on what
+   it names: set it once the shot has settled (and clear it before a tab wipes out), frame wide
+   shots with `{ band: true }` and close-ups over a gap with `{ floor: y }`.
 6. **Hand over.** Give the paths of the MP4s (square 1080×1080 for the feed, portrait 1080×1350
    for mobile-first, landscape 1920×1080 for YouTube or the site), their lengths, and a 2 to 3
    line LinkedIn post text to go with it. Commit the storyboard and any kit changes (the `ship`
    skill's checks apply when `tools/` changed); renders stay out of git.
+
+## One-take style (product tours)
+
+`videos/product-tour-2/` is the example. Cards only at the very start and end; in between one
+camera never cuts: every beat starts from something still on screen (the pointer, the tab, the
+chat), the camera sets off before the thing it goes to see (its `lead` helper), holds with
+`d.drift` instead of freezing, and a tab change wipes out and in (`d.reveal(ms, false)`). Vary
+shot lengths: quick sidebar beats around 1 s, holds of 2 to 3 s on results. A click costs about
+1.5 s and loading a page about 1.5 s: budget clicks, and load pages while the camera travels.
 
 ## Limits to state honestly
 

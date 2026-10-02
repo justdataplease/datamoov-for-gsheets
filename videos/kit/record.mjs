@@ -44,6 +44,14 @@ const FORMATS = {
   portrait: { width: 1080, height: 1350, reserve: 0.26, caption: 38 },
   landscape: { width: 1920, height: 1080, reserve: 0, caption: 38 },
 };
+// Landscape keeps no room, so there a caption lies on the shot. A shot that must stay clear of it
+// keeps this much of the frame free instead: the caption's share of a landscape frame, and air.
+const BAND = 0.16;
+// The stage's world (kit/stage.html), in world pixels.
+const WORLD = { w: 1600, h: 1000 };
+// The sidebar's clock reads a fictional morning, 03:26 in Los Angeles on 1 Oct 2026 (just before
+// the demo dashboard's refresh), so no real date or time reaches the screen.
+const CLOCK = { start: Date.parse('2026-10-01T10:26:00Z'), timezone: 'America/Los_Angeles' };
 
 // The DataMoov mark, white on its indigo tile.
 const LOGO = readFileSync(path.join(kit, 'logo.svg'), 'utf8');
@@ -207,9 +215,19 @@ function ffmpeg(binary, args) {
 // ---------------------------------------------------------------------------------------------
 // The director: what a storyboard can do.
 
-function director({ page, stageCall, sidebarFrame, format, renderDir, slug }) {
+function director({ page, stageCall, sidebarFrame, format, renderDir, slug, capturedUntil }) {
   const side = page.frameLocator('#sidebar');
   const wait = (ms) => page.waitForTimeout(ms);
+  // A few frames after the camera stops, Chrome repaints the shot at full resolution and sends
+  // no frame for about a quarter of a second. A camera move ends only once a frame from after that
+  // pause has been captured, so nothing moves inside it, which the video would show as a jump.
+  const film = async (method, ...args) => {
+    await stageCall(method, ...args);
+    const stop = Date.now() / 1000;
+    const until = Date.now() + 2000;
+    while (capturedUntil() < stop + 0.12 && Date.now() < until)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+  };
   const W = format.width;
   const named = async (target) => {
     if (typeof target === 'object') return target;
@@ -250,9 +268,31 @@ function director({ page, stageCall, sidebarFrame, format, renderDir, slug }) {
       await stageCall('say', html || '');
       if (hold) await wait(hold);
     },
+    // `ease`: 'inOut' (default), 'out' (arrives softly, for a move that starts at speed), 'in',
+    // 'linear'. Where the format keeps no room for the caption (landscape), `band` frames a wide
+    // shot down to the app's bottom edge, the caption on the black below it, and `floor` ends a
+    // close-up at that world y, the caption on the rows just above it (a gap in the sheet).
+    // Framing the sidebar shades the sheet beside it.
     async look(target, ms = 1200, options = {}) {
-      await stageCall('look', await named(target), ms, options.reserve ?? format.reserve);
+      let rect = await named(target);
+      let reserve = options.reserve ?? format.reserve;
+      if (reserve < BAND && options.band) {
+        rect = { x: 0, y: rect.y, w: WORLD.w, h: WORLD.h - rect.y };
+        reserve = BAND;
+      } else if (reserve < BAND && options.floor) {
+        const h = (rect.w * format.height) / format.width;
+        // Taller than the box asked for: rather than slice through the title or menus above it,
+        // start at the app's top and widen the shot to keep the aspect.
+        const top = options.floor - h < rect.y ? (await named('app')).y : options.floor - h;
+        const tall = options.floor - top;
+        rect = { ...rect, y: top, h: tall, w: Math.max(rect.w, (tall * format.width) / format.height) };
+      }
+      await stageCall('shade', target === 'chat' || target === 'sidebar');
+      await film('look', rect, ms, reserve, options.ease);
     },
+    // A slow push in (zoom > 1) or pull out around the frame's centre: a hold that keeps moving.
+    // The pointer measures against the camera at rest, so act only after it ends.
+    drift: (ms, zoom = 1.05) => film('drift', ms, zoom),
     async click(selector) {
       await pointAt(selector, true);
       // The camera may frame only part of the app, leaving the element outside the page viewport,
@@ -282,7 +322,9 @@ function director({ page, stageCall, sidebarFrame, format, renderDir, slug }) {
       if (!box) throw new Error('Not visible: ' + selector);
       const at = await stageCall('toWorld', box.x + box.width / 2, box.y + box.height / 2);
       const r = await stageCall('rect', 'sidebar');
-      await stageCall('look', { x: r.x - 16, y: at.y - h / 2, w: r.w + 32, h }, ms, format.reserve);
+      await stageCall('shade', true);
+      const rect = { x: r.x - 16, y: at.y - h / 2, w: r.w + 32, h };
+      await film('look', rect, ms, format.reserve || BAND);
     },
     // Scrolls a sidebar element into view inside the panel.
     async scrollTo(selector) {
@@ -324,7 +366,14 @@ function director({ page, stageCall, sidebarFrame, format, renderDir, slug }) {
     async dashboard(name = 'dashboard') {
       await stageCall('dashboard', `${STAGE}/render/${slug}/dashboard/${name}.html`);
     },
-    reveal: (ms) => stageCall('reveal', ms),
+    // Clicks a cell of the rendered tab ('B4', or a merged 'A3:B4'): the ring moves there, the
+    // cell is selected and the formula bar shows `content`, a formula or a value.
+    async cell(ref, content) {
+      const box = await stageCall('cellBox', ref);
+      await stageCall('point', box.x + box.w / 2, box.y + box.h / 2, true);
+      await stageCall('select', ref, content);
+    },
+    reveal: (ms, show = true) => stageCall('reveal', ms, show),
     dock: (open, ms) => stageCall('dock', open, ms),
     tab: (name, active = true) => stageCall('addTab', name, active),
     activate: (name) => stageCall('activate', name),
@@ -339,7 +388,8 @@ function director({ page, stageCall, sidebarFrame, format, renderDir, slug }) {
         w: w ?? Math.min(sheet.w, 1360),
         h: height,
       };
-      await Promise.all([scroll, stageCall('look', rect, ms, format.reserve * 0.55)]);
+      await stageCall('shade', false);
+      await Promise.all([scroll, film('look', rect, ms, format.reserve * 0.55 || BAND)]);
       // The caption lands once the shot has settled.
       if (say !== undefined) await stageCall('say', say);
       if (hold) await wait(hold);
@@ -374,6 +424,7 @@ async function recordOne({
   try {
     const context = await browser.newContext({
       viewport: { width: format.width, height: format.height },
+      timezoneId: CLOCK.timezone,
       deviceScaleFactor: scale,
       reducedMotion: 'no-preference',
     });
@@ -385,10 +436,17 @@ async function recordOne({
       blocked.push(url);
       return route.abort();
     });
-    // The sidebar fixture, reshaped before it boots (see installPreview in tools/preview.mjs).
+    // The sidebar fixture, reshaped before it boots (see installPreview in tools/preview.mjs),
+    // its date presets in the recording's timezone, not the fixture's.
     const setup = storyboard.setupSidebar || defaultSetup;
     await context.addInitScript(
-      `if (location.port === '${SIDEBAR_PORT}') window.DATAMOOV_PREVIEW_SETUP = (${setup.toString()});`
+      `if (location.port === '${SIDEBAR_PORT}') window.DATAMOOV_PREVIEW_SETUP = (data) => {
+        (${setup.toString()})(data);
+        data.dateTimezone = '${CLOCK.timezone}';
+      };`
+    );
+    await context.addInitScript(
+      `if (location.port === '${SIDEBAR_PORT}') (${shiftClock.toString()})(${CLOCK.start});`
     );
     const page = await context.newPage();
     await page.goto(`${STAGE}/kit/stage.html`);
@@ -436,7 +494,8 @@ async function recordOne({
       }
     })();
 
-    const d = director({ page, stageCall, sidebarFrame, format, renderDir, slug });
+    const capturedUntil = () => frames.at(-1)?.at ?? 0;
+    const d = director({ page, stageCall, sidebarFrame, format, renderDir, slug, capturedUntil });
     // A failing storyboard must stop the scan loop too, or the process never exits.
     try {
       await storyboard.default(d);
@@ -526,6 +585,20 @@ async function recordOne({
   } finally {
     await browser.close();
   }
+}
+
+// Runs in the sidebar before it boots: its Date starts at `start` and runs on in real time.
+function shiftClock(start) {
+  const Real = Date;
+  const shift = start - Real.now();
+  window.Date = class extends Real {
+    constructor(...args) {
+      super(...(args.length ? args : [Real.now() + shift]));
+    }
+    static now() {
+      return Real.now() + shift;
+    }
+  };
 }
 
 // Two Google Ads accounts with fictional names and no numbers, chat ready to answer.

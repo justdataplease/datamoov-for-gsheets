@@ -5,7 +5,7 @@
 <title>DataMoov video stage</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Roboto+Mono:wght@400;500&display=swap">
 <style>
   /* The stage is a fixed 1600 x 1000 "world" (Sheets with the DataMoov sidebar docked) seen
      through a camera that pans and zooms inside whatever frame the video is recorded at.
@@ -25,8 +25,7 @@
 
   #camera { position: absolute; left: 0; top: 0; width: 1600px; height: 1000px;
     transform-origin: 0 0; }
-  #camera.moving { transition: transform var(--move, 1.2s) cubic-bezier(.65, 0, .35, 1); }
-  .app { position: absolute; inset: 0; display: grid; grid-template-rows: 56px 40px 1fr 38px;
+  .app { position: absolute; inset: 0; display: grid; grid-template-rows: 56px 40px auto 1fr 38px;
     background: #f8f9fa; color: var(--ink); border-radius: 14px; overflow: hidden;
     box-shadow: 0 50px 120px -30px rgba(0, 0, 0, .8), 0 0 0 1px rgba(255, 255, 255, .06); }
 
@@ -46,6 +45,16 @@
   .toolbar i { width: 1px; height: 18px; background: var(--line); margin: 0 6px; }
 
   /* Body: the sheet and the dock ------------------------------------------ */
+  /* The formula bar: the selected cell's name and what it holds; a long formula wraps. */
+  .fbar { display: flex; align-items: flex-start; min-height: 30px; background: var(--chrome);
+    border-bottom: 1px solid var(--line); font-size: 13px; color: var(--ink); }
+  .fbar .name { flex: none; width: 86px; padding: 7px 10px; border-right: 1px solid var(--line);
+    color: var(--muted); }
+  .fbar .fx { flex: none; padding: 6px 10px; color: #9aa0a6; font-style: italic; font-weight: 600; }
+  .fbar .value { flex: 1; padding: 6px 12px 6px 0; font: 14px/1.45 'Roboto Mono', Consolas, monospace;
+    white-space: pre-wrap; word-break: break-all; }
+  .fbar .value .ref { color: #c5221f; }
+  .fbar .value .fn { color: #0b57d0; }
   .body { position: relative; display: grid; grid-template-columns: 1fr var(--dock); min-height: 0;
     background: #fff; transition: grid-template-columns .9s cubic-bezier(.65, 0, .35, 1); }
   .body.closed { grid-template-columns: 1fr 0; }
@@ -57,8 +66,13 @@
       repeating-linear-gradient(90deg, transparent 0 145px, #e2e3e3 145px 146px) 46px 0,
       repeating-linear-gradient(0deg, transparent 0 20px, #e2e3e3 20px 21px) 0 0; }
   #dashboard { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff;
-    clip-path: inset(0 0 100% 0); transition: clip-path 1.1s cubic-bezier(.65, 0, .35, 1); }
-  #dashboard.in { clip-path: inset(0 0 0 0); }
+    visibility: hidden; }
+  #dashboard.in { visibility: visible; }
+  /* Darkens the sheet and the tab strip while the camera frames the sidebar, so the edge of the
+     shot shows no strip of the tab beside or under the panel. */
+  .sheet::after, .tabs::after { content: ''; position: absolute; inset: 0; z-index: 3;
+    background: var(--ground); opacity: 0; pointer-events: none; transition: opacity .6s ease; }
+  .app.shaded .sheet::after, .app.shaded .tabs::after { opacity: 1; }
   .dock { border-left: 1px solid var(--line); background: #f7f8fc; display: grid;
     grid-template-rows: 38px 1fr; min-width: 0; overflow: hidden; }
   .dock-head { display: flex; align-items: center; gap: 8px; padding: 0 14px; background: #fff;
@@ -67,7 +81,7 @@
   .dock-head .x { margin-left: auto; font-size: 17px; }
   #sidebar { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
 
-  .tabs { display: flex; align-items: center; gap: 2px; padding: 0 14px; background: var(--chrome);
+  .tabs { position: relative; display: flex; align-items: center; gap: 2px; padding: 0 14px; background: var(--chrome);
     border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); white-space: nowrap;
     overflow: hidden; }
   .tabs .plus { font-size: 18px; padding: 0 12px; }
@@ -101,7 +115,8 @@
     transition: opacity .5s ease; }
   #card.on { opacity: 1; }
   #card .inner { display: grid; justify-items: center; gap: calc(var(--u) * 2.2); padding: 7%;
-    max-width: 100%; }
+    max-width: 100%; transition: opacity .3s ease; }
+  #card .inner.out { opacity: 0; }
   #card .logo { width: calc(var(--u) * 13); height: calc(var(--u) * 13); }
   #card .logo svg { width: 100%; height: 100%; display: block; }
   #card .kicker { font-size: calc(var(--u) * 1.65); letter-spacing: .24em; text-transform: uppercase;
@@ -141,6 +156,7 @@
     </div>
     <div class="toolbar"><span>&#8617;</span><span>&#8618;</span><i></i><span>100%</span><i></i>
       <span>$</span><span>%</span><span>.0</span><i></i><span>Arial</span><i></i><span><b>B</b></span><span><em>I</em></span></div>
+    <div class="fbar" id="fbar"><span class="name" id="fbar-name">A1</span><span class="fx">fx</span><span class="value" id="fbar-value"></span></div>
     <div class="body" id="body">
       <div class="sheet" id="sheet"><div class="blank"></div><iframe id="dashboard" title="Dashboard"></iframe></div>
       <div class="dock">
@@ -170,6 +186,47 @@
   var tabs = document.getElementById('tabs');
   var wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
   var view = { cx: WORLD.w / 2, cy: WORLD.h / 2, scale: 1 };
+  // Camera speed curves: ease in and out (the default), or a move that starts or ends at speed.
+  var EASES = { inOut: bezier(.65, 0, .35, 1), out: bezier(.22, 1, .36, 1),
+    in: bezier(.55, 0, 1, .45), linear: function (t) { return t; } };
+  // The most camera time one frame may cover: a frame Chrome paints late holds the shot, and the
+  // move carries on from there, instead of jumping ahead in one frame.
+  var MAX_STEP = 50;
+  var shot = 0;
+
+  // A CSS cubic-bezier timing function: progress at time t, both from 0 to 1.
+  function bezier(x1, y1, x2, y2) {
+    var at = function (a, b, t) { return 3 * a * t * (1 - t) * (1 - t) + 3 * b * t * t * (1 - t) + t * t * t; };
+    return function (x) {
+      var low = 0, high = 1, t = x;
+      for (var i = 0; i < 30; i++) {
+        t = (low + high) / 2;
+        if (at(x1, x2, t) < x) low = t; else high = t;
+      }
+      return at(y1, y2, t);
+    };
+  }
+
+  // Steps the camera frame by frame on the page's own clock: `frame(t)` sets the view for
+  // progress t (0 to 1). Unlike a CSS transition, which Chrome runs apart from the page (and draws
+  // a zoom of at a lower resolution), the view is always what the screen shows, so a move starts
+  // from wherever the last one, or a drift, left the camera. A new move takes over from one still
+  // running.
+  function film(ms, frame) {
+    var id = ++shot, elapsed = 0, last = performance.now();
+    return new Promise(function (done) {
+      (function step(now) {
+        if (id !== shot) return done();
+        elapsed += Math.max(0, Math.min(MAX_STEP, now - last));
+        last = now;
+        var t = ms > 0 ? Math.min(1, elapsed / ms) : 1;
+        frame(t);
+        apply();
+        if (t < 1) requestAnimationFrame(step);
+        else done();
+      })(last);
+    });
+  }
 
   // One frame unit for cards, so a square and a landscape frame keep the same proportions.
   function sizeUnits() {
@@ -184,20 +241,104 @@
     camera.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + view.scale + ')';
   }
 
+  // Sheets draws empty rows and columns to the edges of the window, but a rendered tab stops a few
+  // rows past its data, so the stage adds the empty ones: columns always, rows when every row is
+  // drawn (no "more rows" note), up to the tab's last row when the page names it
+  // (<meta name="rows" content="1001">). The gridlines then move out from under the cells, so a
+  // wipe brings the cells in over the tab's own grid: one grid on screen, never two.
+  function fillGrid(doc) {
+    var page = doc.querySelector('.page'), cells = doc.querySelector('.grid');
+    var heads = Array.prototype.slice.call(doc.querySelectorAll('.head'));
+    var columns = heads.filter(function (head) { return !head.id; });
+    var rows = heads.filter(function (head) { return head.id; });
+    var limit = doc.querySelector('meta[name="rows"]');
+    var lastRow = doc.querySelector('.more') ? rows.length : limit ? Number(limit.content) : Infinity;
+    var corner = { w: rows[0].offsetWidth, h: columns[0].offsetHeight };
+    var right = page.offsetWidth, bottom = page.offsetHeight;
+    var add = function (label, id, box) {
+      var head = doc.createElement('div');
+      head.className = 'head';
+      if (id) head.id = id;
+      head.style.cssText = 'left:' + box[0] + 'px;top:' + box[1] + 'px;width:' + box[2] + 'px;height:' + box[3] + 'px';
+      head.textContent = label;
+      page.appendChild(head);
+      (id ? rows : columns).push(head);
+    };
+    // No sheet area is larger than the world.
+    for (; right < WORLD.w; right += 100) add(columnName(columns.length), '', [right, 0, 100, corner.h]);
+    for (var r = rows.length; bottom < WORLD.h && r < lastRow; bottom += 21, r++)
+      add(String(r + 1), 'row-' + (r + 1), [0, bottom, corner.w, 21]);
+    var w = right - corner.w, h = bottom - corner.h;
+    page.style.width = right + 'px';
+    page.style.height = bottom + 'px';
+    cells.style.width = w + 'px';
+    cells.style.height = h + 'px';
+    var freeze = doc.querySelector('.freeze');
+    if (freeze) freeze.style.width = w + 'px';
+    var lines = doc.querySelector('.lines');
+    if (!lines) return;
+    page.insertBefore(lines, cells);
+    lines.style.left = corner.w + 'px';
+    lines.style.top = corner.h + 'px';
+    lines.setAttribute('width', w);
+    lines.setAttribute('height', h);
+    lines.querySelector('path').setAttribute('d', columns.map(function (head) {
+      return 'M' + (head.offsetLeft + head.offsetWidth - corner.w - 0.5) + ' 0V' + h;
+    }).concat(rows.map(function (head) {
+      return 'M0 ' + (head.offsetTop + head.offsetHeight - corner.h - 0.5) + 'H' + w;
+    })).join(''));
+  }
+
+  // A column's letters, 0 being A, as Sheets names them.
+  function columnName(index) {
+    var name = '';
+    for (var n = index + 1; n > 0; n = Math.floor((n - 1) / 26))
+      name = String.fromCharCode(65 + (n - 1) % 26) + name;
+    return name;
+  }
+
+  // A cell or range of the rendered tab ('B4', 'A3:D4'): its box in world pixels, from its
+  // column and row headers, and the two headers Sheets highlights for it.
+  function cellArea(ref) {
+    var doc = document.getElementById('dashboard').contentDocument;
+    var parts = ref.split(':').map(function (a1) {
+      var m = /^([A-Z]+)(\d+)$/.exec(a1);
+      var column = Array.prototype.find.call(doc.querySelectorAll('.head'), function (head) {
+        return !head.id && head.textContent === m[1];
+      });
+      var row = doc.getElementById('row-' + m[2]);
+      if (!column || !row) throw new Error('No cell ' + a1 + ' in the rendered tab');
+      var c = column.getBoundingClientRect(), r = row.getBoundingClientRect();
+      return { left: c.left, right: c.right, top: r.top, bottom: r.bottom, column: column, row: row };
+    });
+    var a = parts[0], b = parts[parts.length - 1];
+    var sheet = stage.rect('sheet');
+    return { x: sheet.x + a.left, y: sheet.y + a.top, w: b.right - a.left, h: b.bottom - a.top,
+      heads: [a.column, a.row] };
+  }
+
   var stage = {
     ready: true,
     world: WORLD,
     // Fits a world rectangle into the frame, leaving `reserve` (a fraction of the frame height)
-    // free at the bottom for captions.
-    async look(rect, ms, reserve) {
+    // free at the bottom for captions. The frame's offset and scale each follow the speed curve,
+    // as a CSS transform transition would move them.
+    async look(rect, ms, reserve, ease) {
       var W = window.innerWidth, H = window.innerHeight;
       var free = H * (1 - (reserve || 0));
       var scale = Math.min(W / rect.w, free / rect.h);
-      view = { cx: rect.x + rect.w / 2, cy: rect.y + rect.h / 2 + (H - free) / 2 / scale, scale: scale };
-      camera.style.setProperty('--move', (ms || 0) + 'ms');
-      camera.classList.toggle('moving', Boolean(ms));
-      apply();
-      await wait(ms || 0);
+      var to = { cx: rect.x + rect.w / 2, cy: rect.y + rect.h / 2 + (H - free) / 2 / scale, scale: scale };
+      var offset = function (v) { return { x: W / 2 - v.cx * v.scale, y: H / 2 - v.cy * v.scale, s: v.scale }; };
+      var a = offset(view), b = offset(to), curve = EASES[ease || 'inOut'];
+      await film(ms, function (t) {
+        var e = curve(t), s = a.s + (b.s - a.s) * e;
+        view = { cx: (W / 2 - a.x - (b.x - a.x) * e) / s, cy: (H / 2 - a.y - (b.y - a.y) * e) / s, scale: s };
+      });
+    },
+    // A slow push in (`zoom` > 1) or pull out around the current centre, so a hold keeps moving.
+    async drift(ms, zoom) {
+      var from = view.scale;
+      await film(ms, function (t) { view.scale = from * (1 + (zoom - 1) * t); });
     },
     sidebar(url) { document.getElementById('sidebar').src = url; },
     async dashboard(url) {
@@ -207,11 +348,24 @@
       var style = frame.contentDocument.createElement('style');
       style.textContent = '.tabs, .more { display: none !important; } html { scrollbar-width: none; }';
       frame.contentDocument.head.appendChild(style);
+      fillGrid(frame.contentDocument);
     },
-    async reveal(ms) {
-      document.getElementById('dashboard').classList.add('in');
-      await wait(ms || 1100);
+    // Shows the rendered tab and wipes its cells in over its own grid, top to bottom of what the
+    // frame shows; or (`show` false) wipes them out again and leaves the empty sheet.
+    async reveal(ms, show) {
+      ms = ms || 1100;
+      var frame = document.getElementById('dashboard'), win = frame.contentWindow;
+      var cells = frame.contentDocument.querySelector('.grid');
+      frame.classList.add('in');
+      var top = win.scrollY - cells.offsetTop, bottom = top + win.innerHeight;
+      var edge = function (y) { return 'inset(0 0 calc(100% - ' + Math.max(0, y) + 'px) 0)'; };
+      var wipe = cells.animate({ clipPath: show === false ? [edge(bottom), edge(top)] : [edge(top), edge(bottom)] },
+        { duration: ms, easing: 'cubic-bezier(.65, 0, .35, 1)', fill: 'forwards' });
+      await wipe.finished;
+      if (show === false) frame.classList.remove('in');
+      else wipe.cancel();
     },
+    shade(on) { document.querySelector('.app').classList.toggle('shaded', Boolean(on)); },
     async dock(open, ms) {
       document.getElementById('body').classList.toggle('closed', !open);
       await wait(ms || 900);
@@ -283,14 +437,65 @@
       });
     },
     title(text) { document.getElementById('doc-title').textContent = text; },
+    // The rendered tab's box for a cell or range ('B4', 'A3:D4'), in world pixels.
+    cellBox(ref) {
+      var area = cellArea(ref);
+      return { x: area.x, y: area.y, w: area.w, h: area.h };
+    },
+    // Selects a cell of the rendered tab, as Sheets draws it, and shows its content in the
+    // formula bar.
+    select(ref, content) {
+      var doc = document.getElementById('dashboard').contentDocument;
+      var box = cellArea(ref);
+      var sheet = stage.rect('sheet');
+      var page = doc.querySelector('.page');
+      var mark = doc.getElementById('selection');
+      if (!mark) {
+        mark = doc.createElement('div');
+        mark.id = 'selection';
+        mark.style.cssText = 'position:absolute;z-index:5;border:2px solid #1a73e8;' +
+          'background:rgba(26,115,232,.08);box-sizing:border-box;pointer-events:none';
+        page.appendChild(mark);
+      }
+      var origin = page.getBoundingClientRect();
+      mark.style.left = box.x - sheet.x - origin.left + 'px';
+      mark.style.top = box.y - sheet.y - origin.top + 'px';
+      mark.style.width = box.w + 'px';
+      mark.style.height = box.h + 'px';
+      Array.prototype.forEach.call(doc.querySelectorAll('.head'), function (head) {
+        var on = box.heads.indexOf(head) >= 0;
+        head.style.background = on ? '#d3e3fd' : '';
+        head.style.color = on ? '#0b57d0' : '';
+      });
+      stage.formula(ref.split(':')[0], content);
+    },
+    // The formula bar: a cell name and its content, references and functions coloured as in Sheets.
+    formula(name, content) {
+      document.getElementById('fbar-name').textContent = name || '';
+      var text = String(content == null ? '' : content);
+      var html = text.replace(/[&<>]/g, function (ch) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch];
+      });
+      if (text.charAt(0) === '=')
+        html = html
+          .replace(/([A-Za-z][A-Za-z0-9]*![A-Z]+\d*(?::[A-Z]+\d*)?)/g, '<span class="ref">$1</span>')
+          .replace(/([A-Z][A-Z.]+)(?=\()/g, '<span class="fn">$1</span>');
+      document.getElementById('fbar-value').innerHTML = html;
+    },
     say(html) {
       var node = document.getElementById('caption');
       if (html) node.innerHTML = html;
       node.classList.toggle('on', Boolean(html));
     },
-    card(options) {
+    // A card shown over a card stays on black: its words fade out and the new ones in.
+    async card(options) {
       var node = document.getElementById('card');
+      var words = node.querySelector('.inner');
       if (options.show === false) { node.classList.remove('on'); return; }
+      if (node.classList.contains('on')) {
+        words.classList.add('out');
+        await wait(300);
+      }
       var set = function (id, text) {
         var el = document.getElementById(id);
         el.textContent = text || '';
@@ -304,6 +509,7 @@
       document.getElementById('card-logo').hidden = options.logo === false;
       node.classList.toggle('small', (options.title || '').length > 42);
       node.classList.add('on');
+      words.classList.remove('out');
     },
     logo: '',
   };
