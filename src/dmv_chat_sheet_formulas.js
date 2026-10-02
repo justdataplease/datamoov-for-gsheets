@@ -4,8 +4,8 @@
    nesting, LET and LAMBDA with its helpers, array literals, references to other tabs of this
    spreadsheet, whole and open ranges (A:A, 2:2, A2:A), named ranges of this spreadsheet and
    formulas up to 8,000 characters. A function that is not a built-in (custom, Apps Script and
-   named functions) is refused by name, and a LET or LAMBDA name is called only when it is set
-   to LAMBDA(...) and named unlike any built-in. Text inside string literals is data: a QUERY
+   named functions) is refused by name, and a LET or LAMBDA name is never called: NAME(...) on
+   one could reach a custom function of that name. Text inside string literals is data: a QUERY
    string that says IMPORTRANGE is not a call. When the size of a formula's result can be worked
    out from the formula alone (an array literal, a bounded range, SEQUENCE or MAKEARRAY with
    literal sizes, TRANSPOSE or ARRAYFORMULA over those), its spill area is guarded, kept for undo
@@ -71,7 +71,7 @@ var DMV_FORMULA_BUILTINS = [
   // Lookup
   'ADDRESS CHOOSE COLUMN COLUMNS FORMULATEXT GETPIVOTDATA HLOOKUP INDEX LOOKUP MATCH OFFSET ROW ROWS SHEET VLOOKUP XLOOKUP XMATCH',
   // Math
-  'ABS ACOS ACOSH ACOT ACOTH ASIN ASINH ATAN ATAN2 ATANH BASE CEILING CEILING.MATH CEILING.PRECISE COMBIN COMBINA COS COSH COT COTH COUNTBLANK COUNTIF COUNTIFS COUNTUNIQUE COUNTUNIQUEIFS CSC CSCH DECIMAL DEGREES EVEN EXP FACT FACTDOUBLE FLOOR FLOOR.MATH FLOOR.PRECISE GAMMALN GAMMALN.PRECISE GCD INT ISEVEN ISO.CEILING ISODD LCM LN LOG LOG10 MOD MROUND MULTINOMIAL MUNIT ODD PI POWER PRODUCT QUOTIENT RADIANS RAND RANDARRAY RANDBETWEEN ROUND ROUNDDOWN ROUNDUP SEC SECH SEQUENCE SERIESSUM SIGN SIN SINH SQRT SQRTPI SUBTOTAL SUM SUMIF SUMIFS SUMSQ TAN TANH TRUNC',
+  'ABS ACOS ACOSH ACOT ACOTH ASIN ASINH ATAN ATAN2 ATANH BASE CEILING CEILING.MATH CEILING.PRECISE COMBIN COMBINA COS COSH COT COTH COUNTBLANK COUNTIF COUNTIFS COUNTUNIQUE COUNTUNIQUEIFS CSC CSCH DECIMAL DEGREES EVEN EXP FACT FACTDOUBLE FLOOR FLOOR.MATH FLOOR.PRECISE GAMMALN GAMMALN.PRECISE GCD INT ISEVEN ISO.CEILING ISODD LCM LN LOG LOG10 MOD MROUND MULTINOMIAL MUNIT ODD PERCENTIF PI POWER PRODUCT QUOTIENT RADIANS RAND RANDARRAY RANDBETWEEN ROUND ROUNDDOWN ROUNDUP SEC SECH SEQUENCE SERIESSUM SIGN SIN SINH SQRT SQRTPI SUBTOTAL SUM SUMIF SUMIFS SUMSQ TAN TANH TRUNC',
   // Operator
   'ADD CONCAT DIVIDE EQ GT GTE ISBETWEEN LT LTE MINUS MULTIPLY NE POW UMINUS UNARY_PERCENT UPLUS',
   // Parser
@@ -89,7 +89,7 @@ var DMV_FORMULA_ARRAYS =
   ' ARRAY_CONSTRAIN BYCOL BYROW CHOOSECOLS CHOOSEROWS FILTER FLATTEN FREQUENCY GROWTH HSTACK INDEX LINEST LOGEST LOOKUP MAKEARRAY MAP MINVERSE MMULT MUNIT OFFSET QUERY RANDARRAY REDUCE REGEXEXTRACT SCAN SEQUENCE SORT SORTN SPLIT TOCOL TOROW TRANSPOSE TREND UNIQUE VSTACK WRAPCOLS WRAPROWS XLOOKUP ';
 // Functions that reduce ranges to one value.
 var DMV_FORMULA_AGGREGATES =
-  ' AND AVERAGE AVERAGE.WEIGHTED AVERAGEA AVERAGEIF AVERAGEIFS COLUMNS CORREL COUNT COUNTA COUNTBLANK COUNTIF COUNTIFS COUNTUNIQUE COUNTUNIQUEIFS COVAR HLOOKUP INTERCEPT JOIN LARGE MATCH MAX MAXA MAXIFS MEDIAN MIN MINA MINIFS MODE OR PEARSON PERCENTILE PRODUCT QUARTILE RANK RANK.AVG RANK.EQ ROWS RSQ SLOPE SMALL STDEV STDEV.P STDEV.S STDEVA STDEVP STDEVPA SUM SUMIF SUMIFS SUMPRODUCT SUMSQ TEXTJOIN VAR VAR.P VAR.S VARA VARP VARPA VLOOKUP XMATCH XOR ';
+  ' AND AVERAGE AVERAGE.WEIGHTED AVERAGEA AVERAGEIF AVERAGEIFS COLUMNS CORREL COUNT COUNTA COUNTBLANK COUNTIF COUNTIFS COUNTUNIQUE COUNTUNIQUEIFS COVAR HLOOKUP INTERCEPT JOIN LARGE MATCH MAX MAXA MAXIFS MEDIAN MIN MINA MINIFS MODE OR PEARSON PERCENTIF PERCENTILE PRODUCT QUARTILE RANK RANK.AVG RANK.EQ ROWS RSQ SLOPE SMALL STDEV STDEV.P STDEV.S STDEVA STDEVP STDEVPA SUM SUMIF SUMIFS SUMPRODUCT SUMSQ TEXTJOIN VAR VAR.P VAR.S VARA VARP VARPA VLOOKUP XMATCH XOR ';
 // Lookups and conditional counts that reduce to one value alone, but inside ARRAYFORMULA give one
 // result per key when a key is a range (VLOOKUP(A2:A9, ...), COUNTIF(A:A, A2:A9)).
 var DMV_FORMULA_PER_KEY =
@@ -425,50 +425,34 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
   function call(token, scope, arrays) {
     var upper = deny(token);
     // Whether Sheets runs a bound name's value or a function of that name (a custom function,
-    // HYPERLINK) is not documented, so only names that hold a LAMBDA and no function's name are
-    // called.
-    if (scope[upper] && (scope[upper] !== 'lambda' || dmvChatFormulaBuiltin_(upper)))
+    // HYPERLINK) is not documented, so a bound name is never called.
+    if (scope[upper])
       fail(
         token.text +
-          '(...) calls a LET or LAMBDA name; only a LET name set to LAMBDA(...) can be called, and not one named like a Sheets function',
+          '(...) calls a LET or LAMBDA name, which chat formulas do not do; pass LAMBDA(...) to MAP, BYROW, REDUCE and the like, or write the expression out',
         token.at
       );
-    if (!scope[upper] && !dmvChatFormulaBuiltin_(upper))
+    if (!dmvChatFormulaBuiltin_(upper))
       fail(
         'unknown function ' +
           token.text +
           '. Chat formulas use Google Sheets built-in functions only; custom, Apps Script and named functions are not supported',
         token.at
       );
-    if (!scope[upper] && used.functions.indexOf(upper) < 0) used.functions.push(upper);
+    if (used.functions.indexOf(upper) < 0) used.functions.push(upper);
     nest(token.at);
     expect('(');
     var shape;
-    if (scope[upper]) {
-      argumentsOf(scope, false);
-      shape = null;
-    } else if (upper === 'LET') shape = letCall(token, scope, arrays);
+    if (upper === 'LET') shape = letCall(token, scope, arrays);
     else if (upper === 'LAMBDA') shape = lambdaCall(token, scope);
     else shape = builtin(token, upper, scope, arrays);
     depth--;
     return shape;
   }
-  // A bound name holds 'lambda' when its value is exactly LAMBDA(...), so it may be called, or
-  // 'value' otherwise.
-  function bind(scope, token, kind) {
+  function bind(scope, token) {
     var upper = deny(token);
     if (upper === 'TRUE' || upper === 'FALSE') fail(upper + ' cannot be a name', token.at);
-    scope[upper] = kind;
-  }
-  // True when tokens from..to are one LAMBDA(...) and nothing more, not a call of its result.
-  function lambdaOnly(from, to) {
-    if (!tokens[from] || tokens[from].type !== 'function') return false;
-    if (tokens[from].text.toUpperCase() !== 'LAMBDA') return false;
-    for (var i = from + 1, open = 0; i < to; i++) {
-      if (is(tokens[i], '(')) open++;
-      else if (is(tokens[i], ')') && --open === 0) return i === to - 1;
-    }
-    return false;
+    scope[upper] = true;
   }
   function letCall(token, scope, arrays) {
     var inner = Object.assign(Object.create(null), scope),
@@ -478,9 +462,8 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
     while (peek() && peek().type === 'name' && is(tokens[index + 1], ',')) {
       var name = tokens[index];
       index += 2;
-      var from = index;
       expression(inner, arrays);
-      bind(inner, name, lambdaOnly(from, index) ? 'lambda' : 'value');
+      bind(inner, name);
       expect(',');
       bindings++;
     }
@@ -493,7 +476,7 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
   function lambdaCall(token, scope) {
     var inner = Object.assign(Object.create(null), scope);
     while (peek() && peek().type === 'name' && is(tokens[index + 1], ',')) {
-      bind(inner, tokens[index], 'value');
+      bind(inner, tokens[index]);
       index += 2;
     }
     expression(inner, false);

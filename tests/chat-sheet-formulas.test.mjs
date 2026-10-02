@@ -124,7 +124,8 @@ const CORPUS = [
   "=SORTN('Campaign Data'!B2:D,10,0,3,FALSE)",
   '=ARRAYFORMULA(IF(A2:A="","",B2:B/C2:C))',
   '=LET(spend,SUM(\'Campaign Data\'!D:D),conv,SUM(\'Campaign Data\'!E:E),IF(conv=0,"",spend/conv))',
-  '=LET(cpa,LAMBDA(s,c,IF(c=0,"",s/c)),cpa(SUM(D2:D100),SUM(E2:E100)))',
+  // A LET name is never called; a named LAMBDA is handed to MAP and the like instead.
+  '=LET(cpa,LAMBDA(s,c,IF(c=0,"",s/c)),MAP(D2:D100,E2:E100,cpa))',
   '=MAP(B2:B10,C2:C10,LAMBDA(spend,clicks,IFERROR(spend/clicks,0)))',
   '=BYROW(B2:D10,LAMBDA(row,SUM(row)))',
   '=BYCOL(B2:D10,LAMBDA(col,MAX(col)))',
@@ -172,6 +173,7 @@ const CORPUS = [
   '=SUM(IF(A1:A3>0,1,0),,3)',
   '=SHEETS()',
   "=SHEET('Campaign Data'!A1)",
+  '=PERCENTIF(E2:E100,">50")',
 ];
 
 test('a corpus of analyst formulas is accepted and written exactly as given', () => {
@@ -203,7 +205,7 @@ test('a corpus of analyst formulas is accepted and written exactly as given', ()
     names: [],
     tabs: ['Campaign Data'],
   });
-  assert.deepEqual(f.check(CORPUS[14]).functions, ['LET', 'LAMBDA', 'IF', 'SUM']);
+  assert.deepEqual(f.check(CORPUS[14]).functions, ['LET', 'LAMBDA', 'IF', 'MAP']);
   assert.deepEqual(f.check('=SUM(TargetCPA)*1.1').names, ['TARGETCPA']);
   assert.deepEqual(f.check('={1,2,3;4,5,6}').shape, { rows: 2, columns: 3 });
   assert.deepEqual(f.check('=MAKEARRAY(3,4,LAMBDA(r,c,r*c))').shape, { rows: 3, columns: 4 });

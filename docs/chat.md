@@ -319,9 +319,10 @@ GOOGLEFINANCE, GOOGLETRANSLATE, DETECTLANGUAGE, INDIRECT and AI, which fetch fro
 outside the spreadsheet or hide what a formula reads. A function that is not a Sheets built-in
 (custom, Apps Script and named functions) is refused by name, as are unknown names and tabs. A
 LET name counts as defined only after its value, so `LET(F, F(A1), F)` calls the global `F` and is
-refused like it. A LET or LAMBDA name is called only when it is set to `LAMBDA(...)` and is not
-named like a built-in, since whether Sheets then runs the name or a function of that name is not
-documented.
+refused like it. A LET or LAMBDA name is never called (`LET(f, LAMBDA(x, x*2), f(A1))` is
+refused), since whether Sheets then runs the name or a custom function of that name is not
+documented; a named LAMBDA can still be handed to MAP, BYROW, REDUCE and the like, as in
+`LET(f, LAMBDA(x, x*2), MAP(A1:A9, f))`.
 HYPERLINK takes a literal https address. The built-in list is kept in
 `src/dmv_chat_sheet_formulas.js`.
 

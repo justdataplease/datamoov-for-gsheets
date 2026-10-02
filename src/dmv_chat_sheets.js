@@ -797,7 +797,7 @@ function dmvChatSheetTools_() {
             type: 'array',
             items: { type: 'array', items: { type: 'string' } },
             description:
-              "Exact matrix for set_formulas, up to 8,000 characters each. Any Google Sheets built-in (LET, LAMBDA, MAP, QUERY, FILTER, XLOOKUP, ARRAYFORMULA, REGEX…), other tabs ('Tab name'!A:C), whole or open ranges (A:A, A2:A), named ranges and {1,2;3,4}. An array result needs empty cells to fill. Not IMPORT*, IMAGE, GOOGLEFINANCE, GOOGLETRANSLATE, DETECTLANGUAGE, INDIRECT, AI or custom/named functions; HYPERLINK takes a literal https URL.",
+              "Exact matrix for set_formulas, up to 8,000 characters each. Any Google Sheets built-in (LET, LAMBDA, MAP, QUERY, FILTER, XLOOKUP, ARRAYFORMULA, REGEX…), other tabs ('Tab name'!A:C), whole or open ranges (A:A, A2:A), named ranges and {1,2;3,4}. An array result needs empty cells to fill. Not IMPORT*, IMAGE, GOOGLEFINANCE, GOOGLETRANSLATE, DETECTLANGUAGE, INDIRECT, AI or custom/named functions; HYPERLINK takes a literal https URL. Never call a LET name: hand a named LAMBDA to MAP, BYROW or REDUCE instead.",
           },
           format: {
             type: 'object',

