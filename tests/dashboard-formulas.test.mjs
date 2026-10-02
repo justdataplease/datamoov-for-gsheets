@@ -85,7 +85,7 @@ function pageOf(f, name = 'Profit Dashboard') {
   const out = [];
   for (let r = 1; r <= sheet.getLastRow(); r++) {
     const line = [];
-    for (let c = 1; c <= sheet.maxColumns; c++) if (f.value(sheet, r, c) !== '') line.push(f.value(sheet, r, c));
+    for (let c = 1; c <= sheet.maxColumns; c++) if (f.shown(sheet, r, c) !== '') line.push(f.shown(sheet, r, c));
     out.push(line);
   }
   return out;
@@ -96,7 +96,7 @@ function rowsOf(f, name) {
   const out = [];
   for (let r = 1; r <= sheet.getLastRow(); r++) {
     const line = [];
-    for (let c = 1; c <= 14; c++) line.push(f.value(sheet, r, c));
+    for (let c = 1; c <= 14; c++) line.push(f.shown(sheet, r, c));
     while (line.length && line[line.length - 1] === '') line.pop();
     out.push(line);
   }
@@ -118,8 +118,8 @@ const noBars = (rows) => rows.map((line) => line.filter((value) => !isBar(value)
 
 const rgb = (hex) => ({ red: parseInt(hex.slice(1, 3), 16) / 255, green: parseInt(hex.slice(3, 5), 16) / 255, blue: parseInt(hex.slice(5, 7), 16) / 255 });
 const GOOD = rgb('#006300'), BAD = rgb('#c62828'), GREY = rgb('#6b7280');
-function cellOf(sheet, value) {
-  const found = [...sheet.cells].filter(([, cell]) => cell.value === value).map(([key]) => key.split(':').map(Number));
+function cellOf(f, sheet, value) {
+  const found = [...sheet.cells.keys()].map((key) => key.split(':').map(Number)).filter(([row, column]) => f.shown(sheet, row, column) === value);
   return found.sort((a, b) => a[0] - b[0] || a[1] - b[1])[0] || null;
 }
 
@@ -173,9 +173,9 @@ test('scorecards evaluate formulas over the overall sums, compare them and colou
     { label: 'Fee share', value: 0.1, previous: 0.2, change: '-50.0% vs 20.00%', tone: 'good' },
   ]);
   const report = f.tab('Profit Dashboard');
-  assert.deepEqual(f.format(report, ...cellOf(report, '▲ 87.5% vs 32.00')).textFormat.foregroundColor, GOOD);
-  assert.deepEqual(f.format(report, ...cellOf(report, '▼ 50.0% vs 20.00%')).textFormat.foregroundColor, GOOD);
-  assert.deepEqual(f.format(report, ...cellOf(report, '▲ 25.0% vs 40.00')).textFormat.foregroundColor, GREY);
+  assert.deepEqual(f.format(report, ...cellOf(f, report, '▲ 87.5% vs 32.00')).textFormat.foregroundColor, GOOD);
+  assert.deepEqual(f.format(report, ...cellOf(f, report, '▼ 50.0% vs 20.00%')).textFormat.foregroundColor, GOOD);
+  assert.deepEqual(f.format(report, ...cellOf(f, report, '▲ 25.0% vs 40.00')).textFormat.foregroundColor, GREY);
   assert.deepEqual(result.highlights.slice(0, 2), [
     'Profit (EUR) rose 87.5% to 60.00 (previous 32.00).',
     'Fee share fell 50.0% to 10.00% (previous 20.00%).',
@@ -246,21 +246,21 @@ test('a table shows formula columns with true totals, changes, highlight rules o
   // B's profit of 1 after -1 is a rise of 200%.
   assert.deepEqual(noBars(cardOf(pageOf(f), 'Campaigns')), [
     ['Campaign', 'Spend (EUR)', 'Δ %', 'CPA (EUR)', 'Δ %', 'Profit (EUR)', 'Δ %', 'Net ROAS', 'Δ %'],
-    ['A', 30, 0.5, 10, 0, 57, 1.19230769, 2.85714285714, 0.2],
-    ['C', 20, 0, 5, -0.75, 3, -0.5, 1.19047619048, -0.16666667],
-    ['B', 10, 0, 10, 1, 1, 2, 1.14285714286, 0.2],
-    ['Total', 60, 0.2, 7.5, -0.25, 61, 0.96774194, 2.01587301587, 0.17592593],
+    ['A', 30, 0.5, 10, 0, 57, 1.1923076923076923, 2.8571428571428568, 0.19999999999999984],
+    ['C', 20, 0, 5, -0.75, 3, -0.5, 1.1904761904761905, -0.16666666666666657],
+    ['B', 10, 0, 10, 1, 1, 2, 1.1428571428571428, 0.2],
+    ['Total', 60, 0.2, 7.5, -0.25, 61, 0.967741935483871, 2.015873015873016, 0.17592592592592596],
   ]);
   const legend = pageOf(f).find((line) => line[0] === 'Row tints');
   assert.deepEqual(legend, ['Row tints', 'Profit ≥ EUR 50.00', 'Net ROAS < 0.58× overall (1.17)']);
-  const tint = (name) => f.format(report, cellOf(report, name)[0], cellOf(report, name)[1] + 3).backgroundColor;
+  const tint = (name) => f.format(report, cellOf(f, report, name)[0], cellOf(f, report, name)[1] + 3).backgroundColor;
   assert.deepEqual(tint('A'), rgb('#e3f4e3'));
   assert.deepEqual(tint('B'), rgb('#fde4e4'));
   // C is not flagged, so its net ROAS keeps the heat shading of a rate: the middle of three.
-  assert.deepEqual(f.format(report, ...cellOf(report, 1.19047619048)).backgroundColor, rgb('#cde2fb'));
+  assert.deepEqual(f.format(report, ...cellOf(f, report, 1.1904761904761905)).backgroundColor, rgb('#cde2fb'));
   // A rising profit is good, a falling one bad.
-  assert.deepEqual(f.format(report, ...cellOf(report, 1.19230769)).textFormat.foregroundColor, GOOD);
-  assert.deepEqual(f.format(report, ...cellOf(report, -0.5)).textFormat.foregroundColor, BAD);
+  assert.deepEqual(f.format(report, ...cellOf(f, report, 1.1923076923076923)).textFormat.foregroundColor, GOOD);
+  assert.deepEqual(f.format(report, ...cellOf(f, report, -0.5)).textFormat.foregroundColor, BAD);
   assert.deepEqual(result.highlights.slice(-2), [
     'Campaigns: 1 of 3 rows has Profit at or above EUR 50.00 (green rows) — A.',
     'Campaigns: 1 of 3 rows has Net ROAS below 0.58× the overall 2.02 (red rows) — B.',
@@ -282,9 +282,9 @@ test('a table cut by a formula ranking keeps its total over every row', () => {
   const card = noBars(cardOf(pageOf(f), 'Top margin'));
   assert.deepEqual(card.slice(-4), [
     ['Campaign', 'Profit (EUR)', 'Margin'],
-    ['A', 57, 0.633333333333],
+    ['A', 57, 57 / 90],
     ['C', 3, 0.12],
-    ['Total (all 3)', 61, 0.48031496063],
+    ['Total (all 3)', 61, 61 / 127],
   ]);
   assert.deepEqual(result.tiles[1].preview.slice(0, 3), [
     ['Campaign', 'Profit', 'Margin'],
@@ -315,11 +315,11 @@ test('chart series take formulas, on the right axis when far smaller or when the
   assert.deepEqual(axes(1), ['LEFT_AXIS', 'LEFT_AXIS', 'RIGHT_AXIS']);
   const data = rowsOf(f, 'Profit Dashboard (chart data)');
   const trend = find(data, 'Spend and net ROAS');
-  // Each week's net ROAS divides that week's sums, at twelve digits.
+  // Each week's net ROAS divides that week's sums.
   assert.deepEqual(data.slice(trend + 1, trend + 4), [
     ['Date', 'Spend', 'Net ROAS'],
-    ['3 Aug', 50, 2.19047619048],
-    ['10 Aug', 10, 1.14285714286],
+    ['3 Aug', 50, 115 / 50 / 1.05],
+    ['10 Aug', 10, 8 / 7],
   ]);
   const bars = find(data, 'Profit by campaign');
   assert.deepEqual(data.slice(bars + 1, bars + 5), [['Campaign', 'Profit'], ['A', 57], ['C', 3], ['B', 1]]);
@@ -344,7 +344,7 @@ test('a compared chart evaluates its formulas bucket by bucket in both periods',
   const at = data.findIndex((line) => String(line[0]).startsWith('Weekly profit'));
   assert.deepEqual(data.slice(at + 1, at + 3), [
     ['Date', 'Spend', 'Spend (previous period)', 'ROAS', 'ROAS (previous period)', 'Profit', 'Profit (previous period)', 'Net ROAS', 'Net ROAS (previous period)'],
-    ['1 Aug', 50, 40, 2.3, 2, 60, 32, 2.1905, 1.9048],
+    ['1 Aug', 50, 40, 2.3, 2, 60, 32, 115 / 50 / 1.05, 2 / 1.05],
   ]);
   // Spend and profit share the left axis; the rates sit on the right, each twin with its series.
   assert.deepEqual(

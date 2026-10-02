@@ -1,0 +1,115 @@
+{
+ "scorecards evaluate formulas over the overall sums, compare them and colour their change by polarity": [
+  {
+   "data: Source 1 data": "1ae602d5cda15c4b",
+   "data: Source 2 data": "2cb07c2bc266d287",
+   "data: Source 1 previous data": "7265aac990b04547",
+   "data: Source 2 previous data": "97c8b5fc27c2c5f5",
+   "charts: Profit Dashboard (chart data)": "23b288a30fcb8b77",
+   "page: Profit Dashboard": "d2c3f2afa436e8a9"
+  }
+ ],
+ "a formula scorecard reads only what it needs, so an unrelated amount does not split it by currency": [
+  {
+   "data: Source 1 data": "9941a4f6d8e795e7",
+   "data: Source 2 data": "2cb07c2bc266d287",
+   "charts: Profit Dashboard (chart data)": "946d66ecc197f30c",
+   "page: Profit Dashboard": "2e0c7276625e291a"
+  }
+ ],
+ "a table shows formula columns with true totals, changes, highlight rules on values and totals, and heat shading": [
+  {
+   "data: Source 1 data": "9941a4f6d8e795e7",
+   "data: Source 2 data": "2cb07c2bc266d287",
+   "data: Source 1 previous data": "1186e73338d9f717",
+   "data: Source 2 previous data": "97c8b5fc27c2c5f5",
+   "charts: Profit Dashboard (chart data)": "b23fba16fdb18421",
+   "page: Profit Dashboard": "5e3b34c13c1d3506"
+  }
+ ],
+ "a table cut by a formula ranking keeps its total over every row": [
+  {
+   "data: Source 1 data": "9941a4f6d8e795e7",
+   "data: Source 2 data": "2cb07c2bc266d287",
+   "charts: Profit Dashboard (chart data)": "b23fba16fdb18421",
+   "page: Profit Dashboard": "31c7f41de589af45"
+  }
+ ],
+ "chart series take formulas, on the right axis when far smaller or when the plan says so": [
+  {
+   "data: Source 1 data": "9941a4f6d8e795e7",
+   "data: Source 2 data": "2cb07c2bc266d287",
+   "charts: Profit Dashboard (chart data)": "d4a2c5cf5168a0dd",
+   "page: Profit Dashboard": "70f236529506510f"
+  }
+ ],
+ "a compared chart evaluates its formulas bucket by bucket in both periods": [
+  {
+   "data: Source 1 data": "1ae602d5cda15c4b",
+   "data: Source 2 data": "2cb07c2bc266d287",
+   "data: Source 1 previous data": "7265aac990b04547",
+   "data: Source 2 previous data": "97c8b5fc27c2c5f5",
+   "charts: Profit Dashboard (chart data)": "9680efe7b5b8d388",
+   "page: Profit Dashboard": "878674836069aa97"
+  }
+ ],
+ "an unmapped dataset checks declared columns at save and discovered ones at refresh": [
+  {
+   "data: Source 1 data": "9941a4f6d8e795e7",
+   "charts: Profit Dashboard (chart data)": "163b29cf7a2a5ecf",
+   "page: Profit Dashboard": "625b78a2087690a4"
+  }
+ ],
+ "a save refuses what every refresh would: a ratio key named like a column, a key repeating a column in another case": [
+  {
+   "data: Source 1 data": "9941a4f6d8e795e7",
+   "data: Source 2 data": "2cb07c2bc266d287",
+   "charts: Profit Dashboard (chart data)": "b23fba16fdb18421",
+   "page: Profit Dashboard": "455ec868f7bac3fb"
+  },
+  {
+   "data: Source 1 data": "9941a4f6d8e795e7",
+   "charts: Profit Dashboard (chart data)": "2bdfdf0af123d2b7",
+   "page: Profit Dashboard": "cf5c7e79bdf61636"
+  }
+ ],
+ "a save refuses a column that cannot be summed: one a connector marks as not additive, or labelled as a rate": [
+  {
+   "data: Source 2 data": "54aa1fab660f9836",
+   "charts: Profit Dashboard (chart data)": "0eac3b3b3c4d4f70",
+   "page: Profit Dashboard": "5e9bd83d4beaad7d"
+  }
+ ],
+ "plans without formulas keep their exact shape and numbers": [
+  {
+   "data: Source 1 data": "9941a4f6d8e795e7",
+   "data: Source 2 data": "2cb07c2bc266d287",
+   "charts: Profit Dashboard (chart data)": "b23fba16fdb18421",
+   "page: Profit Dashboard": "a636c0659a2da8db"
+  }
+ ],
+ "a dashboard with formulas refreshes again and again over its own output": [
+  {
+   "data: Source 1 data": "9941a4f6d8e795e7",
+   "data: Source 2 data": "0986a2701e874801",
+   "charts: Profit Dashboard (chart data)": "b23fba16fdb18421",
+   "page: Profit Dashboard": "2863759748472936"
+  }
+ ],
+ "twelve tiles of ten formulas each fit the saved record and refresh": [
+  {
+   "data: Source 1 data": "9941a4f6d8e795e7",
+   "data: Source 2 data": "2cb07c2bc266d287",
+   "charts: Profit Dashboard (chart data)": "c4fe2ce2aca066e8",
+   "page: Profit Dashboard": "1dd2a3978d00bf63"
+  }
+ ],
+ "settings export carries tile formulas and an import saves them through the validator": [
+  {
+   "data: Source 1 data": "9941a4f6d8e795e7",
+   "data: Source 2 data": "2cb07c2bc266d287",
+   "charts: Profit Dashboard (chart data)": "b23fba16fdb18421",
+   "page: Profit Dashboard": "6a6038d9c53d323b"
+  }
+ ]
+}

@@ -21,11 +21,12 @@ network destination is the AI provider you configure.
    your private script properties and is never shown again; leave the field blank when
    editing to keep it. The **Create a key** link opens the provider's key page.
    **Maximum rows per chat report** sets the default and ceiling for each fetched report,
-   from 1 to 30,000 rows (initially 10,000). The model can request fewer rows; it cannot exceed
-   your setting. Increase it if a complete report reaches the limit. The 30,000-row ceiling is
-   deliberate: each dashboard is written in one all-or-nothing Sheets request, which a few huge
-   tabs would overflow, so a long list keeps its top rows instead (see
-   [Action lists](#action-lists-the-top-rows-labelled)).
+   from 1 to 100,000 rows (initially 10,000). The model can request fewer rows; it cannot exceed
+   your setting. A report Chat saves or writes to a sheet keeps at most 30,000 rows: it is
+   written in one Sheets request, where a dashboard writes its data tabs in several. Increase it
+   if a complete report reaches the limit. A long list still keeps its top rows (see
+   [Action lists](#action-lists-the-top-rows-labelled)): rows nobody acts on only slow a refresh
+   down.
    **Time limit per chat request** sets how long one question may work before it answers
    from what it has: 60 to 1,800 seconds (initially 600).
    **Instructions for the assistant** supplies general standing context.
@@ -338,7 +339,7 @@ Literal values beginning with = stay text. Internal report settings remain exclu
 Ask, for example: "Create a pivot of Marketing data with campaign as rows and summed clicks as values."
 Chat creates a real Sheets pivot in a new tab, using an explicit source range with headers (a whole
 tab or a formula's result) of any length and up to 80 columns; its checks read only the columns
-they need, at most the first 30,000 data rows. Each column the pivot uses needs a header of its own; other
+they need, at most the first 100,000 data rows. Each column the pivot uses needs a header of its own; other
 columns in the range may have any header or none, and a number or date header counts as its text. It validates the requested fields and numeric aggregates first.
 The range may include future blank rows within the existing sheet grid, so later values inside
 that range participate automatically. Data outside it requires a larger source range.
@@ -364,6 +365,22 @@ A report imports one source into a table. A **dashboard** is what you ask Chat f
 to *see* performance: it fetches 1 to 8 datasets, writes each to its own tab, and builds one
 **Dashboard** tab laid out as a page of cards. The numbers behind the charts go to a hidden
 **(chart data)** tab. You do not create reports first; the dashboard carries its own queries.
+Every number on the Dashboard tab (scorecards, their change lines, table cells and totals) and
+every point behind the charts is a formula over the data tabs, so it updates as soon as a data tab
+changes; which rows rank, how many rows and points show, the colours and the highlight sentences
+are set at each refresh. Where SUMIFS and the other IFS functions cannot say a number exactly
+(date groups of a column of timestamps, groups of true and false, names that differ only in case
+or that Sheets would read as numbers, dates, errors or operators such as "2026-09", "50%", "#N/A"
+or "<5", a `contains` filter on a number column, a column of mixed types such as "n/a" among
+numbers or numbers among text, a distinct count over several tabs), the formula is a SUMPRODUCT
+or FILTER over the same ranges that compares cells exactly as the refresh did, a number, a text
+and a boolean apart, and counts distinct values by the text they print. Two differences remain:
+a formula reads only numbers in a number column, so text there that looks like a number ("12")
+counts at the refresh but not in the formula, and a boolean there (TRUE) the refresh counts as 1
+where the formula skips it; connectors write numbers as numbers. A value that
+was blank at refresh (a sum without any values) is a formula that stays blank until its data tab
+has values, where SUMIFS would read 0. Change lines print their numbers in the spreadsheet's
+locale, like the cells around them.
 A dashboard over data already in a tab (a pasted sales table, say) is not a saved dashboard: Chat
 builds a new tab in several small steps, with KPI formulas over your tab, a native pivot table and
 charts over its summary, then formats it in a call or two, so the build finishes before the polish.
@@ -459,7 +476,7 @@ the column) fail at the row limit like any other report. A top above the report'
 is refused with both numbers.
 
 A dataset over the row limit fails with its name and what narrows it: the report's **Keep the
-top rows**, a condition or aggregation in the query, or fewer dimensions; raising **Maximum rows
+top rows**, query conditions or aggregation, or fewer dimensions; raising **Maximum rows
 per chat report** comes last. A dashboard too large for one Sheets write names its largest
 tabs with their rows and columns. A setting Chat puts on a report that does not have it (a top
 on a custom query) is refused with the report's own settings instead of being dropped, so the
@@ -549,16 +566,20 @@ Limits and guarantees:
   smaller ones to the right axis, so conversions never lie flat under spend.
   Charts keep up to 12 series; by default 400 dates or 15 categories, tables 50 rows (1,000 at
   most). A shortened tile says so beside its title, for example "top 15 of 129".
-- Datasets together hold at most 30,000 rows, and the whole refresh is one roughly 200-second run
-  written in one all-or-nothing Sheets request (at most 8,000,000 characters of values and
-  formats); there is no continuation for dashboards. Keep datasets lean: a dataset without a date
-  column (a custom query without `segments.date`) returns totals for the period instead of one
-  row per day, and a list keeps its top rows.
-- A refresh too large for that one request stops before anything is written: "This dashboard is
-  too large for one Sheets write", followed by its largest parts with their size, for example
-  "Largest parts: Google Ads assets (9,412 rows x 11 columns), Google Ads keywords (2,869 rows x
-  9 columns)", and how to keep only the rows worth acting on in them. Chat narrows the dataset
-  named first (its top rows, fewer fields, no date column) and runs the dashboard again.
+- A dataset holds up to 100,000 rows, and the datasets together at most 3,000,000 cells (rows
+  times columns). The whole refresh is one roughly 200-second run; there is no continuation for
+  dashboards. The page, its chart data and as many data rows as fit go in one all-or-nothing
+  Sheets request of at most 8,000,000 bytes, and the remaining data rows follow in further
+  requests of that size. If one of those later requests fails, the page is already written and
+  its numbers read the rows written so far until the next refresh; the error says so. Keep
+  datasets lean: a dataset without a date column (a custom query without `segments.date`)
+  returns totals for the period instead of one row per day, and a list keeps its top rows.
+- Datasets past the cell budget stop the refresh before anything is written, named with their
+  size, for example "The dashboard datasets exceed 3,000,000 cells together (Google Ads assets
+  98,412 rows x 21 columns, ...)", with how to keep only the rows worth acting on in them. Chat
+  narrows the dataset named first (its top rows, fewer fields, no date column) and runs the
+  dashboard again. A page too large for one request ("This dashboard is too large for one Sheets
+  write") asks for shorter tables instead.
 - A dashboard can refresh itself every hour, daily or weekly at a chosen hour (and weekday) of
   the spreadsheet's day: pick them on its card under **Reports > Dashboards**, or ask Chat for it
   when creating the dashboard ("refresh it daily at 8"). Scheduled refreshes run in the background
@@ -573,15 +594,20 @@ Limits and guarantees:
   that. Chat does the same when it meets the error: it narrows the named dataset and runs the
   dashboard again, and suggests a higher limit only when the narrowed dataset still needs one.
 - Every dataset and every tab must pass validation before anything is written. A failed source
-  or an occupied destination leaves all previous tabs and charts unchanged.
+  or an occupied destination leaves all previous tabs and charts unchanged. The rows of a large
+  data tab that do not fit the first Sheets write follow in further writes; if one of those fails,
+  the tabs stay partly updated and the refresh says so, and the next refresh writes them again.
 - A dashboard writes to tabs of its own. A tab name that already holds content is refused when
   the plan is saved, before anything is fetched, and the message names the tab and suggests a
   free name.
 - Money in different currencies is never added: KPI cards, totals and chart series split by
   currency. Rates and averages cannot be summed.
-- The tabs belong to the dashboard. Editing values inside its cards and tables, or typing into
-  the rows the charts sit on, stops the next refresh until the edit is undone; put your own notes
-  on another tab. Cells hold plain values, never formulas. Formatting and layout changes on the
+- The tabs belong to the dashboard. Editing values or formulas inside its cards and tables, or
+  typing into the rows the charts sit on, stops the next refresh until the edit is undone; put your
+  own notes on another tab. A formula only pointed at other cells or tabs does not count: Sheets
+  moves references itself when tabs are renamed or rows move, so the refresh writes its own
+  references back. A data tab is written again on every refresh, edits included, and until then
+  the page's numbers follow what it holds. Formatting and layout changes on the
   Dashboard tab (colors, column widths, row heights, merged cells, chart positions) are reset on
   every refresh.
 - Relative date presets resolve again on every refresh, all at one local date; fixed dates stay
@@ -653,7 +679,7 @@ Values that come back from providers are framed as data, not instructions.
 ## Guarantees
 
 - Every fetch goes through the report runtime: your configured chat row cap (initially 10,000,
-  at most 30,000), column caps, deadline and host allowlists. Reports fail instead
+  at most 100,000), column caps, deadline and host allowlists. Reports fail instead
   of truncating. The only cuts are a ranked report's top rows (its **Keep the top rows**, ranked
   by spend, impressions or a SQL report's **Rank by column**, or a Google Ads or Microsoft Ads
   level's row limit's worth by spend when that is blank) and the `LIMIT` of a custom query whose
@@ -743,4 +769,4 @@ They do not certify any provider's live behavior or pricing.
 
 ### Multi-platform comparisons
 
-Chat can use `combine_results` to append fetched reports with explicit matching column maps and a source label per platform/account, then `summarize` by week or campaign. It never invents rows or exchanges currencies. Currency is required for combined monetary results, and mixed currencies cannot be aggregated without grouping or filtering by currency. Weekly buckets start Monday and include only dates inside the requested range; the first and last buckets of a month may be partial weeks. Google Ads already includes YouTube campaigns, so a YouTube subset is not an additional platform total. GA4 acquisition metrics are not substituted for advertising clicks or spend. Full summaries support up to 30,000 groups within the shared row and size limits.
+Chat can use `combine_results` to append fetched reports with explicit matching column maps and a source label per platform/account, then `summarize` by week or campaign. It never invents rows or exchanges currencies. Currency is required for combined monetary results, and mixed currencies cannot be aggregated without grouping or filtering by currency. Weekly buckets start Monday and include only dates inside the requested range; the first and last buckets of a month may be partial weeks. Google Ads already includes YouTube campaigns, so a YouTube subset is not an additional platform total. GA4 acquisition metrics are not substituted for advertising clicks or spend. A summary counts every group and keeps up to 30,000 of them, ranked, within the shared row and size limits.

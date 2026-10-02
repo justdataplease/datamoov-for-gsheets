@@ -1,0 +1,10 @@
+{
+ "a Gemini tool round saves and runs a two-dataset dashboard with underscore IDs and signatures intact": [
+  {
+   "data: Account 1 Data": "05543ca1c9aa3461",
+   "data: Account 2 Data": "e993a6cd6793a75c",
+   "charts: Gemini Dashboard (chart data)": "29b32f29b968888d",
+   "page: Gemini Dashboard": "c48c1dc280691806"
+  }
+ ]
+}

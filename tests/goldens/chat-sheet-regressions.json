@@ -1,0 +1,31 @@
+{
+ "a dataset whose id ends in -report or -charts protects only its data, not its whole tab": [
+  {
+   "data: Main data": "75a11da44c802486",
+   "page: Overview": "75a11da44c802486"
+  },
+  {
+   "page: Main data": "75a11da44c802486",
+   "page: Overview": "75a11da44c802486"
+  },
+  {
+   "charts: Main data": "75a11da44c802486",
+   "page: Overview": "75a11da44c802486"
+  },
+  {
+   "page: Main data": "75a11da44c802486",
+   "page: Overview": "75a11da44c802486"
+  },
+  {
+   "charts: Main data": "75a11da44c802486",
+   "page: Overview": "75a11da44c802486"
+  }
+ ],
+ "a collaborator's chat refuses anything on another user's dashboard page and data tabs": [
+  {
+   "page: Dash": "3f42945ed1d82b4c",
+   "data: Main data": "c777375cfbfda5c6",
+   "charts: Dash (chart data)": "4619b26356a51b00"
+  }
+ ]
+}

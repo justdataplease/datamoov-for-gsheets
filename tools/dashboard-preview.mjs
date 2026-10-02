@@ -14,6 +14,12 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from '@playwright/test';
+import {
+  evaluateFormula,
+  formatNumber,
+  generalNumber,
+  serialDate,
+} from '../tests/helpers/sheet-formulas.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 let outDir = path.join(root, 'data', 'dashboard-preview');
@@ -871,6 +877,22 @@ function replay(batches, initialSheets) {
       if (handlers[kind]) handlers[kind](request[kind]);
       else ignored.add(kind);
     }
+  // Formulas (a dashboard's live numbers) keep their results beside them, as Sheets shows them.
+  const byTitle = new Map([...sheets.values()].map((sheet) => [sheet.props.title, sheet]));
+  const result = (sheet, entry) => {
+    const value = entry?.userEnteredValue;
+    if (!value) return null;
+    if (!('formulaValue' in value))
+      return value.numberValue ?? value.stringValue ?? value.boolValue ?? null;
+    if (!('result' in entry))
+      entry.result = evaluateFormula(value.formulaValue, (title, row, column) => {
+        const home = title === null ? sheet : byTitle.get(title);
+        return result(home, home?.cells.get(row - 1 + ':' + (column - 1)));
+      });
+    return entry.result;
+  };
+  for (const sheet of sheets.values())
+    for (const entry of sheet.cells.values()) result(sheet, entry);
   return { sheets, charts: [...charts.values()], ignored: [...ignored] };
 }
 
@@ -902,16 +924,6 @@ const PALETTE = [
   '#ff994d',
   '#7ed1d7',
 ];
-const FORMAT_COLORS = {
-  black: '#000000',
-  blue: '#0000ff',
-  cyan: '#00ffff',
-  green: '#00ff00',
-  magenta: '#ff00ff',
-  red: '#ff0000',
-  white: '#ffffff',
-  yellow: '#ffff00',
-};
 const DEFAULT_PATTERNS = {
   NUMBER: '#,##0.00',
   PERCENT: '0.00%',
@@ -931,140 +943,32 @@ function hex(style, legacy) {
   return '#' + part(rgb.red) + part(rgb.green) + part(rgb.blue);
 }
 
-// Automatic format: up to ten significant digits, no grouping.
-function generalNumber(value) {
-  if (Number.isInteger(value) && Math.abs(value) < 1e15) return String(value);
-  const text = String(Number(value.toPrecision(10)));
-  return text.includes('e') ? value.toExponential(2).toUpperCase() : text;
-}
-
-function splitSections(pattern) {
-  const sections = [];
-  let current = '',
-    quoted = false;
-  for (let i = 0; i < pattern.length; i++) {
-    const ch = pattern[i];
-    if (ch === '"') quoted = !quoted;
-    if (ch === '\\' && !quoted) {
-      current += ch + (pattern[++i] ?? '');
-      continue;
-    }
-    if (ch === ';' && !quoted) {
-      sections.push(current);
-      current = '';
-      continue;
-    }
-    current += ch;
-  }
-  return sections.concat([current]);
-}
-
-// The Sheets patterns the app writes: sections (positive;negative;zero), quoted text, 0 # ?
-// digits, grouping, %, @ and [Color]. A decimal point always prints, so '#,##0.###' shows a
-// whole number as "2,494." exactly like Sheets does.
-function formatNumber(value, pattern) {
-  const sections = splitSections(pattern);
-  let section = sections[0],
-    number = value,
-    sign = '';
-  if (value < 0 && sections.length > 1) {
-    section = sections[1];
-    number = -value;
-  } else if (value === 0 && sections.length > 2) section = sections[2];
-  else if (value < 0) {
-    sign = '-';
-    number = -value;
-  }
-  let color = null;
-  section = section.replace(/\[([^\]]*)\]/g, (_, name) => {
-    color = FORMAT_COLORS[name.toLowerCase()] || color;
-    return '';
-  });
-  const tokens = [];
-  for (let i = 0; i < section.length; i++) {
-    const ch = section[i];
-    if (ch === '"') {
-      const end = section.indexOf('"', i + 1);
-      tokens.push({ kind: 'text', text: section.slice(i + 1, end < 0 ? undefined : end) });
-      i = end < 0 ? section.length : end;
-    } else if (ch === '\\') tokens.push({ kind: 'text', text: section[++i] ?? '' });
-    else if (ch === '_' || ch === '*') i++;
-    else if ('0#?'.includes(ch)) tokens.push({ kind: 'digit', ch });
-    else if (ch === '.' && !tokens.some((token) => token.kind === 'dot'))
-      tokens.push({ kind: 'dot' });
-    else if (ch === ',') tokens.push({ kind: 'comma' });
-    else if (ch === '%') tokens.push({ kind: 'text', text: '%', percent: true });
-    else if (ch === '@') tokens.push({ kind: 'at' });
-    else tokens.push({ kind: 'text', text: ch });
-  }
-  const dot = tokens.findIndex((token) => token.kind === 'dot');
-  const integerEnd = dot < 0 ? tokens.length : dot;
-  const digits = tokens.filter((token) => token.kind === 'digit');
-  if (!digits.length) {
-    const text = tokens
-      .map((token) => (token.kind === 'at' ? generalNumber(value) : token.text || ''))
-      .join('');
-    return { text: sign && text ? sign + text : text, color };
-  }
-  const integer = tokens.slice(0, integerEnd).filter((token) => token.kind === 'digit');
-  const fraction = dot < 0 ? [] : tokens.slice(dot + 1).filter((token) => token.kind === 'digit');
-  const lastIntegerDigit = tokens
-    .slice(0, integerEnd)
-    .map((token) => token.kind)
-    .lastIndexOf('digit');
-  const grouped = tokens.slice(0, lastIntegerDigit).some((token) => token.kind === 'comma');
-  const scaling = tokens
-    .slice(lastIntegerDigit + 1, integerEnd)
-    .filter((token) => token.kind === 'comma').length;
-  const percents = tokens.filter((token) => token.percent).length;
-  number = (number * 100 ** percents) / 1000 ** scaling;
-  const required = fraction.filter((token) => token.ch !== '#').length;
-  let [whole, part = ''] = number.toFixed(fraction.length).split('.');
-  while (part.length > required && part.endsWith('0')) part = part.slice(0, -1);
-  const minimum = integer.filter((token) => token.ch === '0').length;
-  if (whole === '0' && !minimum) whole = '';
-  whole = whole.padStart(minimum, '0');
-  if (grouped) whole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  if (sign && !/[1-9]/.test(whole + part)) sign = '';
-  let text = '',
-    placed = false;
-  tokens.forEach((token, index) => {
-    if (token.kind === 'text') text += token.text;
-    else if (token.kind === 'at') text += generalNumber(value);
-    else if (token.kind === 'digit' && !placed && index < integerEnd) {
-      text += whole;
-      placed = true;
-    } else if (token.kind === 'dot') {
-      if (!placed) {
-        text += whole;
-        placed = true;
-      }
-      text += '.' + part;
-    }
-  });
-  return { text: sign + text, color };
-}
-
-// What a cell shows: { text, numeric, color } or null when it is empty.
+// What a cell shows: { text, numeric, color } or null when it is empty. A formula shows the
+// result replay computed for it.
 function cellText(cell) {
   const value = cell?.userEnteredValue;
   if (!value) return null;
   const format = cell.userEnteredFormat?.numberFormat;
-  if ('numberValue' in value) {
+  const number = numberOf(cell);
+  if (number !== null) {
     const pattern = format?.pattern || DEFAULT_PATTERNS[format?.type] || '';
-    if (!pattern || pattern === '@' || /^(DATE|TIME|DATE_TIME)$/.test(format?.type || ''))
-      return { text: generalNumber(value.numberValue), numeric: true };
-    return { ...formatNumber(value.numberValue, pattern), numeric: true };
+    if (format?.type === 'DATE') return { text: serialDate(number), numeric: true };
+    if (!pattern || pattern === '@' || /^(TIME|DATE_TIME)$/.test(format?.type || ''))
+      return { text: generalNumber(number), numeric: true };
+    return { ...formatNumber(number, pattern), numeric: true };
   }
   if ('boolValue' in value) return { text: value.boolValue ? 'TRUE' : 'FALSE', bool: true };
-  if ('formulaValue' in value) return { text: value.formulaValue, formula: true };
+  if ('formulaValue' in value)
+    return cell.result === '' ? null : { text: String(cell.result?.error ?? cell.result) };
   if ('errorValue' in value) return { text: '#ERROR!' };
   if ('stringValue' in value && value.stringValue !== '') return { text: value.stringValue };
   return null;
 }
 
 const numberOf = (cell) => {
-  const value = cell?.userEnteredValue?.numberValue;
+  const value = cell?.userEnteredValue?.formulaValue
+    ? cell.result
+    : cell?.userEnteredValue?.numberValue;
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 };
 
@@ -2028,7 +1932,7 @@ async function main() {
   );
 }
 
-export { formatNumber, planFor, replay, renderSheet };
+export { buildDashboard, formatNumber, planFor, replay, renderSheet, useFixture };
 
 // Importing the module (for a check or another tool) does not run it.
 if (

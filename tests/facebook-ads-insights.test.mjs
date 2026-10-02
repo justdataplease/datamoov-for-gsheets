@@ -125,7 +125,7 @@ test('Keep the top rows asks Meta for its ranking, stops paging once the top is 
   let requests = 0;
   const refuse = (fields, value, pattern) =>
     assert.throws(() => run(fields, [], { config: { top: value }, http() { requests++; return account; } }), pattern, `${fields} ${value}`);
-  for (const value of [0, 1.5, 'many', 30001]) refuse(['campaign_name', 'spend'], value, /^Error: Keep the top rows must be a whole number from 1 to 30,000, or blank for every row\.$/);
+  for (const value of [0, 1.5, 'many', 100001]) refuse(['campaign_name', 'spend'], value, /^Error: Keep the top rows must be a whole number from 1 to 100,000, or blank for every row\.$/);
   for (const [key, label] of [['date_start', 'Date'], ['week', 'Week'], ['month', 'Month'], ['hourly_stats_aggregated_by_advertiser_time_zone', 'Hour of day']])
     refuse(['campaign_name', key, 'spend'], 5, new RegExp(`^Error: Keep the top rows ranks totals for the date range, so it cannot be combined with ${label}\\. Remove ${label} or clear Keep the top rows\\.$`));
   refuse(['campaign_name', 'clicks'], 5, /^Error: Keep the top rows ranks by spend or impressions\. Select one of them\.$/);

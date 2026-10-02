@@ -67,8 +67,8 @@ test('Keep the top rows on a Google Ads level validates like any number setting 
   assert.throws(() => config({ top: 'many' }), /Keep the top rows must be a number/);
   const credentials = { customerId: '123-456-7890', authMode: 'token', accessToken: 'offline-token' };
   const fields = ['search_term_view.search_term', 'metrics.cost_micros'];
-  for (const top of [0, 30001, 1.5])
-    assert.throws(() => report.fetch(f.context('google_ads', credentials, { fields, config: config({ top }) })), /whole number from 1 to 30,000/, String(top));
+  for (const top of [0, 100001, 1.5])
+    assert.throws(() => report.fetch(f.context('google_ads', credentials, { fields, config: config({ top }) })), /whole number from 1 to 100,000/, String(top));
   assert.equal(f.state.http.length, 0, 'refused before any request');
 
   f.state.responses.push(
@@ -384,7 +384,7 @@ test('Keep the top rows on a Microsoft Ads level ranks totals by spend or impres
   const before = f.state.http.length;
   const refuse = (fields, value, pattern, extra = {}) =>
     assert.throws(() => level('campaign').fetch(f.context('microsoft_ads', credentials, { fields, config: { top: value }, ...extra })), pattern, `${fields} ${value}`);
-  for (const value of [0, 1.5, 'many', 30001]) refuse(['CampaignName', 'Spend'], value, /Keep the top rows must be a whole number from 1 to 30,000/);
+  for (const value of [0, 1.5, 'many', 100001]) refuse(['CampaignName', 'Spend'], value, /Keep the top rows must be a whole number from 1 to 100,000/);
   for (const [key, label] of [['TimePeriod', 'Date'], ['Week', 'Week'], ['Month', 'Month'], ['DayOfWeek', 'Day of week (1 = Sunday)'], ['HourOfDay', 'Hour of day']])
     refuse([key, 'CampaignName', 'Spend'], 50, new RegExp(`^Error: Keep the top rows ranks totals for the date range, so it cannot be combined with ${label.replace(/[()]/g, '\\$&')}\\. Remove ${label.replace(/[()]/g, '\\$&')} or clear Keep the top rows\\.$`), { maxRows: 10 });
   refuse(['CampaignName', 'Clicks'], 50, /^Error: Keep the top rows ranks by spend or impressions\. Select one of them\.$/);
@@ -543,7 +543,7 @@ test('Keep the top rows on LinkedIn analytics ranks totals by spend or impressio
   const before = f.state.http.length;
   const refuse = (fields, value, pattern) =>
     assert.throws(() => report.fetch(f.context('linkedin_ads', oauth, { fields, config: { top: value } })), pattern, `${fields} ${value}`);
-  for (const value of [0, 1.5, 'many', 30001]) refuse(['campaign_name', 'costInLocalCurrency'], value, /^Error: Keep the top rows must be a whole number from 1 to 30,000, or blank for every row\.$/);
+  for (const value of [0, 1.5, 'many', 100001]) refuse(['campaign_name', 'costInLocalCurrency'], value, /^Error: Keep the top rows must be a whole number from 1 to 100,000, or blank for every row\.$/);
   for (const [key, label] of [['date', 'Date'], ['month', 'Month']])
     refuse([key, 'campaign_name', 'costInLocalCurrency'], 5, new RegExp(`^Error: Keep the top rows ranks totals for the date range, so it cannot be combined with ${label}\\. Remove ${label} or clear Keep the top rows\\.$`));
   refuse(['campaign_name', 'clicks'], 5, /^Error: Keep the top rows ranks by spend or impressions\. Select one of them\.$/);

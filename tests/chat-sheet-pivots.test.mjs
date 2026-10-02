@@ -234,7 +234,7 @@ test('the currency checks read every source row, past the first rows the other c
   // Every row USD up to the rows the other checks read, then one more row below them.
   const big = (last) => {
     const f = fixture();
-    const rows = f.api.DMV_LIMITS.maxRows + 1;
+    const rows = f.api.DMV_CHAT_PIVOT.checkRows + 1;
     f.source.maxRows = rows + 3;
     for (let r = 0; r < rows; r++)
       [new Date('2026-08-01T12:00:00Z'), 'Brand', r === rows - 1 ? last : 'USD', 1, 1].forEach(

@@ -84,7 +84,7 @@ test('editing a connection retains blank saved secrets and replaces explicitly s
 test('validation rejects invalid config, duplicate fields, dates and limits before provider execution', () => {
   const f = fixture();
   for (const overrides of [
-    { config: {} }, { fields: ['count', 'count'] }, { maxRows: 0 }, { maxRows: 30001 },
+    { config: {} }, { fields: ['count', 'count'] }, { maxRows: 0 }, { maxRows: 30001 }, { maxRows: 100001 },
     { target: { sheetName: 'Bad/name', startCell: 'A1' } },
     { dateRange: { preset: 'custom', startDate: '2026-02-30', endDate: '2026-03-01' } },
     { dateRange: { preset: 'custom', startDate: '2026-09-03', endDate: '2026-09-01' } },
@@ -518,10 +518,16 @@ test('the shared output size budget rejects oversized previews and refreshes bef
   const f = fixture(), report = f.save();
   f.api.dmvRunReport(report.id);
   const cells = [...f.book.sheets[0].cells], receipt = f.readOutput(report.id);
-  f.api.DMV_LIMITS.maxBytes = 100;
-  f.setOutput({ columns: [{ key: 'text', label: 'Text' }], rows: [{ text: 'x'.repeat(100) }] });
+  f.setOutput({ columns: [{ key: 'text', label: 'Text' }], rows: [{ text: 'x'.repeat(100) }, { text: 'y' }] });
+  // A report holds at most so many cells.
+  f.api.DMV_LIMITS.maxCells = 1;
   assert.throws(() => f.api.dmvPreviewReport(f.input), /too large for one refresh/);
   assert.throws(() => f.api.dmvRunReport(report.id), /too large for one refresh/);
+  // Within them, the writer refuses a report past one Sheets write, still before any change.
+  f.api.DMV_LIMITS.maxCells = 2;
+  f.api.DMV_LIMITS.maxBytes = 100;
+  assert.equal(f.api.dmvPreviewReport(f.input).totalRows, 2);
+  assert.throws(() => f.api.dmvRunReport(report.id), /too large for one Sheets write/);
   assert.deepEqual([...f.book.sheets[0].cells], cells);
   assert.deepEqual(f.readOutput(report.id), receipt);
   assert.equal(f.state.batches.length, 1);

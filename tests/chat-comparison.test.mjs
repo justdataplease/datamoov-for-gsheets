@@ -317,7 +317,7 @@ function pageOf(f, name) {
   const out = [];
   for (let r = 1; r <= sheet.getLastRow(); r++) {
     const row = [];
-    for (let c = 1; c <= sheet.maxColumns; c++) if (f.value(sheet, r, c) !== '') row.push(f.value(sheet, r, c));
+    for (let c = 1; c <= sheet.maxColumns; c++) if (f.shown(sheet, r, c) !== '') row.push(f.shown(sheet, r, c));
     out.push(row);
   }
   return out;
@@ -420,7 +420,7 @@ test('a saved three-account comparison fetches six relative queries and advances
     weeks('14 Sep – 20 Sep 2026', '7 Sep – 13 Sep 2026')
   );
   assert.match(
-    f.value(f.tab('Account A previous week Data'), 2, 1),
+    f.shown(f.tab('Account A previous week Data'), 2, 1),
     /^2026-09-07 to 2026-09-13 · 1 rows · /
   );
   assert.deepEqual(

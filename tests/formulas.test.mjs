@@ -696,6 +696,21 @@ test('combine_results across three sources, then profit and blended CPA by date'
   ]);
 });
 
+test('combine_results holds as many rows as fit the cell budget, its source and currency columns included', () => {
+  const f = combineFixture();
+  const again = () =>
+    f.api.dmvChatCombine_(
+      f.session,
+      { sources: [{ resultId: f.combined.resultId, label: 'All', columns: ['date', 'cost', 'sales', 'orders'].map((key) => ({ from: key, to: key })) }] },
+      1
+    );
+  // Six rows of source, date, cost, sales, orders and currency.
+  f.api.DMV_LIMITS.maxCells = 36;
+  assert.equal(f.api.dmvChatResult_(f.session, again().resultId).rows.length, 6);
+  f.api.DMV_LIMITS.maxCells = 35;
+  assert.throws(again, /^Error: Combined results exceed 35 cells\. Narrow each report first\.$/);
+});
+
 test('combine_results with a shop in another currency refuses a combined formula until split', () => {
   const f = combineFixture('EUR');
   assert.match(

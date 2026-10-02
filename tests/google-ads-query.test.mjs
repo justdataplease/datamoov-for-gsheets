@@ -302,7 +302,7 @@ test('every report level is a plain dimension-and-metric picker over one Google 
 test('a ranked level keeps the top rows asked for, and says so only when the list was cut', () => {
   const keyword = level('keyword');
   const [top] = plain(keyword.configFields);
-  assert.deepEqual([top.key, top.label, top.type, top.required, top.min, top.max], ['top', 'Keep the top rows', 'number', false, 1, 30000]);
+  assert.deepEqual([top.key, top.label, top.type, top.required, top.min, top.max], ['top', 'Keep the top rows', 'number', false, 1, 100000]);
   const fields = ['campaign.name', 'ad_group_criterion.keyword.text', 'metrics.clicks', 'metrics.cost_micros'];
   const rows = (count) => ({ results: Array.from({ length: count }, (_, index) => ({ campaign: { name: 'Brand' }, adGroupCriterion: { keyword: { text: 'k' + index } }, metrics: { clicks: '1', costMicros: String((count - index) * 1000000) } })) });
   const run = (config, count, more = {}) => {
@@ -342,11 +342,11 @@ test('a ranked level keeps the top rows asked for, and says so only when the lis
 test('Keep the top rows is a whole number within the row ceiling, for ranked totals only', () => {
   const keyword = level('keyword');
   const ctx = (config, fields = ['ad_group_criterion.keyword.text', 'metrics.cost_micros'], responses = []) => context(undefined, responses, { fields, config });
-  for (const top of [0, -5, 30001, 1.5, 'abc', '12abc'])
-    assert.throws(() => keyword.fetch(ctx({ top })), /Keep the top rows must be a whole number from 1 to 30,000/, String(top));
+  for (const top of [0, -5, 100001, 1.5, 'abc', '12abc'])
+    assert.throws(() => keyword.fetch(ctx({ top })), /Keep the top rows must be a whole number from 1 to 100,000/, String(top));
   // A top above the row limit is refused before any request, naming both settings, never cut to
   // fit and never sent to fail on the limit's own advice (dates, dimensions).
-  for (const top of [101, 30000]) {
+  for (const top of [101, 100000]) {
     const ceiling = ctx({ top });
     assert.throws(
       () => keyword.fetch(ceiling),

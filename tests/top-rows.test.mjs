@@ -11,13 +11,13 @@ test('Keep the top rows reads blank as every row and the form or chat values as 
   assert.equal(top({ top: 25 }), 25);
   assert.equal(top({ top: '40' }), 40, 'the chat may send text');
   assert.equal(top({ top: 100 }), 100, 'the row limit itself fits');
-  assert.equal(top({ top: 30000 }, 30000), 30000);
+  assert.equal(top({ top: 100000 }, 100000), 100000);
 });
 
 test('Keep the top rows is a whole number within the row ceiling and this report’s row limit', () => {
-  for (const value of [0, -5, 1.5, 'abc', '12abc', 30001])
-    assert.throws(() => top({ top: value }), /^Error: Keep the top rows must be a whole number from 1 to 30,000, or blank for every row\.$/, String(value));
-  assert.equal(api.DMV_LIMITS.maxRows, 30000);
+  for (const value of [0, -5, 1.5, 'abc', '12abc', 100001])
+    assert.throws(() => top({ top: value }), /^Error: Keep the top rows must be a whole number from 1 to 100,000, or blank for every row\.$/, String(value));
+  assert.equal(api.DMV_LIMITS.maxRows, 100000);
   // Above the report's own limit it names both settings instead of failing on the limit later.
   assert.throws(() => top({ top: 101 }), /^Error: Keep the top rows \(101\) is above this report's row limit \(100\)\. Lower it or raise the row limit\.$/);
   assert.throws(() => top({ top: 30000 }, 10000), /\(30,000\) is above this report's row limit \(10,000\)/);

@@ -83,7 +83,7 @@ test('a dashboard over 100,000 rows reads only the cells each call needs', () =>
   const f = fixture();
   const all = (ROWS + 1) * HEADER.length;
   // The checks of a pivot read at most this many rows of a column they need.
-  const checked = f.api.DMV_LIMITS.maxRows;
+  const checked = f.api.DMV_CHAT_PIVOT.checkRows;
   const within = (step, read, most) => {
     assert.ok(read <= most, step + ' read ' + read + ' cells, more than ' + most);
     assert.ok(read < all, step + ' read every source cell');

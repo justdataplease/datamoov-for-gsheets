@@ -1,7 +1,11 @@
 /* DataMoov's shared report contract. Provider behavior lives in connectors/. */
 var DMV_CONNECTORS;
 var DMV_LIMITS = {
-  maxRows: 30000,
+  // What a query fetches: a dashboard dataset, whose data tab is written in several requests,
+  // and a chat report.
+  maxRows: 100000,
+  // A saved report, or a chat result put on a sheet, is written in one Sheets request.
+  reportRows: 30000,
   defaultRows: 10000,
   // Chat fetches whole accounts and aggregates server-side, so its initial cap is higher.
   chatDefaultRows: 10000,
@@ -10,6 +14,9 @@ var DMV_LIMITS = {
   maxConnections: 20,
   maxCredentials: 20,
   maxBytes: 8000000,
+  // The cells a run holds at once: one report, a dashboard's datasets together, or a combined
+  // result. 100,000 rows of 30 columns, under a third of the 10 million a spreadsheet holds.
+  maxCells: 3000000,
 };
 
 function dmvRegisterConnector_(definition) {
@@ -295,6 +302,10 @@ function dmvNormalizeResult_(result, maxRows) {
     throw new Error(
       'The report exceeds the row limit. Narrow the date range or filters; existing data was kept.'
     );
+  if (result.rows.length * result.columns.length > DMV_LIMITS.maxCells)
+    throw new Error(
+      'This report is too large for one refresh. Select fewer fields or a shorter date range.'
+    );
   var seen = Object.create(null);
   result.columns.forEach(function (column) {
     if (!column.key || seen[column.key])
@@ -315,10 +326,6 @@ function dmvNormalizeResult_(result, maxRows) {
       })
     );
   });
-  if (JSON.stringify(matrix).length > DMV_LIMITS.maxBytes)
-    throw new Error(
-      'This report is too large for one refresh. Select fewer fields or a shorter date range.'
-    );
   return {
     columns: result.columns,
     rows: result.rows,

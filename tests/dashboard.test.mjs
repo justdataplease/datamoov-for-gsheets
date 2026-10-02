@@ -151,7 +151,7 @@ function rowsOf(f, name) {
   const out = [];
   for (let r = 1; r <= sheet.getLastRow(); r++) {
     const row = [];
-    for (let c = 1; c <= 12; c++) row.push(f.value(sheet, r, c));
+    for (let c = 1; c <= 12; c++) row.push(f.shown(sheet, r, c));
     while (row.length && row[row.length - 1] === '') row.pop();
     out.push(row);
   }
@@ -167,7 +167,7 @@ function pageOf(f, name = 'Dashboard report') {
   const out = [];
   for (let r = 1; r <= sheet.getLastRow(); r++) {
     const row = [];
-    for (let c = 1; c <= sheet.maxColumns; c++) if (f.value(sheet, r, c) !== '') row.push(f.value(sheet, r, c));
+    for (let c = 1; c <= sheet.maxColumns; c++) if (f.shown(sheet, r, c) !== '') row.push(f.shown(sheet, r, c));
     out.push(row);
   }
   return out;
@@ -188,9 +188,9 @@ const noBars = (rows) => rows.map((row) => row.filter((value) => !isBar(value)))
 const rgb = (hex) => ({ red: parseInt(hex.slice(1, 3), 16) / 255, green: parseInt(hex.slice(3, 5), 16) / 255, blue: parseInt(hex.slice(5, 7), 16) / 255 });
 const NAVY = rgb('#0d366b'), WHITE = rgb('#ffffff'), GOOD = rgb('#006300'), BAD = rgb('#c62828'), GREY = rgb('#6b7280');
 const columnNumber = (letters) => letters.split('').reduce((sum, ch) => sum * 26 + ch.charCodeAt(0) - 64, 0);
-// The 1-based [row, column] of the first cell (in row order) holding value.
-function cellOf(sheet, value) {
-  const found = [...sheet.cells].filter(([, cell]) => cell.value === value).map(([key]) => key.split(':').map(Number));
+// The 1-based [row, column] of the first cell (in row order) showing value.
+function cellOf(f, sheet, value) {
+  const found = [...sheet.cells.keys()].map((key) => key.split(':').map(Number)).filter(([row, column]) => f.shown(sheet, row, column) === value);
   return found.sort((a, b) => a[0] - b[0] || a[1] - b[1])[0] || null;
 }
 // A chart sits inside its card: in the row under the card's title, within the card's columns,
@@ -199,7 +199,7 @@ function assertInCard(f, sheet, chart, title) {
   const position = chart.position.overlayPosition,
     anchor = position.anchorCell;
   assert.equal(anchor.sheetId, sheet.getSheetId());
-  assert.equal(f.value(sheet, anchor.rowIndex, anchor.columnIndex + 1), title, 'the card title is right above the chart');
+  assert.equal(f.shown(sheet, anchor.rowIndex, anchor.columnIndex + 1), title, 'the card title is right above the chart');
   const spans = f.merges(sheet)
     .map((merge) => /^([A-Z]+)(\d+):([A-Z]+)\d+$/.exec(merge))
     .filter((match) => Number(match[2]) === anchor.rowIndex)
@@ -285,7 +285,7 @@ test('private dashboard saves two dataset queries and refreshes every data tab, 
   assert.equal(raw[0][0], 'Source 1 · Fixture source · one · Daily');
   assert.match(raw[1][0], /^2026-08-01 to 2026-08-31 · 1 rows · Refreshed .* · Dashboard: Marketing overview$/);
   assert.deepEqual(raw.slice(2), [[], ['date', 'campaign', 'spend', 'clicks'], ['2026-08-01', '=literal', 3, 2]]);
-  assert.equal(f.value(one, 5, 2), '=literal');
+  assert.equal(f.shown(one, 5, 2), '=literal');
   assert.equal(f.formula(one, 5, 2), '');
   assert.deepEqual(rowsOf(f, 'Source 2 data')[4], ['2026-08-02', 'Second', 7, 4]);
 
@@ -310,7 +310,7 @@ test('private dashboard saves two dataset queries and refreshes every data tab, 
   assert.deepEqual(cardOf(page, 'Highlights'), [['•  Second leads Campaigns with EUR 7.00 spend (70.0% of the total).']]);
   const labels = find(page, 'Spend (EUR)');
   assert.deepEqual(page.slice(labels, labels + 2), [['Spend (EUR)', 'Clicks'], [10, 6]], 'value cells hold the values');
-  const spend = cellOf(report, 10);
+  const spend = cellOf(f, report, 10);
   assert.deepEqual(f.format(report, ...spend).numberFormat, { type: 'NUMBER', pattern: '#,##0.00' });
   assert.equal(f.format(report, ...spend).textFormat.fontSize, 22);
   const campaigns = cardOf(page, 'Campaigns');
@@ -324,7 +324,7 @@ test('private dashboard saves two dataset queries and refreshes every data tab, 
   assert.equal(campaigns[1][3], '█'.repeat(15), 'the largest value fills the bar column');
   // Only the full block: Sheets draws partial blocks from a fallback font of another height.
   assert.equal(campaigns[2][3], '█'.repeat(6), '3 of 7 rounds to 6 of 15 whole blocks');
-  const [literalRow, literalColumn] = cellOf(report, '=literal');
+  const [literalRow, literalColumn] = cellOf(f, report, '=literal');
   assert.equal(f.formula(report, literalRow, literalColumn), '', 'formula-like text stays text');
   assert.deepEqual(cardOf(page, 'Data sources'), [
     ['Dataset', 'Source', 'Connection', 'Report', 'Date range', 'Rows', 'Tab'],
@@ -337,7 +337,7 @@ test('private dashboard saves two dataset queries and refreshes every data tab, 
   // Each link jumps to its section's first row. Its look and its target are one format, so
   // Sheets keeps the bar's colour rather than its default link colour.
   for (const [label, target] of [['Overview', 'Spend (EUR)'], ['Highlights', 'Highlights'], ['Charts', 'Monthly spend'], ['Campaigns', 'Campaigns'], ['Data sources', 'Data sources']]) {
-    const column = Array.from({ length: 25 }, (_, i) => i + 1).find((c) => f.value(report, nav + 1, c) === label);
+    const column = Array.from({ length: 25 }, (_, i) => i + 1).find((c) => f.shown(report, nav + 1, c) === label);
     const look = f.format(report, nav + 1, column);
     assert.equal(look.textFormat.link.uri, '#gid=' + report.getSheetId() + '&range=A' + (find(page, target) + 1));
     assert.deepEqual(look.textFormat.foregroundColor, rgb('#2a78d6'));
@@ -417,11 +417,11 @@ test('refresh fetches fresh datasets again, preserves stable tabs and charts, an
   const emptied = rowsOf(f, 'Source 2 data');
   assert.match(emptied[1][0], / · 0 rows · /);
   assert.deepEqual(emptied.slice(3), [['date', 'campaign', 'spend', 'clicks']], 'the row of the previous refresh is cleared');
-  assert.equal(f.value(f.tab('Source 2 data'), 5, 1), '');
+  assert.equal(f.shown(f.tab('Source 2 data'), 5, 1), '');
   const page = pageOf(f);
   assert.deepEqual(page[find(page, 'Spend (EUR)') + 1], [5, 1]);
   assert.ok(page.length < before, 'the page shrinks with its data');
-  assert.equal(cellOf(f.tab('Dashboard report'), 'Second'), null, 'the campaign row of the emptied dataset is cleared');
+  assert.equal(cellOf(f, f.tab('Dashboard report'), 'Second'), null, 'the campaign row of the emptied dataset is cleared');
   assert.deepEqual(noBars(cardOf(page, 'Campaigns')).slice(1), [['Source 1', 'Changed', 5, 1], ['Total', 5, 1]]);
   assert.equal(find(page, 'Highlights'), -1, 'a single row leads nothing, so the highlights card goes');
   assert.equal(f.state.batches.length, 2);
@@ -463,7 +463,7 @@ test('a failed later dataset names itself, preserves every previous output and s
   assert.equal(f.state.charts.length, 1, 'the chart stays, drawn empty');
 });
 
-test('destination occupancy or edited ownership on any tab blocks all writes and new tab creation', () => {
+test('destination occupancy or an edited dashboard tab blocks all writes and new tab creation', () => {
   const f = fixture();
   const report = f.book.insertSheet('Dashboard report');
   f.setCell(report, 1, 1, 'Keep');
@@ -484,8 +484,8 @@ test('destination occupancy or edited ownership on any tab blocks all writes and
   f.run(saved.id);
   assert.equal(f.tab('Dashboard report').id, report.id, 'an empty existing tab is reused');
 
-  // An edit inside the dashboard tab protects the data tabs too, and the other way round. A merged
-  // title cell and a blank gutter cell of the page count as much as a table value.
+  // An edit inside the dashboard tab protects the data tabs too. A merged title cell and a blank
+  // gutter cell of the page count as much as a table value.
   let before = f.snapshot();
   f.setCell(report, 2, 2, 'Manual edit');
   assert.throws(() => f.run(saved.id), /edited or moved/);
@@ -496,13 +496,12 @@ test('destination occupancy or edited ownership on any tab blocks all writes and
   report.cells.delete('4:1');
   assert.deepEqual(f.snapshot(), before);
   const data = f.tab('Source 2 data');
+  // A data tab is the dashboard's own: a refresh writes it again without reading it back.
   f.setCell(data, 5, 2, 'Manual edit');
-  before = f.snapshot();
-  assert.throws(() => f.run(saved.id), /edited or moved/);
-  assert.deepEqual(f.snapshot(), before);
-  assert.equal(f.value(data, 5, 2), 'Manual edit');
-  assert.equal(f.state.batches.length, 1);
-  assert.equal(f.record(saved.id).status, 'error');
+  f.run(saved.id);
+  assert.equal(f.shown(data, 5, 2), 'Second');
+  assert.equal(f.state.batches.length, 2);
+  assert.equal(f.record(saved.id).status, 'success');
 });
 
 test('atomic batch failure creates no output tab, chart or ownership receipt and stays retryable', () => {
@@ -1004,7 +1003,7 @@ test('tiles filter their rows and compute ratios from summed counts', () => {
     second = find(chartData, 'Second only');
   assert.deepEqual(chartData.slice(second + 1, second + 3), [['Campaign', 'Clicks'], ['Second', 4]]);
   // The total is the overall ratio of the summed counts (10 / 6), not an average of the rows.
-  assert.deepEqual(cardOf(pageOf(f), 'Efficiency'), [['Campaign', 'CPC (EUR)'], ['=literal', 1.5], ['Second', 1.75], ['Total', 1.66666666667]]);
+  assert.deepEqual(cardOf(pageOf(f), 'Efficiency'), [['Campaign', 'CPC (EUR)'], ['=literal', 1.5], ['Second', 1.75], ['Total', 10 / 6]]);
   f.input.tiles[0].ratios[0].denominator = 'impressions';
   assert.throws(() => f.save(), /"Totals": unknown column "impressions"/);
   f.input.tiles[0].ratios[0].denominator = 'clicks';
@@ -1029,7 +1028,7 @@ test('a compare scorecard shows the current dataset with its change against the 
     [7, 4],
     ['▲ 133.3% vs 3.00', '▲ 100.0% vs 2'],
   ]);
-  assert.deepEqual(f.format(f.tab('Dashboard report'), ...cellOf(f.tab('Dashboard report'), '▲ 133.3% vs 3.00')).textFormat.foregroundColor, GOOD);
+  assert.deepEqual(f.format(f.tab('Dashboard report'), ...cellOf(f, f.tab('Dashboard report'), '▲ 133.3% vs 3.00')).textFormat.foregroundColor, GOOD);
   // The two largest changes lead the highlights, in words.
   assert.deepEqual(result.highlights.slice(0, 2), [
     'Spend (EUR) rose 133.3% to 7.00 (previous 3.00).',
@@ -1082,8 +1081,8 @@ test('compare lists add up every account of a period, so scorecard ratios are tr
   const page = pageOf(f),
     labels = find(page, 'Spend (EUR)');
   assert.deepEqual(page[labels + 2], ['▲ 66.7% vs 24.00', '▼ 66.7% vs 3.00']);
-  assert.deepEqual(f.format(report, ...cellOf(report, '▲ 66.7% vs 24.00')).textFormat.foregroundColor, GREY, 'neutral spend is grey');
-  assert.deepEqual(f.format(report, ...cellOf(report, '▼ 66.7% vs 3.00')).textFormat.foregroundColor, GOOD, 'a falling cost is good');
+  assert.deepEqual(f.format(report, ...cellOf(f, report, '▲ 66.7% vs 24.00')).textFormat.foregroundColor, GREY, 'neutral spend is grey');
+  assert.deepEqual(f.format(report, ...cellOf(f, report, '▼ 66.7% vs 3.00')).textFormat.foregroundColor, GOOD, 'a falling cost is good');
   // The band names the current period and the one it is compared with.
   assert.deepEqual(page[1].slice(1), ['1 Aug – 31 Aug 2026']);
   assert.equal(page[2][1], 'vs 1 Jul – 31 Jul 2026');
@@ -1120,17 +1119,17 @@ test('a compared table adds a change column after each value, matched by its gro
   assert.deepEqual(noBars(cardOf(pageOf(f), 'Campaigns')), [
     ['Source', 'Campaign', 'Spend (EUR)', 'Δ %', 'CPC (EUR)', 'Δ %'],
     ['Source 1', 'A', 30, 0.5, 3, -0.4],
-    ['Source 2', 'B', 10, 0.25, 0.333333333333, 0.66666667],
+    ['Source 2', 'B', 10, 0.25, 10 / 30, 0.6666666666666665],
     ['Source 1', 'New', 5, 1],
-    ['Total', 45, 0.21621622, 1, 0.43243243],
+    ['Total', 45, 0.21621621621621623, 1, 0.4324324324324325],
   ]);
-  const change = cellOf(report, 0.5);
+  const change = cellOf(f, report, 0.5);
   assert.deepEqual(f.format(report, ...change).numberFormat, { type: 'PERCENT', pattern: '"▲ "0.0%;"▼ "0.0%;"▶ "0.0%' });
   assert.deepEqual(f.format(report, ...change).textFormat.foregroundColor, GOOD);
-  assert.deepEqual(f.format(report, ...cellOf(report, -0.4)).textFormat.foregroundColor, GOOD, 'a falling CPC is good');
-  assert.deepEqual(f.format(report, ...cellOf(report, 0.66666667)).textFormat.foregroundColor, BAD, 'a rising CPC is bad');
+  assert.deepEqual(f.format(report, ...cellOf(f, report, -0.4)).textFormat.foregroundColor, GOOD, 'a falling CPC is good');
+  assert.deepEqual(f.format(report, ...cellOf(f, report, 0.6666666666666665)).textFormat.foregroundColor, BAD, 'a rising CPC is bad');
   // Darker shading is better: the lowest cost per click is the darkest.
-  assert.deepEqual(f.format(report, ...cellOf(report, 0.333333333333)).backgroundColor, rgb('#9ec5f4'));
+  assert.deepEqual(f.format(report, ...cellOf(f, report, 10 / 30)).backgroundColor, rgb('#9ec5f4'));
 
   // Previous datasets listed in the other order still meet their own account.
   f.compare.previous = ['prev1', 'prev0'];
@@ -1138,7 +1137,7 @@ test('a compared table adds a change column after each value, matched by its gro
   f.run(f.save({ ...f.input, id: saved.id, revision: saved.revision }).id);
   assert.deepEqual(noBars(cardOf(pageOf(f), 'Campaigns')).slice(1, 3), [
     ['Source 1', 'A', 30, 0.5, 3, -0.4],
-    ['Source 2', 'B', 10, 0.25, 0.333333333333, 0.66666667],
+    ['Source 2', 'B', 10, 0.25, 10 / 30, 0.6666666666666665],
   ]);
 });
 
@@ -1261,7 +1260,7 @@ test('chart tiles can stack, draw a ratio on the right axis as a line, and take 
   assert.deepEqual(f.format(report, left.anchorCell.rowIndex + 1, gap).backgroundColor, rgb('#f4f6fa'));
   const chartData = rowsOf(f, 'Dashboard report (chart data)'),
     combined = find(chartData, 'Spend and CPC');
-  assert.deepEqual(chartData.slice(combined + 1, combined + 3), [['Date', 'Spend', 'Cpc'], ['Aug 2026', 10, 1.66666666667]]);
+  assert.deepEqual(chartData.slice(combined + 1, combined + 3), [['Date', 'Spend', 'Cpc'], ['Aug 2026', 10, 10 / 6]]);
   const page = pageOf(f);
   assert.ok(find(page, 'Data sources') > find(page, 'Clicks by source'), 'the data sources follow the charts');
   f.input.tiles[1].secondaryAxis = ['spend', 'cpc'];
@@ -1355,13 +1354,13 @@ test('each dataset allows the larger of its saved row limit and the Settings row
   assert.doesNotMatch(message, /date range/);
   // No LIMIT advice: only some sources label the rows a query's LIMIT keeps (a SQL LIMIT would
   // cut a list without a word), so that stays in the descriptions of the sources that do.
-  assert.match(message, /a ranked report's Keep the top rows, conditions or aggregation in the query, or fewer dimensions\./);
+  assert.match(message, /a ranked report's Keep the top rows, query conditions or aggregation, or fewer dimensions\./);
   assert.doesNotMatch(message, /LIMIT|top rows by a metric/);
-  assert.match(message, / Only then raise Maximum rows per chat report \(Settings > AI provider, up to 30,000\)\.$/);
+  assert.match(message, / Only then raise Maximum rows per chat report \(Settings > AI provider, up to 100,000\)\.$/);
   assert.ok(message.indexOf('Keep the top rows') < message.indexOf('Maximum rows per chat report'), 'narrowing comes before the setting');
   assert.doesNotMatch(message, /Google|GAQL|fixture/i, 'the advice names no provider');
   // A long label leaves out the last sentence whole rather than have it cut mid-word.
-  const long = f.api.dmvDashboardMessage_('L'.repeat(240) + ': ', [], '', f.api.dmvDashboardNarrow_(''), ' Only then raise the limit.');
+  const long = f.api.dmvDashboardMessage_('L'.repeat(250) + ': ', [], '', f.api.dmvDashboardNarrow_(''), ' Only then raise the limit.');
   assert.ok(long.length <= 400 && long.endsWith('fewer dimensions.'));
   assert.deepEqual(f.snapshot(), before);
   assert.equal(f.state.batches.length, 1);
@@ -1374,7 +1373,7 @@ test('each dataset allows the larger of its saved row limit and the Settings row
 test('a SQL dataset over the row limit keeps the whole dashboard advice', () => {
   const f = fixture();
   f.input.datasets[0].label = 'Products by revenue this month';
-  f.input.datasets[0].maxRows = 30000;
+  f.input.datasets[0].maxRows = 100000;
   const saved = f.save();
   for (const subject of ['BigQuery result', 'The SQL result']) {
     // The sandbox's Error is another realm's; the fixture throws its own with the same text.
@@ -1389,8 +1388,8 @@ test('a SQL dataset over the row limit keeps the whole dashboard advice', () => 
     );
     assert.ok(message.length <= 400, subject);
     assert.ok(message.startsWith('Products by revenue this month: ' + subject + ' exceeds the row limit.'), message);
-    assert.match(message, /\(not a LIMIT\)\. This dataset allows 30,000 rows\. Keep only the rows worth acting on: .* or fewer dimensions\./);
-    assert.match(message, / Only then raise Maximum rows per chat report \(Settings > AI provider, up to 30,000\)\.$/, subject);
+    assert.match(message, /\(not a LIMIT\)\. This dataset allows 100,000 rows\. Keep only the rows worth acting on: .* or fewer dimensions\./);
+    assert.match(message, / Only then raise Maximum rows per chat report \(Settings > AI provider, up to 100,000\)\.$/, subject);
   }
 });
 
@@ -1452,13 +1451,13 @@ test('journal recovery never adopts manually edited cells as dashboard-owned out
   fail = false;
   const before = f.snapshot();
   assert.throws(() => f.run(saved.id), /existing data/);
-  assert.equal(f.value(report, 2, 3), 'Manual');
+  assert.equal(f.shown(report, 2, 3), 'Manual');
   assert.deepEqual(f.snapshot(), before);
   assert.equal(f.readOutput(saved.id + '-report'), null);
   assert.equal(f.state.batches.length, 1);
 });
 
-test('combined row and cumulative workbook capacity limits stop every output', () => {
+test('the cell budget of the datasets together and cumulative workbook capacity stop every output', () => {
   const f = fixture();
   f.input.datasets.forEach((dataset) => {
     dataset.maxRows = 30000;
@@ -1482,10 +1481,16 @@ test('combined row and cumulative workbook capacity limits stop every output', (
     }))
   );
   // The datasets fetched so far are named, the largest first, with what narrows them.
-  assert.throws(
-    () => f.run(f.save().id),
-    /^Error: The dashboard datasets exceed 30,000 rows together \(Source 1 15,001, Source 2 15,001\)\. Keep only the rows worth acting on in the largest datasets: /
-  );
+  const budget = f.api.DMV_LIMITS.maxCells;
+  f.api.DMV_LIMITS.maxCells = 100000;
+  try {
+    assert.throws(
+      () => f.run(f.save().id),
+      /^Error: The dashboard datasets exceed 100,000 cells together \(Source 1 15,001 rows x 4 columns, Source 2 15,001 rows x 4 columns\)\. Keep only the rows worth acting on in the largest datasets: /
+    );
+  } finally {
+    f.api.DMV_LIMITS.maxCells = budget;
+  }
   assert.equal(f.state.batches.length, 0);
   for (const name of f.tabs) assert.equal(f.tab(name), null);
   const g = fixture();
@@ -1514,8 +1519,8 @@ test('the shared writer handles two nonoverlapping ranges beyond one existing gr
     }))
   );
   assert.equal(f.state.batches.length, 1);
-  assert.equal(f.value(f.book.sheets[0], 121, 1), 2);
-  assert.equal(f.value(f.book.sheets[0], 121, 2), 2);
+  assert.equal(f.shown(f.book.sheets[0], 121, 1), 2);
+  assert.equal(f.shown(f.book.sheets[0], 121, 2), 2);
 });
 
 test('the shared writer commits extra requests in the same batch and refuses outputs that share a receipt', () => {
@@ -1807,22 +1812,22 @@ test('highlight rules tint the rows they flag, first rule first, against a fixed
     ['B', 10, 5],
     ['C', 5, 1],
     ['D', 2, 2],
-    ['Total', 67, 1.15517241379],
+    ['Total', 67, 67 / 58],
   ]);
   // A legend under the table names each rule with the threshold it applied on this refresh.
   const page = pageOf(f);
   const legend = page.find((line) => line[0] === 'Row tints');
   assert.deepEqual(legend, ['Row tints', 'CPC > 2× overall (EUR 2.31)', 'Spend ≥ EUR 20.00', 'CPC < 0.9× overall (EUR 1.04)']);
   assert.ok(page.indexOf(legend) > find(page, 'Campaigns') && page.indexOf(legend) < find(page, 'Data sources'), 'the legend is in the table card');
-  assert.deepEqual(f.format(report, ...cellOf(report, legend[1])).backgroundColor, rgb('#fde4e4'));
-  assert.deepEqual(f.format(report, ...cellOf(report, legend[3])).backgroundColor, rgb('#fdf0d2'));
-  const tint = (name) => f.format(report, cellOf(report, name)[0], cellOf(report, name)[1] + 3).backgroundColor;
+  assert.deepEqual(f.format(report, ...cellOf(f, report, legend[1])).backgroundColor, rgb('#fde4e4'));
+  assert.deepEqual(f.format(report, ...cellOf(f, report, legend[3])).backgroundColor, rgb('#fdf0d2'));
+  const tint = (name) => f.format(report, cellOf(f, report, name)[0], cellOf(f, report, name)[1] + 3).backgroundColor;
   // A meets the red rule and the green one: the first rule wins. E is green before amber.
   assert.deepEqual(['A', 'E', 'B', 'C'].map(tint), [rgb('#fde4e4'), rgb('#e3f4e3'), rgb('#fde4e4'), rgb('#fdf0d2')]);
   // An unflagged row keeps its heatmap: the CPC of D ranks third of five, the middle blue.
-  const [dRow] = cellOf(report, 'D');
+  const [dRow] = cellOf(f, report, 'D');
   // D spent 2 and its CPC is 2: the CPC column is the later one.
-  const cpcColumn = Array.from({ length: 25 }, (_, i) => i + 1).findLast((c) => f.value(report, dRow, c) === 2);
+  const cpcColumn = Array.from({ length: 25 }, (_, i) => i + 1).findLast((c) => f.shown(report, dRow, c) === 2);
   assert.deepEqual(f.format(report, dRow, cpcColumn).backgroundColor, rgb('#cde2fb'));
   // Each rule in words, with its threshold and unit, the worst rows first.
   assert.deepEqual(result.highlights, [
@@ -1866,7 +1871,7 @@ test('a highlight rule on a groupBy column matches its text like a filter and re
     ['Row tints', 'Campaign ≠ Brand search'],
   ]);
   // The first rule a row meets tints it.
-  const tint = (name) => f.format(report, cellOf(report, name)[0], cellOf(report, name)[1] + 3).backgroundColor;
+  const tint = (name) => f.format(report, cellOf(f, report, name)[0], cellOf(f, report, name)[1] + 3).backgroundColor;
   assert.deepEqual(['Brand search', 'Generic search', 'Performance max', 'Display', 'Video'].map(tint), [
     rgb('#e3f4e3'),
     rgb('#e3f4e3'),
@@ -1966,7 +1971,7 @@ test('a plan saved before dashboard v2 still refreshes: one-dataset compares, no
     ['Clicks', '+100.0% vs 2', 'neutral'],
   ]);
   const report = f.tab('Dashboard report');
-  assert.deepEqual(f.format(report, ...cellOf(report, '▲ 133.3% vs 3.00')).textFormat.foregroundColor, GREY);
+  assert.deepEqual(f.format(report, ...cellOf(f, report, '▲ 133.3% vs 3.00')).textFormat.foregroundColor, GREY);
   assertInCard(f, f.tab('Dashboard report'), f.state.charts[0], 'Monthly spend');
   assert.equal(f.record(saved.id).status, 'success');
 });
@@ -2069,8 +2074,8 @@ test('changes and small rates are computed unrounded and printed once, so the ca
   // Money columns of a thousand and more read as whole amounts and name their currency.
   const table = noBars(cardOf(page, 'Campaigns'));
   assert.deepEqual(table[0], ['Source', 'Campaign', 'Spend (EUR)', 'Clicks']);
-  const [aRow] = cellOf(report, 'A');
-  const spendColumn = Array.from({ length: 25 }, (_, i) => i + 1).find((c) => f.value(report, aRow, c) === 906230);
+  const [aRow] = cellOf(f, report, 'A');
+  const spendColumn = Array.from({ length: 25 }, (_, i) => i + 1).find((c) => f.shown(report, aRow, c) === 906230);
   assert.deepEqual(f.format(report, aRow, spendColumn).numberFormat, { type: 'NUMBER', pattern: '#,##0' });
   // Tiles without a compare read the current period only, never both periods added up.
   assert.equal(table.at(-1)[1], 906235);
@@ -2325,9 +2330,9 @@ test('every scorecard is kept, in balanced rows that fill the page', () => {
   // Eight values, six of them money in two currencies: fourteen cards, none dropped.
   assert.equal(result.scorecards.length, 14);
   const report = f.tab('Dashboard report');
-  for (const card of result.scorecards) assert.ok(cellOf(report, card.label), card.label + ' is on the page');
+  for (const card of result.scorecards) assert.ok(cellOf(f, report, card.label), card.label + ' is on the page');
   // Rows of four, four, four and two; the last two cards take half the width each.
-  const last = cellOf(report, result.scorecards[13].label)[0];
+  const last = cellOf(f, report, result.scorecards[13].label)[0];
   const row = new RegExp('^[A-Z]+' + last + ':');
   assert.deepEqual(f.merges(report).filter((merge) => row.test(merge)), ['B' + last + ':L' + last, 'N' + last + ':X' + last]);
 });
@@ -2504,7 +2509,7 @@ test('long tables shade and colour a column per request, so they refresh again a
   }
   // A shaded cell and a tinted one: the tint covers the whole row, its shaded cells included.
   const report = f.tab('Dashboard report');
-  const header = cellOf(report, 'CPC (EUR)');
+  const header = cellOf(f, report, 'CPC (EUR)');
   let tinted = 0,
     shaded = 0;
   for (let row = header[0] + 1; row <= header[0] + 1000; row++) {
@@ -2533,7 +2538,7 @@ test('long tables shade and colour a column per request, so they refresh again a
   assert.equal(f.state.batches.length, batches);
 });
 
-test('a refresh past one Sheets write names its largest datasets, rows by columns, and writes nothing', () => {
+test('a refresh past the cell budget names its largest datasets, rows by columns, and writes nothing; rows past one Sheets write follow in more', () => {
   const f = fixture();
   // Two wide raw lists, as a dump of every keyword and asset would be, behind small tiles.
   const wide = Array.from({ length: 8 }, (_, i) => ({ key: 'extra' + i, type: 'text' }));
@@ -2579,8 +2584,8 @@ test('a refresh past one Sheets write names its largest datasets, rows by column
     { title: 'Top terms', type: 'bar', datasets: ['terms'], groupBy: ['name'], metrics: [{ field: 'spend', agg: 'sum' }] },
   ];
   const saved = f.save();
-  const limit = f.api.DMV_LIMITS.maxBytes;
-  f.api.DMV_LIMITS.maxBytes = 1500000;
+  const budget = f.api.DMV_LIMITS.maxCells;
+  f.api.DMV_LIMITS.maxCells = 50000;
   let message = '';
   try {
     assert.throws(
@@ -2591,16 +2596,27 @@ test('a refresh past one Sheets write names its largest datasets, rows by column
       }
     );
   } finally {
-    f.api.DMV_LIMITS.maxBytes = limit;
+    f.api.DMV_LIMITS.maxCells = budget;
   }
   // The datasets are named as the plan names them, the largest first, so Chat narrows the right
-  // one; the small dataset and the page are no part worth naming.
-  assert.match(message, /^This dashboard is too large for one Sheets write\. Largest parts: Assets \(4,000 rows x 10 columns\), Keywords \(1,500 rows x 10 columns\)\. /);
+  // one; the small dataset, not fetched yet, and the page are no part worth naming.
+  assert.match(message, /^The dashboard datasets exceed 50,000 cells together \(Assets 4,000 rows x 10 columns, Keywords 1,500 rows x 10 columns\)\. /);
   assert.doesNotMatch(message, /Search terms|dashboard page/);
-  assert.match(message, /\. Keep only the rows worth acting on in those datasets: a ranked report's Keep the top rows, .* Then shorten the longest table tiles if the page is still too large\.$/);
+  assert.match(message, /\. Keep only the rows worth acting on in the largest datasets: a ranked report's Keep the top rows, .* or fewer dimensions\.$/);
   assert.equal(f.state.batches.length, 0, 'nothing is written');
   for (const name of ['Assets Data', 'Keywords Data', 'Search terms Data', 'Dashboard report']) assert.equal(f.tab(name), null);
   assert.equal(f.readOutput(saved.id + '-d-assets'), null);
   assert.equal(f.record(saved.id).status, 'error');
-  assert.match(f.record(saved.id).lastError, /Largest parts: Assets \(4,000 rows x 10 columns\)/);
+  assert.match(f.record(saved.id).lastError, /\(Assets 4,000 rows x 10 columns/);
+  // Within the budget, rows past one Sheets write follow in further writes.
+  const limit = f.api.DMV_LIMITS.maxBytes;
+  f.api.DMV_LIMITS.maxBytes = 1500000;
+  try {
+    assert.equal(f.run(saved.id).ok, true);
+  } finally {
+    f.api.DMV_LIMITS.maxBytes = limit;
+  }
+  assert.ok(f.state.batches.length > 1);
+  assert.ok(f.state.batches.every((batch) => Buffer.byteLength(JSON.stringify(batch.body)) <= 1500000));
+  assert.equal(f.value(f.tab('Assets Data'), 4004, 1), 'Item number 3999');
 });

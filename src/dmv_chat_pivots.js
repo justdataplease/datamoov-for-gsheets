@@ -15,6 +15,8 @@ var DMV_CHAT_PIVOT = {
   buckets: { day: 'YEAR_MONTH_DAY', month: 'YEAR_MONTH', quarter: 'YEAR_QUARTER', year: 'YEAR' },
   maxFilters: 6,
   maxFilterValues: 100,
+  // The data rows the checks read from a larger tab; the native pivot still covers it whole.
+  checkRows: 30000,
 };
 
 /* Shared by both paths */
@@ -47,7 +49,7 @@ function dmvChatPivotArea_(sheet, address) {
     columns: columns,
     // The data rows the checks read: every row of any report output, the first rows of a larger
     // tab, which the native pivot still covers whole.
-    checked: Math.min(rows - 1, DMV_LIMITS.maxRows),
+    checked: Math.min(rows - 1, DMV_CHAT_PIVOT.checkRows),
     grid: {
       sheetId: sheet.getSheetId(),
       startRowIndex: start.row - 1,

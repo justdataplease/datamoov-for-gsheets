@@ -25,7 +25,7 @@ test('each SQL report offers Keep the top rows and Rank by column, the top withi
   for (const [id, report] of [['bigquery', 'query'], ['postgres', 'sql_report'], ['snowflake', 'sql_report']]) {
     const fields = plain(connectors[id].reports.find((item) => item.id === report).configFields);
     const [topField, rankField] = fields.slice(-2);
-    assert.deepEqual([topField.key, topField.label, topField.type, topField.required, topField.min, topField.max], ['top', 'Keep the top rows', 'number', false, 1, 30000], id);
+    assert.deepEqual([topField.key, topField.label, topField.type, topField.required, topField.min, topField.max], ['top', 'Keep the top rows', 'number', false, 1, 100000], id);
     // Written out because a connector may register before dmv_core.js has run.
     assert.equal(topField.max, scope.DMV_LIMITS.maxRows, id);
     assert.match(topField.help, /Rank by column.*Blank keeps every row up to the row limit\.$/, id);
@@ -42,7 +42,7 @@ test('a SQL top needs a rank column and the reverse; both blank keeps every row'
   assert.throws(() => top({ rankBy: 'spend' }), /^Error: Rank by column orders the rows Keep the top rows keeps\. Set Keep the top rows or clear Rank by column\.$/);
   assert.throws(() => top({ top: '', rankBy: 'spend' }), /Set Keep the top rows or clear Rank by column/);
   // The shared checks of the top itself: a whole number, then within this report's row limit.
-  assert.throws(() => top({ top: 1.5, rankBy: 'spend' }), /whole number from 1 to 30,000/);
+  assert.throws(() => top({ top: 1.5, rankBy: 'spend' }), /whole number from 1 to 100,000/);
   assert.throws(() => top({ top: 101, rankBy: 'spend' }), /Keep the top rows \(101\) is above this report's row limit \(100\)/);
   // Quoting is the dialect's; a name that is not one column name is refused before it.
   for (const name of ['spend\nDESC', 'a\u0000b', 'x'.repeat(256)])

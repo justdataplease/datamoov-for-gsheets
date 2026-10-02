@@ -119,7 +119,7 @@ function dmvChatSaveReport_(session, input) {
     if (!Number.isInteger(input.revision) || input.revision !== current.revision)
       throw new Error('List reports first and use the saved revision when editing a report.');
   }
-  var cap = session.maxRows || DMV_LIMITS.chatDefaultRows;
+  var cap = Math.min(session.maxRows || DMV_LIMITS.chatDefaultRows, DMV_LIMITS.reportRows);
   var report = Object.assign({}, input, {
     maxRows: input.maxRows === undefined ? cap : input.maxRows,
     origin: 'chat',
@@ -130,7 +130,10 @@ function dmvChatSaveReport_(session, input) {
     throw new Error(
       'A chat report must use at most ' +
         cap +
-        ' rows. Change Maximum rows per chat report in Settings when needed.'
+        ' rows.' +
+        (cap < DMV_LIMITS.reportRows
+          ? ' Change Maximum rows per chat report in Settings when needed.'
+          : ' A saved report is written in one Sheets request; a dashboard holds more rows.')
     );
   var saved;
   try {

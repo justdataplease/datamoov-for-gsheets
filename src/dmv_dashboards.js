@@ -1299,8 +1299,7 @@ function dmvDeleteDashboard(id, keepTabs) {
             return { deleteSheet: { sheetId: properties.sheetId } };
           });
         if (!requests.length) return 0;
-        // A spreadsheet must keep one visible tab; hidden ones, such as chat's undo copies of
-        // deleted tabs, do not count.
+        // A spreadsheet must keep one visible tab; hidden ones do not count.
         if (
           !live.some(function (properties) {
             return !owned[properties.sheetId] && !properties.hidden;
@@ -1826,15 +1825,15 @@ function dmvDashboardTone_(plan, key, delta) {
 
 // Numbers in highlight and change text, as the page cells show them: money and counts of a
 // thousand or more as whole numbers, smaller ones with two decimals (four below 1, so a rate of
-// 0.006 does not read 0.01), rates as percentages.
+// 0.006 does not read 0.01), rates as percentages. They round half away from zero like a cell
+// does, so 746.145 (stored as 746.1449...) reads 746.15 in the text and in the cell.
 function dmvDashboardNumber_(value, type) {
   var number = Number(value);
   if (dmvDashboardBlank_(value) || !isFinite(number)) return '';
-  if (type === 'percent') return (number * 100).toFixed(2) + '%';
+  if (type === 'percent') return dmvFormulaRoundTo_(number * 100, 2).toFixed(2) + '%';
   var whole = Math.abs(number) >= 1000 || (type !== 'currency' && number % 1 === 0);
-  var parts = Math.abs(number)
-    .toFixed(whole ? 0 : type !== 'currency' && Math.abs(number) < 1 ? 4 : 2)
-    .split('.');
+  var digits = whole ? 0 : type !== 'currency' && Math.abs(number) < 1 ? 4 : 2;
+  var parts = dmvFormulaRoundTo_(Math.abs(number), digits).toFixed(digits).split('.');
   return (
     (number < 0 && /[1-9]/.test(parts.join('')) ? '-' : '') +
     parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',') +
@@ -1885,6 +1884,7 @@ function dmvDashboardChangeText_(card) {
 // currency supplies the change.
 function dmvDashboardCards_(context, resultId, tile) {
   var session = context.session,
+    base = dmvChatResult_(session, resultId),
     top = dmvDashboardTileTop_(context, tile),
     cards = [];
   var inputs = tile.compare
@@ -1924,6 +1924,7 @@ function dmvDashboardCards_(context, resultId, tile) {
           column: value,
           split: single,
           value: metric && ['sum', 'count', 'count_distinct'].indexOf(metric.agg) >= 0 ? 0 : '',
+          keys: [],
           empty: true,
         },
       ];
@@ -1939,22 +1940,34 @@ function dmvDashboardCards_(context, resultId, tile) {
               .join(' · ')
           : single,
         value: row[value.key],
+        keys: splits.map(function (column) {
+          return { key: column.key, value: row[column.key] };
+        }),
       };
     });
   }
   tile.metrics
     .map(function (metric) {
-      return { key: metric.field, spec: { metrics: [metric] } };
+      return {
+        key: metric.field,
+        spec: { metrics: [metric] },
+        item: { agg: metric.agg, name: metric.field },
+      };
     })
     .concat(
       (tile.ratios || []).map(function (ratio) {
-        return { key: ratio.key, spec: { metrics: [], ratios: [ratio] } };
+        return {
+          key: ratio.key,
+          spec: { metrics: [], ratios: [ratio] },
+          item: { agg: 'ratio', name: ratio.key },
+        };
       }),
       (tile.formulas || []).map(function (formula) {
         var needs = dmvDashboardNeeds_(tile, formula.key);
         return {
           key: formula.key,
           spec: { metrics: [], ratios: needs.ratios, formulas: needs.formulas },
+          item: { agg: 'formula', name: formula.key },
         };
       })
     )
@@ -1984,6 +1997,28 @@ function dmvDashboardCards_(context, resultId, tile) {
         };
         if (inputs.previous)
           card.previous = dmvDashboardBlank_(previous[entry.split]) ? null : previous[entry.split];
+        // The value and the change line follow the data tabs.
+        card.formula = dmvDashboardLive_(
+          context,
+          tile,
+          inputs.previous ? 'current' : null,
+          base,
+          item.item,
+          entry.keys,
+          null,
+          card.value === ''
+        );
+        if (inputs.previous)
+          card.before = dmvDashboardLive_(
+            context,
+            tile,
+            'previous',
+            base,
+            item.item,
+            entry.keys,
+            null,
+            card.previous === null
+          );
         cards.push(card);
       });
     });
@@ -2063,7 +2098,7 @@ function dmvDashboardChartTable_(context, resultId, tile) {
     ratios: tile.ratios,
     formulas: tile.formulas,
     filters: tile.filters,
-    limit: DMV_LIMITS.maxRows,
+    limit: DMV_CHAT_RESULTS.maxSummaryRows,
   });
   var dimensions = summary.columns.filter(function (column) {
     return column.role === 'dimension';
@@ -2102,6 +2137,11 @@ function dmvDashboardChartTable_(context, resultId, tile) {
           total: 0,
           currency: currency && !dmvDashboardBlank_(row[currency]) ? String(row[currency]) : '',
           right: (tile.secondaryAxis || []).indexOf(dmvDashboardValueName_(column)) >= 0,
+          // What its points add up, for their formulas: the column and the split's values.
+          item: dmvDashboardItem_(tile, base, column),
+          keys: splits.map(function (split) {
+            return { key: split.key, value: row[split.key] };
+          }),
         };
         series.push(seriesByName[name]);
       }
@@ -2253,6 +2293,23 @@ function dmvDashboardChartTable_(context, resultId, tile) {
   var block = {
     columns: columns,
     matrix: matrix,
+    // Each point as a formula over the data tabs; a chart without rows has no points to follow.
+    formulas: points.map(function (point) {
+      return series.map(function (item) {
+        return empty
+          ? null
+          : dmvDashboardLive_(
+              context,
+              tile,
+              null,
+              base,
+              item.item,
+              [{ key: dimensions[0].key, value: point.x }].concat(item.keys),
+              null,
+              dmvDashboardBlank_(point.values[item.name])
+            );
+      });
+    }),
     labels: points.map(function (point) {
       return dated
         ? dmvDashboardAxisLabel_(point.x, matrix, tile.dateBucket, ranges)
@@ -2416,15 +2473,28 @@ function dmvDashboardBucket_(date, start, bucket) {
   return bucket === 'month' ? months : Math.floor(months / 12);
 }
 
-// The first day of a bucket, counted from the first day of the current period. A month or year
-// bucket that starts on the first of a month reads as that month or year.
-function dmvDashboardBucketLabel_(start, index, bucket) {
+// The first day dmvDashboardBucket_ counts into bucket index or a later one. A month or year
+// bucket starts on the start's day of its month, or on the 1st after a month too short for it.
+function dmvDashboardBucketStart_(start, index, bucket) {
   if (bucket === 'day' || bucket === 'week')
     return new Date(
       Date.parse(start + 'T12:00:00Z') + index * (bucket === 'week' ? 7 : 1) * 86400000
     )
       .toISOString()
       .slice(0, 10);
+  var year = Number(start.slice(0, 4)),
+    month = Number(start.slice(5, 7)) - 1 + index * (bucket === 'year' ? 12 : 1),
+    day = Number(start.slice(8, 10));
+  var fits = day <= new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(year, fits ? month : month + 1, fits ? day : 1))
+    .toISOString()
+    .slice(0, 10);
+}
+
+// The first day of a bucket, counted from the first day of the current period. A month or year
+// bucket that starts on the first of a month reads as that month or year.
+function dmvDashboardBucketLabel_(start, index, bucket) {
+  if (bucket === 'day' || bucket === 'week') return dmvDashboardBucketStart_(start, index, bucket);
   var day = Number(start.slice(8, 10));
   var month = new Date(
     Date.UTC(
@@ -2558,7 +2628,9 @@ function dmvDashboardCompareChart_(context, resultId, tile) {
   });
   var trimmed = false,
     sameDays = ['day', 'week'].indexOf(bucket) >= 0;
-  var splits = [];
+  // Each split by its name, and the values it stands for.
+  var splits = [],
+    splitKeys = Object.create(null);
   sides.forEach(function (side, index) {
     var summary = dmvDashboardSummarize_(session, side.input, {
       groupBy: [axis.key, 'source'],
@@ -2585,12 +2657,21 @@ function dmvDashboardCompareChart_(context, resultId, tile) {
         trimmed = true;
         return;
       }
-      var split = extra
-        .map(function (column) {
-          return dmvDashboardBlank_(row[column.key]) ? '' : String(row[column.key]);
+      var keys = extra.map(function (column) {
+        return {
+          key: column.key,
+          value: dmvDashboardBlank_(row[column.key]) ? '' : String(row[column.key]),
+        };
+      });
+      var split = keys
+        .map(function (entry) {
+          return entry.value;
         })
         .join(' · ');
-      if (splits.indexOf(split) < 0) splits.push(split);
+      if (splits.indexOf(split) < 0) {
+        splits.push(split);
+        splitKeys[split] = keys;
+      }
       var cell =
         side.cells[at + '|' + split] || (side.cells[at + '|' + split] = Object.create(null));
       partKeys.forEach(function (key) {
@@ -2704,15 +2785,56 @@ function dmvDashboardCompareChart_(context, resultId, tile) {
       })
     ),
   ];
-  for (var i = first; i < count; i++)
-    matrix.push(
-      [dmvDashboardBucketLabel_(origin, i, bucket)].concat(
-        ordered.map(function (item) {
-          return valueAt(sides[item.previous ? 1 : 0].cells[i + '|' + item.split], item.spec);
-        })
-      )
+  // Bucket i of each dataset: its days from the first day of its own period, a previous one's
+  // cut to the days it keeps.
+  var startOf = function (member) {
+    return context.ranges[member.dataset.id].startDate;
+  };
+  var bounds = function (index, previous) {
+    return [
+      {
+        key: axis.key,
+        op: 'gte',
+        value: function (member) {
+          return dmvDashboardBucketStart_(startOf(member), index, bucket);
+        },
+      },
+      {
+        key: axis.key,
+        op: 'lt',
+        value: function (member) {
+          var end = dmvDashboardBucketStart_(startOf(member), index + 1, bucket);
+          if (!previous || !sameDays) return end;
+          var cut = dmvDashboardBucketStart_(startOf(member), keep[member.label], 'day');
+          return cut < end ? cut : end;
+        },
+      },
+    ];
+  };
+  var formulas = [];
+  for (var i = first; i < count; i++) {
+    var values = ordered.map(function (item) {
+      return valueAt(sides[item.previous ? 1 : 0].cells[i + '|' + item.split], item.spec);
+    });
+    matrix.push([dmvDashboardBucketLabel_(origin, i, bucket)].concat(values));
+    // Each point as a formula over the data tabs.
+    formulas.push(
+      ordered.map(function (item, at) {
+        return dmvDashboardLive_(
+          context,
+          tile,
+          item.previous ? 'previous' : 'current',
+          base,
+          { agg: item.spec.agg, name: item.spec.name },
+          (splitKeys[item.split] || []).concat(bounds(i, item.previous)),
+          null,
+          values[at] === ''
+        );
+      })
     );
+  }
   var block = {
+    formulas: formulas,
     columns: [
       { key: 'x', label: axis.label || axis.key, type: bucket === 'day' ? 'date' : 'text' },
     ].concat(
@@ -2837,24 +2959,9 @@ function dmvDashboardTable_(context, resultId, tile) {
       item.numeric = dmvChatNumeric_(column);
       dims.push(item);
     } else {
-      // A value is named like the plan names it: a metric by its field, a ratio or formula by
-      // its key.
-      var formula = (tile.formulas || []).some(function (entry) {
-        return entry.key === column.key;
-      });
-      var metric =
-        formula ||
-        (tile.ratios || []).some(function (ratio) {
-          return ratio.key === column.key;
-        })
-          ? null
-          : tile.metrics.filter(function (entry) {
-              return (
-                dmvChatColumn_(base, entry.field, 'metric').key + '__' + entry.agg === column.key
-              );
-            })[0];
-      item.name = metric ? metric.field : column.key;
-      item.agg = metric ? metric.agg : formula ? 'formula' : 'ratio';
+      var named = dmvDashboardItem_(tile, base, column);
+      item.name = named.name;
+      item.agg = named.agg;
       // Rates, averages and formulas are shaded by rank; amounts get the bar instead.
       item.heat = item.agg === 'ratio' || item.agg === 'avg' || item.agg === 'formula';
       values.push(item);
@@ -2864,7 +2971,15 @@ function dmvDashboardTable_(context, resultId, tile) {
     return currency && !dmvDashboardBlank_(row[currency]) ? String(row[currency]) : '';
   };
   var entries = summary.rows.map(function (row) {
-    return { values: row, deltas: {}, tint: null, bar: '' };
+    return {
+      values: row,
+      deltas: {},
+      tint: null,
+      bar: '',
+      keys: dims.map(function (dim) {
+        return { key: dim.key, value: row[dim.key] };
+      }),
+    };
   });
   // A row is named by its leading names, as many of them as tell the rows apart; provider codes
   // read as words. The source (the dataset label) comes last, so a name leads with the keyword
@@ -2932,7 +3047,12 @@ function dmvDashboardTable_(context, resultId, tile) {
     });
     var split = (whole.metadata || {}).currencyColumn;
     return whole.rows.map(function (row) {
-      return { values: row, currency: split ? String(row[split]) : '', deltas: {} };
+      return {
+        values: row,
+        currency: split ? String(row[split]) : '',
+        deltas: {},
+        keys: split ? [{ key: split, value: row[split] }] : [],
+      };
     });
   }
   function totalOf(list, row) {
@@ -3170,6 +3290,20 @@ function dmvDashboardTable_(context, resultId, tile) {
       };
   }
   return {
+    // The live value of a column for a row's group values, on the current or previous side;
+    // blank says it read blank at refresh.
+    live: function (keys, column, previous, blank, sibling) {
+      return dmvDashboardLive_(
+        context,
+        tile,
+        tile.compare ? (previous ? 'previous' : 'current') : null,
+        base,
+        { agg: column.agg, name: column.name },
+        keys,
+        sibling,
+        blank
+      );
+    },
     columns: normalized.columns,
     matrix: normalized.matrix,
     note: [note, caveat]
@@ -3568,8 +3702,9 @@ function dmvDashboardFit_(block, width) {
 // gap column between each two, and a margin. A navy title band, a bar of section links, then
 // white cards on a light page: scorecards, highlights, chart cards, table cards and the data
 // sources. Gap columns and gap rows stay page colour, so every card has the same space around
-// it. Cells hold literal values only; formats, merges and sizes come from the layout, so the
-// page digest guards it like any output. Cards are placed by content column (1-based); the
+// it. Numbers are formulas over the data tabs (dmv_dashboard_cells.js), the rest literal
+// values; formats, merges and sizes come from the layout, and the page digest of what each cell
+// holds as entered guards it like any output. Cards are placed by content column (1-based); the
 // table behind each chart goes to the chart data tab.
 function dmvDashboardPage_(dashboard, view) {
   var style = DMV_DASHBOARD_STYLE,
@@ -3610,8 +3745,9 @@ function dmvDashboardPage_(dashboard, view) {
     heights.push(height);
     return matrix.length - 1;
   }
-  function put(at, column, value) {
-    matrix[at][column] = dmvSheetValue_(value);
+  function put(at, column, value, cellOf) {
+    if (typeof value === 'function') value = value(cellOf);
+    matrix[at][column] = value instanceof DmvFormula_ ? value : dmvSheetValue_(value);
   }
   function format(at, column, rows, columns, look) {
     formats.push({ row: at, column: column, rows: rows, columns: columns, format: look });
@@ -3788,7 +3924,8 @@ function dmvDashboardPage_(dashboard, view) {
         wrap: 'CLIP',
         padding: pad(inset),
       });
-      text(value, place(column), cover(columns), item.value, {
+      var valueCell = dmvChatA1_(value + 1, place(column) + 1);
+      text(value, place(column), cover(columns), new DmvFormula_('=' + item.formula), {
         color: style.ink,
         fontSize: 22,
         bold: false,
@@ -3803,7 +3940,14 @@ function dmvDashboardPage_(dashboard, view) {
         change = null;
       if (item.previous !== undefined) {
         change = dmvDashboardChangeText_(item);
-        line = change.text;
+        line = new DmvFormula_(
+          '=' +
+            dmvDashboardChangeFormula_(
+              valueCell,
+              item.before,
+              dmvDashboardPattern_(item.previous, item.type).pattern
+            )
+        );
         if (change.delta !== null) color = toneColor[item.tone];
       }
       text(changed, place(column), cover(columns), line, {
@@ -3931,7 +4075,12 @@ function dmvDashboardPage_(dashboard, view) {
           padding: pad(3, index === entry.columns.length - 1 ? inset : 3),
         });
       entry.rows.concat(entry.totals).forEach(function (line, offset) {
-        put(firstRow + offset, column, line.cells[index]);
+        put(firstRow + offset, column, line.cells[index], function (key) {
+          var found = entry.columns.filter(function (other) {
+            return other.kind === 'value' && other.column.key === key;
+          })[0];
+          return found ? dmvChatA1_(firstRow + offset + 1, place(found.start) + 1) : null;
+        });
       });
     });
     format(header, place(1), last - header + 1, 1, { padding: pad(inset) });
@@ -4146,10 +4295,18 @@ function dmvDashboardPage_(dashboard, view) {
     );
     var top = data.matrix.length;
     block.matrix.forEach(function (line, index) {
-      var shown = !index
-        ? [line[0]].concat(block.names || line.slice(1))
-        : [block.labels ? block.labels[index - 1] : line[0]].concat(line.slice(1));
-      data.matrix.push(dmvDashboardPad_(shown, data.width));
+      var shown = dmvDashboardPad_(
+        !index
+          ? [line[0]].concat(block.names || line.slice(1))
+          : [block.labels ? block.labels[index - 1] : line[0]].concat(line.slice(1)),
+        data.width
+      );
+      // The points are formulas over the data tabs.
+      if (index)
+        block.formulas[index - 1].forEach(function (live, at) {
+          if (live) shown[at + 1] = new DmvFormula_('=' + live);
+        });
+      data.matrix.push(shown);
     });
     data.tables.push({
       row: top,
@@ -4194,9 +4351,18 @@ function dmvDashboardPage_(dashboard, view) {
 }
 
 // Axis labels follow the source cells: money reads as whole amounts unless it is small, rates
-// with one decimal.
+// with one decimal, other numbers as their values at refresh (the cells hold formulas).
 function dmvDashboardDataColumn_(column, matrix, index) {
   if (column.type === 'percent') return { type: 'percent', pattern: '0.0%' };
+  if (column.type === 'number')
+    return {
+      type: 'number',
+      pattern: dmvNumberPattern_(
+        matrix.slice(1).map(function (line) {
+          return line[index];
+        })
+      ),
+    };
   if (column.type !== 'currency') return { type: column.type };
   var peak = matrix.slice(1).reduce(function (most, line) {
     var value = Math.abs(Number(line[index]));
@@ -4221,7 +4387,14 @@ function dmvDashboardTableView_(block, plan) {
       }, 0);
       return peak >= 1000 ? '#,##0' : '#,##0.00';
     }
-    return column.type === 'number' && column.agg === 'avg' ? '#,##0.0' : undefined;
+    if (column.type !== 'number') return undefined;
+    return column.agg === 'avg'
+      ? '#,##0.0'
+      : dmvNumberPattern_(
+          rows.map(function (entry) {
+            return entry.values[column.key];
+          })
+        );
   }
   var columns = block.fit.columns.map(function (item) {
     var column = item.column;
@@ -4310,9 +4483,31 @@ function dmvDashboardTableView_(block, plan) {
           : value;
       }
       if (item.kind === 'bar') return total ? '' : entry.bar;
-      if (item.kind === 'delta')
-        return dmvDashboardBlank_(entry.deltas[key]) ? '' : entry.deltas[key];
-      return entry.values[key];
+      // Values and changes are formulas over the data tabs; a value reads the sums its row
+      // already shows.
+      var column = item.column;
+      return function (cellOf) {
+        if (item.kind === 'delta')
+          return new DmvFormula_(
+            '=' +
+              dmvDashboardDeltaFormula_(
+                cellOf(key),
+                block.live(entry.keys, column, true, dmvDashboardBlank_(entry.deltas[key]))
+              )
+          );
+        return new DmvFormula_(
+          '=' +
+            block.live(
+              entry.keys,
+              column,
+              false,
+              dmvDashboardBlank_(entry.values[key]),
+              function (field) {
+                return cellOf(field + '__sum');
+              }
+            )
+        );
+      };
     });
   }
   function toneOf(item, delta) {
@@ -4663,7 +4858,7 @@ function dmvDashboardNarrow_(subject) {
   return (
     'Keep only the rows worth acting on' +
     (subject ? ' in ' + subject : '') +
-    ": a ranked report's Keep the top rows, conditions or aggregation in the query, or fewer dimensions."
+    ": a ranked report's Keep the top rows, query conditions or aggregation, or fewer dimensions."
   );
 }
 
@@ -4687,8 +4882,8 @@ function dmvDashboardMessage_(lead, items, close, advice, optional) {
 }
 
 // A refresh past one Sheets write names its largest parts, rows by columns, from the writer's
-// per-output sizes (those at least a tenth of the largest), and what shrinks the largest: a
-// dataset keeps fewer rows, the page shorter tables.
+// per-output sizes (those at least a tenth of the largest), and what shrinks them. The rows of
+// the data tabs follow in further writes, so only the page and its chart data can be too large.
 function dmvDashboardTooLarge_(sizes, parts) {
   var known = sizes
     .filter(function (size) {
@@ -4716,12 +4911,7 @@ function dmvDashboardTooLarge_(sizes, parts) {
       );
     }),
     largest.length ? '. ' : '',
-    largest.length && largest[0].dataset
-      ? dmvDashboardNarrow_('those datasets')
-      : 'Lower the row limit of its longest table tiles, give them fewer metrics and ratios, or narrow its datasets.',
-    largest.length && largest[0].dataset
-      ? ' Then shorten the longest table tiles if the page is still too large.'
-      : ''
+    'Lower the row limit of its longest table tiles, give them fewer metrics and ratios, or narrow its datasets.'
   );
 }
 
@@ -4769,7 +4959,7 @@ function dmvRunDashboard(id, requestedDeadline) {
       );
       var query = dmvValidateQuery_(dataset, spreadsheet);
       // Reports fail instead of truncating, so a limit raised in Settings after this plan
-      // was saved must apply here; the combined DMV_LIMITS.maxRows ceiling still holds.
+      // was saved must apply here; the datasets' combined DMV_LIMITS.maxCells budget still holds.
       query.maxRows = Math.max(dataset.maxRows, rowCap);
       var definition = dmvDefinition_(dmvConnector_(query.connectorId), query.reportType);
       // One refresh has one date anchor, even if sequential fetches cross midnight.
@@ -4829,16 +5019,21 @@ function dmvRunDashboard(id, requestedDeadline) {
       Utilities.formatDate(now, timezone, 'z');
     var fetched = {},
       fetchedRows = 0,
+      fetchedCells = 0,
       outputs = [],
       sources = [],
+      // Each dataset's rows and columns, by dataset id.
       counts = {},
+      widths = {},
       // The period each dataset holds (null without one), and its label, by dataset id.
       ranges = {},
       labels = {},
       // Datasets a connector cut to their top rows, and each dataset's own note, by id.
       tops = {},
+      // Each dataset's data tab as formulas read it: name, rows, columns and date columns.
+      tabs = {},
       notes = {},
-      // What each output holds, by output id, to name the largest parts of a write too large.
+      // What the page and its chart data hold, by output id, to name them in a write too large.
       parts = {};
     plan.datasets.forEach(function (dataset, index) {
       phase(
@@ -4874,21 +5069,30 @@ function dmvRunDashboard(id, requestedDeadline) {
       }
       dmvDashboardDeadline_(deadline);
       fetchedRows += result.rows.length;
+      fetchedCells += result.rows.length * result.columns.length;
       counts[dataset.id] = result.rows.length;
+      widths[dataset.id] = result.columns.length;
       labels[dataset.id] = dataset.label;
-      if (fetchedRows > DMV_LIMITS.maxRows)
+      if (fetchedCells > DMV_LIMITS.maxCells)
         throw new Error(
           dmvDashboardMessage_(
             'The dashboard datasets exceed ' +
-              DMV_LIMITS.maxRows.toLocaleString() +
-              ' rows together (',
+              DMV_LIMITS.maxCells.toLocaleString() +
+              ' cells together (',
             plan.datasets
               .slice(0, index + 1)
               .sort(function (a, b) {
-                return counts[b.id] - counts[a.id];
+                return counts[b.id] * widths[b.id] - counts[a.id] * widths[a.id];
               })
               .map(function (item) {
-                return item.label + ' ' + counts[item.id].toLocaleString();
+                return (
+                  item.label +
+                  ' ' +
+                  counts[item.id].toLocaleString() +
+                  ' rows x ' +
+                  widths[item.id] +
+                  ' columns'
+                );
               }),
             '). ',
             dmvDashboardNarrow_('the largest datasets')
@@ -4929,19 +5133,21 @@ function dmvRunDashboard(id, requestedDeadline) {
           .concat(provenance.slice(5))
           .concat([notes[dataset.id]])
       );
-      var width = result.columns.length;
-      var outputId = dmvDashboardOutputId_(dashboard, dataset);
-      parts[outputId] = {
-        label: dataset.label,
+      var width = result.columns.length,
+        tab = dmvDashboardDataTab_(result);
+      tabs[dataset.id] = {
+        sheet: dataset.sheetName,
         rows: result.rows.length,
-        columns: width,
-        dataset: true,
+        columns: result.columns,
+        metadata: metadata,
+        dates: tab.dates,
       };
       outputs.push({
         report: {
-          id: outputId,
+          id: dmvDashboardOutputId_(dashboard, dataset),
           spreadsheetId: spreadsheet.getId(),
           target: { sheetName: dataset.sheetName, startCell: 'A1' },
+          rewrite: true,
         },
         result: {
           columns: result.columns,
@@ -4962,13 +5168,14 @@ function dmvRunDashboard(id, requestedDeadline) {
               width
             ),
             dmvDashboardPad_([], width),
-          ].concat(result.matrix),
+          ].concat(tab.matrix),
           layout: {
-            tables: [{ row: 3, rows: result.matrix.length, columns: result.columns }],
+            tables: [{ row: 3, rows: tab.matrix.length, columns: tab.columns }],
             styles: [
               { row: 0, style: 'section' },
               { row: 1, style: 'muted' },
             ],
+            formats: tab.formats,
           },
         },
       });
@@ -4980,6 +5187,7 @@ function dmvRunDashboard(id, requestedDeadline) {
         ranges: ranges,
         labels: labels,
         tops: tops,
+        tabs: tabs,
         datasets: {},
       },
       cards = [],
@@ -5051,7 +5259,7 @@ function dmvRunDashboard(id, requestedDeadline) {
       blocks: blocks,
       sources: sources,
     });
-    if (JSON.stringify(page.matrix).length > DMV_LIMITS.maxBytes)
+    if (dmvUtf8Bytes_(JSON.stringify(page.matrix)) > DMV_LIMITS.maxBytes)
       throw new Error('The dashboard tab is too large. Use fewer or smaller tiles.');
     parts[dashboard.id + '-charts'] = {
       label: 'the hidden chart data tab',

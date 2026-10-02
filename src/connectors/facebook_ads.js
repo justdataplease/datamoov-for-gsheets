@@ -43,7 +43,7 @@ var DMV_FACEBOOK_ADS_TOP = {
   required: false,
   min: 1,
   // DMV_LIMITS.maxRows, written out: a connector can register before dmv_core.js has run.
-  max: 30000,
+  max: 100000,
   help: 'Ranks rows by spend (impressions without spend) and keeps this many. Blank keeps every row up to the row limit.',
 };
 
