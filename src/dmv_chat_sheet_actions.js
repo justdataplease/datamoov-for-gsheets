@@ -601,10 +601,8 @@ function dmvChatActionPaste_(context, move) {
     ];
     plan.touches = [destination];
     plan.overwrite = !frozen;
-    // Pasted values keep no format a formula's result only showed, so a date reads as a number.
     if (frozen)
-      plan.result.note =
-        'Dates and other formats the formula showed are not kept: format those columns, e.g. numberFormat date.';
+      plan.requests = plan.requests.concat(dmvChatActionShownFormats_(context, destination));
     if (type === 'all' || type === 'formats')
       plan.undo = dmvChatActionCopyUndo_(context.session, area.grid, destination, type === 'all');
     return plan;
@@ -664,6 +662,35 @@ function dmvChatActionPaste_(context, move) {
 // alone does not tell (QUERY, a computed MAKEARRAY): the cells right of and below the formula
 // that show a value nobody entered, up to the first entered cell, so an empty value inside the
 // result is kept too. Any other entry in the grown area outside the inspection is refused.
+// Pasted values keep no number format a formula's result only showed, so a date would read as
+// its serial number. Each column keeps the format its last row shows (a table's data row), set
+// on the cells where nothing was set.
+function dmvChatActionShownFormats_(context, grid) {
+  var last = Object.assign({}, grid, { startRowIndex: grid.endRowIndex - 1 });
+  var cells = dmvChatSheetCells_(
+    context.session,
+    [last],
+    'effectiveFormat.numberFormat,userEnteredFormat.numberFormat'
+  )[0].cells[0];
+  var requests = [];
+  cells.forEach(function (cell, c) {
+    var shown = cell.effectiveFormat && cell.effectiveFormat.numberFormat;
+    if (!shown || (cell.userEnteredFormat && cell.userEnteredFormat.numberFormat)) return;
+    if (['DATE', 'TIME', 'DATE_TIME', 'PERCENT'].indexOf(shown.type) < 0) return;
+    requests.push({
+      repeatCell: {
+        range: Object.assign({}, grid, {
+          startColumnIndex: grid.startColumnIndex + c,
+          endColumnIndex: grid.startColumnIndex + c + 1,
+        }),
+        cell: { userEnteredFormat: { numberFormat: shown } },
+        fields: 'userEnteredFormat.numberFormat',
+      },
+    });
+  });
+  return requests;
+}
+
 function dmvChatActionFreezeArea_(context) {
   var grid = context.area.grid,
     entry = context.snapshot.cells[0][0].userEnteredValue;

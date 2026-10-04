@@ -151,17 +151,39 @@ test('copy_range copies values, formats and notes to another tab, and undo clear
   assert.equal(values.note, undefined);
 });
 
-test('copy_range values onto the source itself tells chat to format what its formulas showed', () => {
+test('copy_range values onto the source itself keeps the date format its formulas showed', () => {
   const f = fixture();
-  f.setCell(f.sheet, 1, 1, 'Name');
-  // Sheets shows a formula's date or percent result formatted without a format on the cell, and
-  // pasting values keeps only the number: a date reads as its serial number.
-  const frozen = f.edit('copy_range', { destination: 'A1', pasteType: 'values' });
+  // Sheets shows a formula's date result as a date without a format on the cell, and pasting
+  // values keeps only the number, so a frozen date would read as its serial number (46043).
+  f.setCell(f.sheet, 1, 1, 'Day');
+  f.setCell(f.sheet, 1, 2, 'Units');
+  f.setCell(f.sheet, 2, 1, new Date('2026-01-21T12:00:00Z'), '=DATE(2026,1,21)');
+  f.setCell(f.sheet, 2, 2, 4, '=2+2');
+  f.setCell(f.sheet, 3, 1, new Date('2026-01-28T12:00:00Z'), '=DATE(2026,1,28)');
+  f.setCell(f.sheet, 3, 2, 5, '=2+3');
+  const frozen = f.edit('copy_range', { destination: 'A1', pasteType: 'values' }, f.inspect('A1:B3'));
   assert.equal(frozen.ok, true, JSON.stringify(frozen));
-  assert.equal(
-    frozen.note,
-    'Dates and other formats the formula showed are not kept: format those columns, e.g. numberFormat date.'
-  );
+  assert.deepEqual(f.requests(), [
+    {
+      copyPaste: {
+        source: gridOf(f.sheet, 0, 3, 0, 2),
+        destination: gridOf(f.sheet, 0, 3, 0, 2),
+        pasteType: 'PASTE_VALUES',
+        pasteOrientation: 'NORMAL',
+      },
+    },
+    {
+      repeatCell: {
+        range: gridOf(f.sheet, 0, 3, 0, 1),
+        cell: { userEnteredFormat: { numberFormat: { type: 'DATE', pattern: 'yyyy-mm-dd' } } },
+        fields: 'userEnteredFormat.numberFormat',
+      },
+    },
+  ]);
+  assert.equal(f.formula(f.sheet, 2, 1), '');
+  assert.deepEqual(f.format(f.sheet, 2, 1).numberFormat, { type: 'DATE', pattern: 'yyyy-mm-dd' });
+  assert.equal(f.format(f.sheet, 2, 2).numberFormat, undefined);
+  assert.equal(frozen.note, undefined);
 });
 
 test('copy_range refuses bad destinations, needs its inspection and asks before replacing many cells', () => {

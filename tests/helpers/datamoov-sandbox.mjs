@@ -1520,6 +1520,9 @@ export function createDatamoovSandbox(settings = {}) {
       }
     }
     if (format) data.userEnteredFormat = format;
+    // Sheets shows a formula's date result as a date with no format on the cell.
+    if (entry?.formula && isDate(entry.value) && !format?.numberFormat)
+      data.effectiveFormat = { ...format, numberFormat: { type: 'DATE', pattern: 'yyyy-mm-dd' } };
     const meta = sheet.meta.get(key);
     Object.assign(data, meta);
     if (meta?.chipRuns) data.chipRuns = chipRunsRead(String(entry?.value ?? ''), meta.chipRuns);
