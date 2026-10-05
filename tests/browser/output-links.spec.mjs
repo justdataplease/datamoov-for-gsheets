@@ -3,6 +3,9 @@ const reportUrl =
   'https://docs.google.com/spreadsheets/d/offline-output-fixture/edit#gid=42&range=B3';
 const dataUrl =
   'https://docs.google.com/spreadsheets/d/offline-output-fixture/edit#gid=43&range=A1';
+// A tab of the spreadsheet the preview has open (dmvBootstrap's spreadsheetId).
+const ownUrl =
+  'https://docs.google.com/spreadsheets/d/datamoov-preview-only/edit#gid=43&range=A1';
 async function open(page, reply) {
   await page.goto('/');
   await page.addStyleTag({ content: '.b_KlBalloonClass { display: none !important; }' });
@@ -77,6 +80,42 @@ test('committed output links and dashboard status survive debug off and a trunca
     'rel',
     'noopener noreferrer'
   );
+});
+
+test('an output link shows its tab in the open spreadsheet instead of a new browser tab', async ({
+  page,
+}) => {
+  await open(page, {
+    text: 'Duplicated the tab.',
+    events: [
+      { kind: 'write', text: 'Duplicated Sweep data.', links: [{ label: 'Copy', url: ownUrl }] },
+    ],
+    transcriptAppend: [],
+  });
+  let popups = 0;
+  page.context().on('page', () => popups++);
+  await page.locator('.chat-output-links a').click();
+  await expect.poll(() => page.evaluate(() => window.DATAMOOV_PREVIEW_SHOWN)).toBe(ownUrl);
+  expect(popups).toBe(0);
+});
+
+test('a link to another spreadsheet opens within the click, without waiting for the server', async ({
+  page,
+}) => {
+  await open(page, {
+    text: 'Wrote the table.',
+    events: [{ kind: 'write', text: 'Wrote Data.', links: [{ label: 'Data', url: dataUrl }] }],
+    transcriptAppend: [],
+  });
+  await page.context().route('https://docs.google.com/**', (route) => route.fulfill({ body: '' }));
+  // A slow server: a window opened after its answer would be outside the click.
+  await page.evaluate(() => (window.DATAMOOV_PREVIEW_DELAY_MS = 30000));
+  const [popup] = await Promise.all([
+    page.context().waitForEvent('page', { timeout: 5000 }),
+    page.locator('.chat-output-links a').click(),
+  ]);
+  expect(popup.url()).toBe(dataUrl);
+  expect(await page.evaluate(() => window.DATAMOOV_PREVIEW_SHOWN)).toBeUndefined();
 });
 
 test('saved setup without a committed output never claims a created sheet', async ({ page }) => {

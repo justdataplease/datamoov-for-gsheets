@@ -197,10 +197,13 @@ function fixture() {
         if (value !== '') f.setCell(sheet, top + r, left + c, value);
       })
     );
-  // The cells of a receipt's area as entered: the value of each cell, but the text given for
-  // each formula cell by its A1 address, as the receipt keeps it (each reference as #).
+  // The cells of a receipt's area as entered: the value of each cell (a date as its serial), but
+  // the text given for each formula cell by its A1 address, as the receipt keeps it (each
+  // reference as #).
   f.areaValues = (sheet, area, formulas = {}) => {
-    const values = sheet.getRange(area.row, area.column, area.rows, area.columns).getValues();
+    const values = Array.from({ length: area.rows }, (_, r) =>
+      Array.from({ length: area.columns }, (_, c) => f.value(sheet, area.row + r, area.column + c))
+    );
     for (const [cell, text] of Object.entries(formulas)) {
       const { row, column } = a1(cell);
       values[row - area.row][column - area.column] = text;
@@ -375,7 +378,7 @@ test('baseline: inspect_sheet ranges are explicit, same-tab and at most 1,000 ce
   assert.throws(() => f.inspect('AA1'), /outside the existing sheet grid/);
   assert.throws(
     () => f.inspect('A1', 'Missing'),
-    /^Error: No tab named "Missing"\. Tabs: Output\. Use list_sheets first\.$/
+    /^Error: No tab named "Missing"\. Tabs: Output \(closest first\)\. Never search for it: for a new tab, make it first with edit_sheet create_sheet; otherwise tell the user it does not exist\.$/
   );
   assert.throws(
     () => f.api.dmvChatInspectSheet_(f.session, { sheetName: 'Output', range: 'A1', extra: 1 }),
@@ -591,12 +594,14 @@ test('baseline: every edit needs a matching, fresh, unchanged inspection and the
     'filter',
     'rename_sheet',
   ]) {
-    // freeze is a tab action (chat-sheet-dashboard-flow), like create_sheet.
-    assert.throws(
-      () => f.api.dmvChatEditSheet_(f.session, { action, sheetName: 'Output', range: 'A1' }),
-      missing,
-      action
-    );
+    // freeze is a tab action (chat-sheet-dashboard-flow), like create_sheet; format, sort and
+    // filter without an editToken need no inspection (chat-sheet-sweep-edits).
+    if (!['format', 'sort', 'filter'].includes(action))
+      assert.throws(
+        () => f.api.dmvChatEditSheet_(f.session, { action, sheetName: 'Output', range: 'A1' }),
+        missing,
+        action
+      );
     assert.throws(
       () =>
         f.api.dmvChatEditSheet_(f.session, {
@@ -1152,11 +1157,12 @@ test('baseline: filter sends one exact setBasicFilter, keeps other criteria and 
     [{ column: 1, condition: 'NOT_BLANK', extra: 1 }, /documented fields/],
   ])
     assert.throws(() => f.edit('filter', { filter }, inspected), message, JSON.stringify(filter));
-  assert.throws(
-    () => f.edit('filter', { filter: {} }, f.inspect('A1:A3')),
-    /^Error: An existing filter covers a different range\. Choose its range or adjust it manually\.$/
-  );
   assert.equal(f.state.batches.length, count);
+  // A filter over another range would drop the tab's criteria, which no undo puts back, so it
+  // asks first and changes nothing.
+  assert.equal(f.edit('filter', { filter: {} }, f.inspect('A1:A3')).needsConfirmation, true);
+  assert.equal(f.state.batches.length, count);
+  assert.deepEqual(f.sheet.filter.range, grid(f.sheet.id, 0, 3, 0, 2));
 });
 
 test('baseline: freeze sends one exact updateSheetProperties within the grid', () => {
@@ -1409,14 +1415,11 @@ test('baseline: read_sheet types columns, keeps whole cells, samples long tabs a
     'sample_rows are the FIRST 5 and LAST 3 rows, not the minimum and maximum. Use summarize for totals, rankings and comparisons.'
   );
   assert.equal(f.api.dmvChatResult_(f.session, long.resultId).rows[0].text.length, 100);
-  // Caps: 500 data rows plus a header, 30 columns.
+  // Caps: 30 columns and a cell budget, not a row count (the budget: chat-sheet-sweep.test.mjs),
+  // and no rows past the tab's last one.
   assert.equal(
-    plain(f.api.dmvChatReadSheet_(f.session, { sheetName: 'Long', range: 'A1:B501' })).rowCount,
-    500
-  );
-  assert.throws(
-    () => f.api.dmvChatReadSheet_(f.session, { sheetName: 'Long', range: 'A1:B502' }),
-    /^Error: Tab "Long" has 502 rows × 2 columns\. Pass a range of at most 500 rows × 30 columns \(header included\)\.$/
+    plain(f.api.dmvChatReadSheet_(f.session, { sheetName: 'Long', range: 'A1:B502' })).rowCount,
+    25
   );
   assert.throws(
     () => f.api.dmvChatReadSheet_(f.session, { sheetName: 'Long', range: 'A1:AE2' }),
@@ -1424,10 +1427,11 @@ test('baseline: read_sheet types columns, keeps whole cells, samples long tabs a
   );
   notes.maxRows = 600;
   f.setCell(notes, 520, 1, 'far');
-  assert.throws(
-    () => f.api.dmvChatReadSheet_(f.session, { sheetName: 'Long' }),
-    /^Error: Tab "Long" has 520 rows × 2 columns\./
+  assert.equal(
+    plain(f.api.dmvChatReadSheet_(f.session, { sheetName: 'Long', range: 'A1:B502' })).rowCount,
+    501
   );
+  assert.equal(plain(f.api.dmvChatReadSheet_(f.session, { sheetName: 'Long' })).rowCount, 519);
   assert.throws(
     () => f.api.dmvChatReadSheet_(f.session, { sheetName: 'Output', range: 'A1:F1' }),
     /^Error: The range needs a header row and at least one data row\.$/
@@ -1506,8 +1510,8 @@ test('baseline: run_report fetches without touching the sheet, and write_to_shee
           range: grid(id, 0, 3, 0, 4),
           rows: [
             { values: [text('Date'), text('Campaign'), text('Spend'), text('Clicks')] },
-            { values: [text('2026-08-01'), text('Brand'), number(10.5), number(100)] },
-            { values: [text('2026-08-02'), text('Generic'), number(5), number(20)] },
+            { values: [number(46235), text('Brand'), number(10.5), number(100)] },
+            { values: [number(46236), text('Generic'), number(5), number(20)] },
           ],
           fields: 'userEnteredValue',
         },
@@ -1521,10 +1525,21 @@ test('baseline: run_report fetches without touching the sheet, and write_to_shee
               backgroundColor: { red: 0.93, green: 0.95, blue: 1 },
             },
           },
-          fields: 'userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor',
+          fields: 'userEnteredFormat.textFormat,userEnteredFormat.backgroundColor',
         },
       },
-      numberFormat(0, { type: 'TEXT', pattern: '@' }),
+      {
+        repeatCell: {
+          range: grid(id, 1, 3, 0, 1),
+          cell: {
+            userEnteredFormat: {
+              numberFormat: { type: 'DATE', pattern: 'yyyy-mm-dd' },
+              horizontalAlignment: 'LEFT',
+            },
+          },
+          fields: 'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment',
+        },
+      },
       numberFormat(1, { type: 'TEXT', pattern: '@' }),
       numberFormat(2, { type: 'NUMBER', pattern: '#,##0.00' }),
       numberFormat(3, { type: 'NUMBER', pattern: '#,##0' }),
@@ -1539,8 +1554,8 @@ test('baseline: run_report fetches without touching the sheet, and write_to_shee
   // The receipt: a private, digest-protected area under a key derived from the tab and cell.
   const matrix = [
     ['Date', 'Campaign', 'Spend', 'Clicks'],
-    ['2026-08-01', 'Brand', 10.5, 100],
-    ['2026-08-02', 'Generic', 5, 20],
+    [46235, 'Brand', 10.5, 100],
+    [46236, 'Generic', 5, 20],
   ];
   const key = chatReceipt('Spend!A1');
   assert.deepEqual(f.receiptKeys(), [key]);
@@ -1550,6 +1565,12 @@ test('baseline: run_report fetches without touching the sheet, and write_to_shee
     column: 1,
     rows: 3,
     columns: 4,
+    shape: sha256(
+      JSON.stringify([
+        matrix[0],
+        [['date', 'yyyy-mm-dd'], ['text', null], ['currency', null], ['number', '#,##0']],
+      ])
+    ),
     digest: sha256(JSON.stringify(matrix)),
     writtenAt: f.api.Date.now(),
   });
@@ -1944,8 +1965,8 @@ test('baseline: a saved report refresh over a tab chat edited keeps the chat edi
   const first = f.readOutput(report.id);
   const matrix = [
     ['Date', 'Campaign', 'Spend', 'Clicks'],
-    ['2026-08-01', 'Brand', 10.5, 100],
-    ['2026-08-02', 'Generic', 5, 20],
+    [46235, 'Brand', 10.5, 100],
+    [46236, 'Generic', 5, 20],
   ];
   assertIncludes(first, {
     sheetId: f.sheet.id,

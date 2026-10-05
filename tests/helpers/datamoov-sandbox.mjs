@@ -339,12 +339,24 @@ export function createDatamoovSandbox(settings = {}) {
   function cell(sheet, row, column) {
     return sheet.cells.get(address(row, column)) || { value: '', formula: '' };
   }
+  // A date serial as the Date Apps Script returns: that wall time in the spreadsheet's timezone.
+  function dateOfSerial(serial, sheet) {
+    const timezone = [...state.books.values()].find((server) => server.sheets.includes(sheet))?.timezone || 'UTC';
+    const wall = Date.UTC(1899, 11, 30) + Math.round(serial * 86400000);
+    const parts = dateParts(new Date(wall), timezone);
+    return new ClockDate(2 * wall - Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second));
+  }
   function range(sheet, row, column, rows = 1, columns = 1) {
     if (row < 1 || column < 1 || rows < 1 || columns < 1 || row + rows - 1 > sheet.maxRows || column + columns - 1 > sheet.maxColumns) throw new Error('Range exceeds sheet grid');
     // Every read of cells is recorded, so a test can tell which tabs a run read back, and counted.
     const counted = (method, read) => () => { state.reads.push({ sheet: sheet.name, method, row, column, rows, columns }); state.cellsRead += rows * columns; return read(); };
     const result = {
-      getValues: counted('getValues', () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => cell(sheet, row + r, column + c).value))),
+      // As in Apps Script, a number formatted as a date comes back as that date in the spreadsheet's timezone.
+      getValues: counted('getValues', () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => {
+        const value = cell(sheet, row + r, column + c).value;
+        const type = sheet.formats.get(address(row + r, column + c))?.numberFormat?.type;
+        return typeof value === 'number' && (type === 'DATE' || type === 'DATE_TIME') ? dateOfSerial(value, sheet) : value;
+      }))),
       // Text as the sheet shows it; a date stands in for its number format as yyyy-mm-dd.
       getDisplayValues: counted('getDisplayValues', () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => {
         const value = cell(sheet, row + r, column + c).value;
@@ -1465,6 +1477,13 @@ export function createDatamoovSandbox(settings = {}) {
           if (!Number.isInteger(props?.pixelSize) || props.pixelSize < 0) throw new Error('Invalid pixel size');
           for (let index = start; index < end; index++) sheet.pixelSizes[dimension.dimension].set(index, props.pixelSize);
         }
+      } else if (request.autoResizeDimensions) {
+        // Sheets sizes each row or column to its content; the sandbox checks the span only.
+        const dimension = request.autoResizeDimensions.dimensions, sheet = findSheet(dimension.sheetId);
+        const limit = { ROWS: sheet.maxRows, COLUMNS: sheet.maxColumns }[dimension.dimension];
+        if (limit === undefined || !Number.isInteger(dimension.startIndex) || !Number.isInteger(dimension.endIndex) ||
+            dimension.startIndex < 0 || dimension.endIndex <= dimension.startIndex || dimension.endIndex > limit)
+          throw new Error('Dimension range exceeds sheet grid');
       } else if (MORE_REQUESTS.some((kind) => request[kind])) reply = more(request);
       else throw new Error(`Unsupported batch request: ${Object.keys(request)}`);
       replies.push(reply);

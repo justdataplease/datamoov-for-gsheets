@@ -1,7 +1,7 @@
 {
  "the guard protects dashboard data ranges and whole dashboard tabs, but not chat tables": [
   {
-   "data: Main data": "e476cdf6da07779c",
+   "data: Main data": "dd279a13e2d1210a",
    "charts: Dash (chart data)": "4619b26356a51b00",
    "page: Dash": "b54626a6fa4726b6"
   }

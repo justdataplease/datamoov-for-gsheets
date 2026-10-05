@@ -961,7 +961,8 @@
     font-weight: 500;
     color: var(--muted);
   }
-  .instruction-count.error {
+  .instruction-count.error,
+  .form-missing {
     color: var(--danger);
   }
   .model-help,
@@ -1154,8 +1155,11 @@
   .chip:hover {
     background: #eae7ff;
   }
+  /* minmax(0, 1fr) and min-width: 0 keep a long code line from widening the column past the
+     sidebar; code blocks and tables scroll inside their own box. */
   .chat-messages {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     margin-bottom: 12px;
   }
@@ -1165,6 +1169,7 @@
     font-size: 11px;
     line-height: 1.6;
     max-width: 100%;
+    min-width: 0;
     overflow-wrap: anywhere;
   }
   .chat-message.user {

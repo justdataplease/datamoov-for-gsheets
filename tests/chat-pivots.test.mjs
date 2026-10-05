@@ -24,6 +24,7 @@ function fixture() {
     spreadsheetId: f.book.id,
     sheetNames: ['Source'],
     events: [],
+    pivots: [],
     deadline: f.api.Date.now() + 60000,
   };
   const input = {

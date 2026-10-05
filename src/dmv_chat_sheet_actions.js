@@ -36,7 +36,8 @@
                   chat never undoes (asks first, and undo answers with version history), with
                   snapshot for the cells it removes or replaces, so a yes covers them only as
                   they were when chat asked; { hint } for an edit chat never undoes and does
-                  not ask about (a pivot on a new tab), which undo answers with hint; or
+                  not ask about (a pivot on a new tab, a duplicated tab), which undo answers
+                  with hint; or
                   { snapshot: [GridRange], reverse: [requests], verify: [GridRange], rules }
                   where undo sends reverse first, then restores the snapshot cells, after
                   checking that verify (in after-edit coordinates) is unchanged; rules (a
@@ -60,8 +61,10 @@
    Range actions work on the inspected range (at most 1,000 cells, 200 rows and 30 columns), so
    the model has read what it changes; find_replace, remove_duplicates and highlight_duplicates
    can widen to the tab's data (at most 50,000 cells, what undo keeps; a replace or removal there
-   is always asked first). Row and column actions take start and count on a tab: at most 500
-   inserted or deleted per call. */
+   is always asked first), and data_validation, which changes no value, needs no inspection
+   without an editToken (dmvChatSheetWideTarget_) and asks first over more than 50,000 cells.
+   Row and column actions take start and count on a tab: at most 500 inserted or deleted per
+   call. */
 var DMV_SHEET_ACTIONS = {
   dimensionCount: 500,
   findCells: 50000,
@@ -174,7 +177,11 @@ function dmvChatSheetActions_() {
     },
     trim_whitespace: { plan: dmvChatActionTrim_ },
     split_columns: { fields: ['delimiter'], plan: dmvChatActionSplit_ },
-    data_validation: { fields: ['validation'], plan: dmvChatActionValidation_ },
+    data_validation: {
+      target: dmvChatSheetWideTarget_,
+      fields: ['range', 'validation'],
+      plan: dmvChatActionValidation_,
+    },
     set_notes: { fields: ['notes'], plan: dmvChatActionNotes_ },
     set_links: { fields: ['links'], plan: dmvChatActionLinks_ },
     named_range: { target: 'none', fields: ['sheetName', 'namedRange'], plan: dmvChatActionNamed_ },
@@ -1805,13 +1812,20 @@ function dmvChatActionSplit_(context) {
 
 /* Validation, notes and links */
 
+// Without an inspection, on a range of any size or a whole column (dmvChatSheetWideArea_); over
+// more cells than undo keeps it asks first, as the rules it replaces are lost.
 function dmvChatActionValidation_(context) {
   var session = context.session,
     sheet = context.sheet,
-    rule = context.input.validation;
+    rule = context.input.validation,
+    area = context.area;
+  // The tab's data from A1 would put the rule on its header too.
+  if (!area && context.input.range === undefined)
+    throw new Error('data_validation needs a range, such as J2:J for column J below its header.');
+  area = area || dmvChatSheetWideArea_(sheet, context.input.range, 'validate');
   dmvChatSheetObject_(rule, ['type', 'values', 'source', 'condition', 'value', 'value2', 'strict']);
-  var where = sheet.getName() + '!' + context.area.a1,
-    request = { range: context.area.grid },
+  var where = sheet.getName() + '!' + area.a1,
+    request = { range: area.grid },
     condition = null,
     label = rule.type;
   function literal(value, what) {
@@ -1900,6 +1914,8 @@ function dmvChatActionValidation_(context) {
   request.filteredRowsIncluded = true;
   return {
     requests: [{ setDataValidation: request }],
+    touches: [area.grid],
+    range: area.a1,
     text: (condition ? 'Set validation on ' : 'Cleared validation on ') + where,
     details: [['Validation', label]],
   };
@@ -2222,8 +2238,8 @@ function dmvChatActionDuplicateSheet_(context) {
       },
     ],
     touches: [],
-    confirm: 'Duplicate the tab "' + sheet.getName() + '" as "' + name + '"?',
-    undo: { none: DMV_SHEET_UNDO.noUndo },
+    // A copy changes nothing that exists, so it asks nothing; deleting it reverses it.
+    undo: { hint: dmvChatUndoNewTab_(name) },
     sheetName: name,
     sheetId: id,
     text: 'Duplicated ' + sheet.getName() + ' as ' + name,

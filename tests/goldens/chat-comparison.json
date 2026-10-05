@@ -1,12 +1,12 @@
 {
  "a saved three-account comparison fetches six relative queries and advances both weeks on refresh": [
   {
-   "data: Account A current week Data": "d138b62b2cbcbb0d",
-   "data: Account A previous week Data": "f291448903430fb3",
-   "data: Account B current week Data": "713de7bd3b951cf1",
-   "data: Account B previous week Data": "0b09d03cc15031c7",
-   "data: Account C current week Data": "4c7cf4c5ed5c276d",
-   "data: Account C previous week Data": "c6ce40fa00476fe7",
+   "data: Account A current week Data": "5cbca9da8189e7c6",
+   "data: Account A previous week Data": "31a07de2ed4cff62",
+   "data: Account B current week Data": "1b028223f2702ada",
+   "data: Account B previous week Data": "269c7a30f2f8f875",
+   "data: Account C current week Data": "71330127b8e7fe38",
+   "data: Account C previous week Data": "c9bfe3628ff6b280",
    "charts: Weekly comparison Dashboard (chart data)": "401091435dede6b2",
    "page: Weekly comparison Dashboard": "b3f87a9203a4298e"
   }

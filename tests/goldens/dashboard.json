@@ -176,7 +176,7 @@
  "datasets with different columns each get their own tab, and a tile reads one of them under its own column names": [
   {
    "data: Source 1 data": "cac8cc4a2cbbaf04",
-   "data: Channel data": "921bb947373325c8",
+   "data: Channel data": "52fc197a63a0f5c0",
    "charts: Dashboard report (chart data)": "51d29036763a3b6f",
    "page: Dashboard report": "2d766133c86a7e15"
   }
@@ -372,11 +372,19 @@
  ],
  "a refresh past the cell budget names its largest datasets, rows by columns, and writes nothing; rows past one Sheets write follow in more": [
   {
-   "data: Assets Data": "5213e97b3e8cf7cd",
-   "data: Keywords Data": "cac422ba1233416a",
-   "data: Search terms Data": "8de9012ec37236ed",
+   "data: Assets Data": "44adcfb48ae9aa5c",
+   "data: Keywords Data": "40ecc240a9c74d7f",
+   "data: Search terms Data": "ecba1391448d7b52",
    "charts: Dashboard report (chart data)": "4e24c01515c5b536",
    "page: Dashboard report": "efda45ce6c49ea19"
+  }
+ ],
+ "a data tab title names its dataset, source and report once each": [
+  {
+   "data: Source 1 data": "4b44d5b60f17d2af",
+   "data: Source 2 data": "5c71adaab328f37d",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "334cc0bfe2985cd7"
   }
  ]
 }

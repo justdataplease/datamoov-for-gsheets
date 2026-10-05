@@ -121,6 +121,23 @@ test('saving a report whose folded step holds an invalid field unfolds that step
   await expect(page.locator('#report-count')).toHaveText('3');
 });
 
+test('saving with missing fields names them beside Save and the message clears once fixed', async ({
+  page,
+}) => {
+  await startReport(page, 'ga4');
+  await page.locator('#report-name').fill('');
+  await page.locator('#target-sheet').fill('');
+  await page.locator('#save-report').click();
+  await expect(page.locator('#report-missing')).toHaveText(
+    'Fill in or fix: Report name, Output tab.'
+  );
+  await expect(page.locator('#report-name')).toBeFocused();
+  await expect(page.locator('#report-count')).toHaveText('3');
+  await page.locator('#report-name').fill('Named');
+  await page.locator('#target-sheet').fill('Output');
+  await expect(page.locator('#report-missing')).toBeHidden();
+});
+
 test('failed report save retains the draft and retry creates one report', async ({ page }) => {
   await startReport(page, 'ga4');
   await page.locator('#report-name').fill('Keep this draft');

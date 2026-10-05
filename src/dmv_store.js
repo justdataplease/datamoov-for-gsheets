@@ -134,6 +134,23 @@ function dmvSheetUrl_(spreadsheet, sheetId, range) {
   return url;
 }
 
+// The sidebar's output links show their tab here: opened as a link, the spreadsheet loads in a
+// new browser tab and the user's own window stays on the tab it showed. False for a link to
+// another spreadsheet or a tab that no longer exists, which the sidebar then opens as a link.
+function dmvShowSheet(url) {
+  var link = /^https:\/\/docs\.google\.com\/spreadsheets\/d\/([A-Za-z0-9_-]+)\/edit#gid=(\d+)/.exec(
+    String(url)
+  );
+  var spreadsheet = dmvSpreadsheet_();
+  if (!link || link[1] !== spreadsheet.getId()) return false;
+  var sheet = spreadsheet.getSheets().filter(function (item) {
+    return item.getSheetId() === Number(link[2]);
+  })[0];
+  if (!sheet) return false;
+  spreadsheet.setActiveSheet(sheet);
+  return true;
+}
+
 function dmvSheetLink_(spreadsheet, target, range) {
   try {
     var sheet = target && spreadsheet.getSheetByName(target.sheetName);

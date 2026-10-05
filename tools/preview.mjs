@@ -185,9 +185,12 @@ export function previewFixture(catalog, aiProviders = [], families = []) {
     welcome: { offer: false, sheetName: 'Start here' },
     defaultTarget: { sheetName: 'New report', startCell: 'A1' },
     dateTimezone: 'Europe/Athens',
+    // The preview's output links name this spreadsheet.
+    spreadsheetId: 'datamoov-preview-only',
     limits: { maxRows: 20000, defaultRows: 1000 },
     branding: { name: 'DataMoov' },
     ai: { configured: false, debug: true, maxRows: 10000, providers: aiProviders },
+    chat: null,
   };
 }
 
@@ -984,6 +987,17 @@ function installPreview(initial) {
       };
       if (names[model]) result.displayName = names[model];
       return result;
+    },
+    // The preview has no spreadsheet: it records the output link shown in place.
+    dmvShowSheet(url) {
+      window.DATAMOOV_PREVIEW_SHOWN = url;
+      return true;
+    },
+    // The server's cache of the latest conversation; a test reads it back from here.
+    dmvChatSaveConversation(conversation) {
+      data.chat = conversation ? copy(conversation) : null;
+      window.DATAMOOV_PREVIEW_CONVERSATION = copy(data.chat);
+      return true;
     },
     dmvChatProgress(input) {
       return copy(

@@ -21,11 +21,14 @@ function dmvBootstrap() {
     sheetNames: dmvChatTabNames_(spreadsheet),
     limits: DMV_LIMITS,
     ai: dmvAiSummary_(dmvAiRead_()),
+    chat: dmvChatConversation_(spreadsheet),
     defaultTarget: {
       sheetName: targetIsEmpty ? active.getSheet().getName() : fallbackName,
       startCell: targetIsEmpty ? active.getCell(1, 1).getA1Notation() : 'A1',
     },
     dateTimezone: spreadsheet.getSpreadsheetTimeZone(),
+    // Output links to this spreadsheet show their tab in place (dmvShowSheet).
+    spreadsheetId: spreadsheet.getId(),
     // tools/publish.mjs adds DMV_BUILD to each deployment; local runs have none.
     build: typeof DMV_BUILD === 'undefined' ? null : DMV_BUILD,
   };

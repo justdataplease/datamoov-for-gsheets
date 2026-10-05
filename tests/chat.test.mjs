@@ -73,6 +73,30 @@ test('AI settings keep the key private, retain it on blank edits and validate pr
   assert.throws(() => f.api.dmvChat({ text: 'hi' }), /Add an AI provider/);
 });
 
+test('the latest conversation is kept for this spreadsheet so a reopened sidebar continues it', () => {
+  const f = fixture();
+  assert.equal(f.api.dmvBootstrap().chat, null);
+  const id = '0123456789abcdef0123456789abcdef';
+  const turns = Array.from({ length: 30 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', text: 'Turn ' + index }));
+  const messages = turns.map((turn) => ({ role: turn.role, text: turn.text, extra: {} }));
+  assert.equal(f.api.dmvChatSaveConversation({ id, transcript: turns, messages }), true);
+  const kept = f.api.dmvBootstrap().chat;
+  assert.equal(kept.id, id);
+  // What is kept is what the model replays: its latest turns, and the messages that show them.
+  assert.deepEqual(plain(kept.transcript), turns.slice(-f.api.DMV_CHAT.maxTranscriptTurns));
+  assert.deepEqual(plain(kept.messages), messages.slice(-f.api.DMV_CHAT.maxTranscriptTurns));
+  assert.throws(() => f.api.dmvChatSaveConversation({ id: 'bad id', transcript: [], messages: [] }), /valid chat conversation ID/);
+  assert.throws(() => f.api.dmvChatSaveConversation({ id, transcript: 'x', messages: [] }), /valid chat conversation/);
+  // New chat forgets it.
+  assert.equal(f.api.dmvChatSaveConversation(null), true);
+  assert.equal(f.api.dmvBootstrap().chat, null);
+  // A conversation too large for the cache is forgotten rather than kept stale.
+  f.api.dmvChatSaveConversation({ id, transcript: turns, messages });
+  const huge = [{ role: 'assistant', text: 'x'.repeat(f.api.DMV_CHAT_RESULTS.maxChars + 1) }];
+  assert.equal(f.api.dmvChatSaveConversation({ id, transcript: [], messages: huge }), false);
+  assert.equal(f.api.dmvBootstrap().chat, null);
+});
+
 test('connectivity test sends a minimal request and redacts the key from provider errors', () => {
   const f = fixture();
   f.state.responses.push({ body: { id: 'claude-opus-5', type: 'model' } }, anthropic([{ type: 'text', text: 'OK' }]));

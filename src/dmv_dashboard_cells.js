@@ -11,54 +11,6 @@
 // The first data row of a data tab: three provenance rows and a header come before it.
 var DMV_DASHBOARD_FIRST_ROW = 5;
 
-// A data tab's matrix, table columns and formats: a date column whose every value is a plain day
-// is written as date serials shown yyyy-mm-dd and aligned left like the text it was, so formulas
-// can bucket and filter it by date. Other values, timestamps included, are written as fetched.
-// dates names the columns written as serials.
-function dmvDashboardDataTab_(result) {
-  var matrix = result.matrix,
-    dates = Object.create(null),
-    formats = [];
-  result.columns.forEach(function (column, index) {
-    if (column.type !== 'date' || matrix.length < 2) return;
-    for (var at = 1; at < matrix.length; at++)
-      if (matrix[at][index] !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(matrix[at][index])) return;
-    dates[index] = true;
-    formats.push({
-      row: DMV_DASHBOARD_FIRST_ROW - 1,
-      column: index,
-      rows: matrix.length - 1,
-      format: { align: 'LEFT' },
-    });
-  });
-  return {
-    dates: dates,
-    // Copied only when a column changes: a data tab may hold 100,000 rows.
-    matrix: !formats.length
-      ? matrix
-      : matrix.map(function (row, at) {
-          return !at
-            ? row
-            : row.map(function (value, index) {
-                return dates[index] && value !== '' ? dmvDashboardSerial_(value) : value;
-              });
-        }),
-    columns: result.columns.map(function (column, index) {
-      return dates[index] ? { type: 'date', pattern: 'yyyy-mm-dd' } : column;
-    }),
-    formats: formats,
-  };
-}
-
-// A yyyy-mm-dd day as a Sheets date serial: days since 30 Dec 1899.
-function dmvDashboardSerial_(day) {
-  return (
-    (Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10))) -
-      Date.UTC(1899, 11, 30)) /
-    86400000
-  );
-}
-
 // The datasets one side of a tile reads ('current' or 'previous' of a compare, or null for all of
 // its datasets), each with the label its rows carry as their source.
 function dmvDashboardMembers_(context, tile, side) {
@@ -149,12 +101,10 @@ function dmvDashboardCriteria_(column, condition, op, value) {
   if (column.date) {
     if (condition.bucket) {
       var days = dmvDashboardBucketDays_(String(plain), condition.bucket);
-      return days
-        ? ['>=' + dmvDashboardSerial_(days[0]), '<' + dmvDashboardSerial_(days[1])]
-        : null;
+      return days ? ['>=' + dmvDaySerial_(days[0]), '<' + dmvDaySerial_(days[1])] : null;
     }
     return symbols[op] && /^\d{4}-\d{2}-\d{2}$/.test(String(plain))
-      ? [symbols[op] + dmvDashboardSerial_(String(plain))]
+      ? [symbols[op] + dmvDaySerial_(String(plain))]
       : null;
   }
   // A date column written as text (timestamps) has no dates to bucket.
@@ -285,7 +235,7 @@ function dmvDashboardMask_(column, condition, value) {
         ')'
       );
     // Text that starts with a day sorts from that day to the next one.
-    var bound = column.date ? dmvDashboardSerial_ : dmvDashboardText_;
+    var bound = column.date ? dmvDaySerial_ : dmvDashboardText_;
     return '(' + range + '>=' + bound(days[0]) + ')*(' + range + '<' + bound(days[1]) + ')';
   }
   if (symbols[op] && condition.numeric) {
@@ -304,13 +254,13 @@ function dmvDashboardMask_(column, condition, value) {
   }
   // A blank date is 0, before every day, as a blank sorts before every day's text.
   if (symbols[op] && column.date && /^\d{4}-\d{2}-\d{2}$/.test(String(plain)))
-    return range + symbols[op] + dmvDashboardSerial_(String(plain));
+    return range + symbols[op] + dmvDaySerial_(String(plain));
   if (op === 'in') {
     var tests = dmvDashboardOptions_(plain)
       .map(function (option) {
         if (column.date)
           return /^\d{4}-\d{2}-\d{2}$/.test(option)
-            ? range + '=' + dmvDashboardSerial_(option)
+            ? range + '=' + dmvDaySerial_(option)
             : option
               ? null
               : range + '=""';

@@ -31,8 +31,12 @@
       settingsDirty: false,
       generation: 0,
       // The server keeps a confirmation for the conversation that asked it, so another sidebar
-      // or a New chat never answers it. Made with the first request, cleared by a reset.
+      // or a New chat never answers it. Made with the first request, restored with the latest
+      // conversation, cleared by a reset.
       conversationId: null,
+      // The messages shown, kept with the transcript on the server after each answer so a
+      // reopened sidebar or the larger window continues the conversation.
+      messages: [],
       active: null,
       selectedSourceIds: null,
       availableSourceIds: [],
@@ -377,7 +381,9 @@
       const lines = String(text || '')
         .replace(/\r\n?/g, '\n')
         .split('\n');
-      const fence = (line) => /^\s{0,3}```/.test(line);
+      // A fence may sit indented under a list item and name a language (```excel); its own
+      // indent is dropped from the code lines.
+      const fence = (line) => /^(\s*)```/.exec(line);
       const heading = (line) => /^(#{1,6})\s+(.+)$/.exec(line);
       const listItem = (line) => /^\s{0,3}([-+*]|\d+[.)])\s+(.+)$/.exec(line);
       const tableRule = (line) =>
@@ -395,10 +401,12 @@
           index++;
           continue;
         }
-        if (fence(line)) {
+        const open = fence(line);
+        if (open) {
           const code = [];
           index++;
-          while (index < lines.length && !fence(lines[index])) code.push(lines[index++]);
+          while (index < lines.length && !fence(lines[index]))
+            code.push(lines[index++].replace(/^\s+/, (space) => space.slice(open[1].length)));
           if (index < lines.length) index++;
           const pre = el('pre');
           pre.append(el('code', '', code.join('\n')));
@@ -687,6 +695,27 @@
       scrollToMessage(node);
       return node;
     }
+    function show(role, text, extra = {}) {
+      chat.messages.push({ role, text, extra });
+      return addMessage(role, text, extra);
+    }
+    function remember(conversation) {
+      api('dmvChatSaveConversation', conversation).catch(() => {
+        // Only a reopened sidebar misses the conversation.
+      });
+    }
+    function restore(conversation) {
+      chat.conversationId = conversation.id;
+      chat.transcript = conversation.transcript;
+      chat.messages = conversation.messages;
+      for (const message of chat.messages) addMessage(message.role, message.text, message.extra);
+      // As in a live conversation, only the latest question can still be answered with a chip.
+      for (const chip of $('chat-messages').querySelectorAll(
+        '.chat-message:not(:last-child) .chat-confirm button'
+      ))
+        chip.disabled = true;
+      render();
+    }
     function requestId() {
       if (window.crypto?.randomUUID) return window.crypto.randomUUID();
       if (!window.crypto?.getRandomValues)
@@ -776,7 +805,7 @@
       setBusy(true);
       $('chat-input').value = '';
       $('chat-suggestions').replaceChildren();
-      addMessage('user', text);
+      show('user', text);
       try {
         turn = {
           requestId: requestId(),
@@ -810,14 +839,14 @@
           refreshReports().catch(() => {
             // The card appears on the next Reports refresh at the latest.
           });
-        addMessage('assistant', reply.text || '', {
+        show('assistant', reply.text || '', {
           events: reply.events,
           options: reply.options,
           error: Boolean(reply.failed),
         });
       } catch (error) {
         if (generation !== chat.generation || (turn && !currentTurn(turn))) return;
-        addMessage('assistant', error.message || 'The question could not be answered.', {
+        show('assistant', error.message || 'The question could not be answered.', {
           error: true,
           events: turn?.steps
             .filter((step) => step.state !== 'running')
@@ -831,6 +860,12 @@
           stopProgress();
           setBusy(false);
           $('chat-input').focus();
+          if (chat.conversationId)
+            remember({
+              id: chat.conversationId,
+              transcript: chat.transcript,
+              messages: chat.messages,
+            });
         }
       }
     }
@@ -856,7 +891,9 @@
     function resetConversation() {
       stopProgress();
       chat.generation++;
+      if (chat.conversationId) remember(null);
       chat.transcript = [];
+      chat.messages = [];
       chat.conversationId = null;
       $('chat-messages').replaceChildren();
       setBusy(false);
@@ -1001,6 +1038,8 @@
         renderSettings();
         render();
         renderSources();
+        if (data.chat && !chat.conversationId && !$('chat-messages').childElementCount)
+          restore(data.chat);
       },
       updateSources: renderSources,
     };

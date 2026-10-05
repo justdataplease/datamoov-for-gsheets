@@ -1,193 +1,193 @@
 {
  "the preview dashboard (plan v2) shows live formulas that read exactly as before, refreshed twice": [
   {
-   "data: Google Ads 1 Data": "ec726962ad9e7f6b",
-   "data: Google Ads 2 Data": "775a16ba71c2facd",
-   "data: Google Ads 1 Previous": "9835b68990d3a9c3",
-   "data: Google Ads 2 Previous": "86756e7cdd747e94",
-   "data: Keywords Data": "7692a16249d68d18",
-   "data: Assets Data": "348ae96873a7cbdf",
+   "data: Google Ads 1 Data": "0d850f5647685f9a",
+   "data: Google Ads 2 Data": "03feb54d1cc9a8e1",
+   "data: Google Ads 1 Previous": "ffff447c40541dff",
+   "data: Google Ads 2 Previous": "2d467dc4beec7dc9",
+   "data: Keywords Data": "41f02ca5f701c6b0",
+   "data: Assets Data": "854d24cc0769da21",
    "charts: Performance Dashboard (chart data)": "fa28f8f0ee3ae123",
    "page: Performance Dashboard": "73d55210e2e27031"
   }
  ],
  "the preview dashboard (plan v2-basic) shows live formulas that read exactly as before, refreshed twice": [
   {
-   "data: Google Ads 1 Data": "ec726962ad9e7f6b",
-   "data: Google Ads 2 Data": "775a16ba71c2facd",
-   "data: Google Ads 1 Previous": "f4cd3a07df2e6d1f",
-   "data: Keywords Data": "7692a16249d68d18",
-   "data: Assets Data": "348ae96873a7cbdf",
+   "data: Google Ads 1 Data": "0d850f5647685f9a",
+   "data: Google Ads 2 Data": "03feb54d1cc9a8e1",
+   "data: Google Ads 1 Previous": "d4edad388b1650ba",
+   "data: Keywords Data": "41f02ca5f701c6b0",
+   "data: Assets Data": "854d24cc0769da21",
    "charts: Performance Dashboard (chart data)": "bc95d8729ab38ece",
    "page: Performance Dashboard": "4d6aea5f88ff5671"
   }
  ],
  "the preview dashboard (plan v1) shows live formulas that read exactly as before, refreshed twice": [
   {
-   "data: Google Ads 1 Data": "ec726962ad9e7f6b",
-   "data: Google Ads 2 Data": "775a16ba71c2facd",
-   "data: Keywords Data": "a2a0262a4fe6745f",
-   "data: Assets Data": "348ae96873a7cbdf",
+   "data: Google Ads 1 Data": "0d850f5647685f9a",
+   "data: Google Ads 2 Data": "03feb54d1cc9a8e1",
+   "data: Keywords Data": "6ae6461f62edb564",
+   "data: Assets Data": "854d24cc0769da21",
    "charts: Performance Dashboard (chart data)": "0acc6e779757ecea",
    "page: Performance Dashboard": "cdef4e9f6eb1c41a"
   }
  ],
  "the demo shop of the videos shows live formulas that read exactly as before": [
   {
-   "data: Google Ads 1 Data": "63e3af2d9d41a432",
-   "data: Google Ads 2 Data": "88d34e435fcc92d5",
-   "data: Google Ads 1 Previous": "218a1e36ab9af723",
-   "data: Google Ads 2 Previous": "7cf33991fc8938ae",
-   "data: Keywords Data": "cd5094e38280606b",
-   "data: Assets Data": "eb8b6426d7fdf89a",
+   "data: Google Ads 1 Data": "47f7e2716c027922",
+   "data: Google Ads 2 Data": "e23c56ffdeeac7ec",
+   "data: Google Ads 1 Previous": "6485d3054b041f2a",
+   "data: Google Ads 2 Previous": "5d673390f96f7a3e",
+   "data: Keywords Data": "4bf89313c4130212",
+   "data: Assets Data": "d05030230973d09c",
    "charts: Performance Dashboard (chart data)": "c8c89be24a98558d",
    "page: Performance Dashboard": "dd0ab6b1592f845d"
   }
  ],
  "a page follows its data tab: a changed amount moves its card, its row and its total at once": [
   {
-   "data: Ads data": "7137aa5f2304e85a",
+   "data: Ads data": "d124da3754b07dd3",
    "charts: Live page (chart data)": "99a91f8da5f5e06a",
    "page: Live page": "08849ccee2aa7406"
   }
  ],
  "filters, groups and every aggregate keep their meaning as formulas over several data tabs": [
   {
-   "data: one data": "4672110f21e912c1",
-   "data: two data": "6d1ead2d3645e098",
+   "data: one data": "1ceccd0be836b739",
+   "data: two data": "f018c935b65a61cc",
    "charts: Filters page (chart data)": "2090663083ce123a",
    "page: Filters page": "4ba97c70f256baba"
   }
  ],
  "compared charts are live over each period from its own first day, by day, week and month": [
   {
-   "data: spring data": "5837cdb2cb162d1a",
-   "data: winter data": "aebf8888f36d064a",
-   "data: september data": "d594f862ee57e09e",
-   "data: august data": "30b9adaa9e779954",
+   "data: spring data": "5124ce3f0a8d22cd",
+   "data: winter data": "26b061e50fb25222",
+   "data: september data": "d9136fcc3488b508",
+   "data: august data": "89b6bf23ed2e3c5c",
    "charts: Compared page (chart data)": "d6e76a1938a13181",
    "page: Compared page": "af019fe5585c51a9"
   }
  ],
  "date groups of a timestamp column are live over the days their text starts with": [
   {
-   "data: now data": "6426e02d8242187d",
+   "data: now data": "f3e3d8b777f73a31",
    "charts: Edges page (chart data)": "e8fae49c34315027",
    "page: Edges page": "8b355f7d8772d168"
   }
  ],
  "an aggregate blank at refresh stays blank, with its ratios and change, where a formula would say 0": [
   {
-   "data: now data": "4cd615ab21b01b6e",
-   "data: before data": "1e88df75f982c06b",
+   "data: now data": "d7cfd6d001c0a2b5",
+   "data: before data": "a946185a9e6b0e88",
    "charts: Edges page (chart data)": "b751a668b5734cbf",
    "page: Edges page": "b40aa61ff812732b"
   }
  ],
  "a change line without a previous value is live: a previous value on its tab fills it in": [
   {
-   "data: now data": "ab2605f2712921ac",
-   "data: before data": "e0b3aa8691f7f322",
+   "data: now data": "37069ca4809f295b",
+   "data: before data": "acf6c7729174bfc5",
    "charts: Edges page (chart data)": "2805d2f09255cf68",
    "page: Edges page": "572424fd4e0478b9"
   }
  ],
  "text that Sheets would read as a number, date or boolean keeps its group and filter numbers, live": [
   {
-   "data: now data": "4066dfdcbac7746c",
+   "data: now data": "ac2acfc5ab5cf5c7",
    "charts: Edges page (chart data)": "e3dea309dcd57a2d",
    "page: Edges page": "b905424f72ebbe31"
   }
  ],
  "a numeric filter keeps a blank cell when the summary, reading it as 0, keeps it": [
   {
-   "data: now data": "60057a15f1f51780",
+   "data: now data": "51bfa8005729927e",
    "charts: Edges page (chart data)": "a8f39f66e0fe2f19",
    "page: Edges page": "2ea5b443f715b427"
   }
  ],
  "a filter that reads numbers as text is live over the text they print, and a date filter keeps blank dates as it does": [
   {
-   "data: now data": "6aed81b791c239aa",
+   "data: now data": "4c2d01faa1f9d629",
    "charts: Edges page (chart data)": "4bd577140fa8b4d6",
    "page: Edges page": "e5b2793090e10f64"
   }
  ],
  "a page whose data tab was deleted, renamed or shifted refreshes, and an edited formula is still refused": [
   {
-   "data: now data": "d76aaa485ec3c39c",
-   "data: before data": "b53cce4eaadd4248",
+   "data: now data": "297ac683ccda3fe4",
+   "data: before data": "e6f02364b41f9960",
    "charts: Edges page (chart data)": "bd36148a22fdc367",
    "page: Edges page": "46fcb9b76a090e52"
   }
  ],
  "a change line and a table change read the previous period once": [
   {
-   "data: now data": "82c96d3bcbb0fc4f",
-   "data: before data": "cfc5d11e9e978a1e",
+   "data: now data": "ba8af8c43ef9d508",
+   "data: before data": "ed750122ecdea720",
    "charts: Edges page (chart data)": "ab08fc1c1f189589",
    "page: Edges page": "5597ec38246fb42d"
   }
  ],
  "a data tab shows its dates on the left, as text did before they became dates": [
   {
-   "data: Ads data": "7137aa5f2304e85a",
+   "data: Ads data": "d124da3754b07dd3",
    "charts: Live page (chart data)": "99a91f8da5f5e06a",
    "page: Live page": "08849ccee2aa7406"
   }
  ],
  "a tile over more groups than a summary keeps still refreshes, its groups ranked after counting": [
   {
-   "data: now data": "01c749bbebc8f6dd",
+   "data: now data": "aaac7a8fd8d2e52a",
    "charts: Edges page (chart data)": "fa123171184e82e2",
    "page: Edges page": "12e0c635f29a9f59"
   }
  ],
  "a group of a boolean column is live over the booleans it holds, in a table and a chart": [
   {
-   "data: now data": "68f1b98d7607682a",
+   "data: now data": "6505b43a38178c81",
    "charts: Edges page (chart data)": "442b4a2caff1d9ea",
    "page: Edges page": "5d5416050ba64b8d"
   }
  ],
  "groups of a column of mixed types count each type apart, and a numeric filter drops text, live": [
   {
-   "data: now data": "5e36806219e44780",
+   "data: now data": "2582b26b73ca2e0e",
    "charts: Edges page (chart data)": "a55fb66e2cfcd2fa",
    "page: Edges page": "676f6c77655384b1"
   }
  ],
  "\"in\" filters the IFS functions cannot say read a cell as text only for an option that needs it, live": [
   {
-   "data: now data": "733901b62d2462db",
+   "data: now data": "14b9880b9433d1e4",
    "charts: Edges page (chart data)": "84a7647d4cfd1f19",
    "page: Edges page": "638b115815f7ca7e"
   }
  ],
  "a column of mixed types reads as the refresh did: text among numbers, numbers and booleans among text, live": [
   {
-   "data: now data": "f445d53d67c800c8",
+   "data: now data": "32d5fbc35f06027d",
    "charts: Edges page (chart data)": "041e7bf276ec9617",
    "page: Edges page": "c64d44244e887c38"
   }
  ],
  "names that read as an error or an operator keep their numbers, live": [
   {
-   "data: now data": "3ac06815a2147c74",
+   "data: now data": "6b57d7dbd490de93",
    "charts: Edges page (chart data)": "63d9eb244841ab85",
    "page: Edges page": "2cc20648e667af55"
   }
  ],
  "a group of FALSE among blanks counts no blank row, live": [
   {
-   "data: now data": "85a61ca57ef61729",
+   "data: now data": "6037d2005022b738",
    "charts: Edges page (chart data)": "2ca98572eeaf9d4a",
    "page: Edges page": "aa1f2e5a3ebcafaa"
   }
  ],
  "a group of 0 among blanks and text counts no blank row, live": [
   {
-   "data: now data": "965ad6943320c5aa",
+   "data: now data": "8310c088bee95b54",
    "charts: Edges page (chart data)": "8c970f7eff23fc96",
    "page: Edges page": "5bedae60e9d027a5"
   }

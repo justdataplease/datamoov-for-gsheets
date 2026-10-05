@@ -123,10 +123,11 @@ test('real GA4 resumes at its offset without repeating discovery and preserves t
   assert.equal(f.state.responses.length, 0);
   assert.equal(f.state.batches.length, 1);
   assert.equal(f.state.legacyWrites.length, 0);
-  assert.equal(f.value(f.book.sheets[0], 2, 1), '2026-09-01');
+  assert.equal(typeof f.value(f.book.sheets[0], 2, 1), 'number');
+  assert.equal(f.shown(f.book.sheets[0], 2, 1), '2026-09-01', 'a date, shown as before');
   assert.equal(f.value(f.book.sheets[0], 2, 2), '9007199254740993');
   assert.equal(f.value(f.book.sheets[0], 2, 3), 0);
-  assert.equal(f.value(f.book.sheets[0], 3, 1), '2026-09-02');
+  assert.equal(f.shown(f.book.sheets[0], 3, 1), '2026-09-02');
   assert.equal(f.value(f.book.sheets[0], 3, 2), '9007199254740994');
   assert.equal(f.value(f.book.sheets[0], 3, 3), 2);
   assert.equal(f.readReport(f.report.id).status, 'success');

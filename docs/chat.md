@@ -60,8 +60,8 @@ source fetches; multi-account and period comparisons can require several fetches
   days?", "Compare LinkedIn spend this month with last month."
 - **Write tables**: "Put daily GA4 sessions for September in a new tab called Sessions."
 - **Chart**: "Chart weekly spend by campaign" adds a native Sheets chart beside the table.
-- **Use existing tabs**: "Summarize the Orders tab by month" reads your own data (header row
-  plus up to 500 rows × 30 columns).
+- **Use existing tabs**: "Summarize the Orders tab by month" reads your own data (up to 50,000 cells
+  and 30 columns; a read that stops before the last row is labelled partial).
 - **Work in your sheets like an analyst**: "Clean this export: trim, dedupe on email, split name
   and add a status dropdown", lookups across tabs, pivots and conditional formats. Destructive
   changes ask first and recent edits can be undone; see [Editing existing sheets](#editing-existing-sheets).
@@ -98,9 +98,19 @@ a collapsed **Actions** line appears below it when **Show completed actions (deb
 in Settings (the default); click it to list the steps. Each action is one line; click it to see what the step used (connection, fields,
 dates, grouping, range) and the tab it wrote. Turn the setting off to hide successful histories.
 Failures and completed sheet updates remain visible, with details available. The **+** button
-starts a new chat.
+starts a new chat. The latest conversation in a spreadsheet stays in your private cache for six
+hours, so reopening the sidebar or opening the larger window continues it with its last 10
+exchanges; **+** forgets it, and one that cannot be read back is skipped, so the sidebar
+still opens. Clicking an output link under an answer shows that tab in the spreadsheet you
+have open; a link to another spreadsheet, or to a tab that no longer exists, opens in a new browser
+tab. When a request ends on its round or time budget, or its answer is cut off, the closing
+answer is asked for with the request restated and each failed step and its reason, quoted and
+named data, never instructions (an error can quote cell contents), so it says what failed and why
+instead of a sign-off unrelated to the request.
 Answers render bold and italic text, lists, headings, tables, links and code; raw HTML and images
-are not executed or loaded.
+are not executed or loaded. A fenced code block may name a language (`excel`) or sit indented
+under a list item. Inline code wraps to the sidebar's width; a code block keeps its lines and
+scrolls inside its own box.
 
 For example: **"Create a new tab called Monthly winners with the highest-spend campaign in each
 month, including spend, clicks and impressions."** The runtime aggregates all fetched daily rows
@@ -178,14 +188,29 @@ next edits there need no new inspection. A refused edit changes nothing and spen
 its error says the token still holds for that range. If the sheet changed, chat must inspect it
 again. A range may name its own tab (`Sales!A1:F20` with `sheetName` Sales), as models often write
 it; one naming another tab is refused. Actions on whole rows, columns or tabs name the tab (and a
-start and count) instead of an inspected range.
+start and count) instead of an inspected range. `format`, `data_validation`, `sort` and `filter`
+change no value or only reorder rows, so without an `editToken` (or with one and a range larger
+than an inspection takes) they need no inspection: they act on their range of any size, a column
+to the grid's last row (`J2:J`) or whole columns, and without a range on the tab's data
+(except `data_validation`, which always needs one, so a dropdown misses the header). Such a
+sort asks first when its range leaves out some of the tab's data columns (they keep their order,
+so its rows would split) or some of its data rows below one header row (an open `A2:F` with the
+default header row leaves row 2 out), naming the rows it sorts; a sort of an inspected part of a
+longer table returns `partial`, naming the rows it sorted, so the answer never calls the table
+sorted. A format, validation or sort over more than the 50,000 cells undo keeps asks first, since
+the formats, rules or order it replaces cannot be put back here. Their undo snapshot is read in
+bands of at most 20,000 cells per request, packed as `search_sheets` packs them. A tab name that does
+not exist is refused at once, with the spreadsheet's tabs listed closest first, and the error and
+the prompt tell chat to make it with `create_sheet` when the user asked for a new tab, and
+otherwise to say so rather than search for it.
 
 `search_sheets` changes nothing. In `find` mode it looks for text, a number (also matched by its
 value) or a regular expression in values or formulas, with match case and whole cell, across the
 visible tabs, chosen tabs (a hidden tab only when named) or one range. It returns up to 200
 matches as `Tab!cell` with value and formula, the total and counts per tab, and scans at most
-200,000 cells per call; tabs that would go over are skipped and named, with a hint to narrow the
-search. A regular expression that repeats a group holding a repeat or alternatives, such as
+200,000 cells per call, read in requests of at most 20,000 cells so a large spreadsheet stays
+within the memory of an execution (many small tabs share one request); tabs that would go over are skipped and named, with a hint to
+narrow the search. A regular expression that repeats a group holding a repeat or alternatives, such as
 (a+)+ or (a|b)+, is refused, because it can run for minutes; cells longer than 5,000 characters
 are left out of a regular-expression search and counted. In `duplicates` mode it reports the
 duplicate rows of one range by key columns (groups, counts and up to 10 row numbers each),
@@ -199,7 +224,7 @@ ignoring case and surrounding spaces unless asked.
 | --- | --- | --- |
 | `set_values` | Literal values; text beginning with = stays text | Inspected range |
 | `set_formulas` | Formulas (see [Formulas](#formulas)); cells without = are written as values (labels beside KPI formulas), and text Sheets would read as a formula (+B1, -SUM(…)) is refused | Inspected range, 8,000 characters each |
-| `format`, `sort`, `filter`, `freeze` | Number format (currency shows a code only when given one, such as EUR), bold, colours, alignment and wrap; sort by columns; a basic filter, which without a range is a tab action over the tab's data (from A1 to its last row and column, however large); frozen rows and columns, a tab action that takes only the tab | Inspected range; `filter` without a range the tab's data; `freeze` the tab's grid |
+| `format`, `sort`, `filter`, `freeze` | Number format (currency shows a code only when given one, such as EUR), bold, colours, alignment, wrap and `autoFit`, which fits the columns' widths to their content (undo leaves the widths); sort by columns (without an inspection, asked first when it leaves out data columns or rows or passes 50,000 cells); a basic filter, which replaces a filter the tab has over another range (the result and event name it; asked first when that filter has criteria, since a filter keeps no undo), and without a range covers the tab's data (from A1 to its last row and column, however large); frozen rows and columns, a tab action that takes only the tab | Inspected range, or without an `editToken` any range (`C2:C`) and without a range the tab's data; `freeze` the tab's grid |
 | `create_sheet`, `rename_sheet` | A new tab (with `count` rows, default 1,000, at most 200,000, for a helper tab of formulas over a large source), whose result carries an `editToken` for its empty first block (A1:Z38), so the edits that fill it need no inspection; or a new name for one | A tab a saved report or dashboard uses must have its destination updated before it is renamed |
 | `copy_range`, `move_range` | Copy or move the inspected range to a top-left cell on this tab or another; a copy pastes all, values, formats or formulas, while a move always takes everything, because Sheets empties the whole source, and takes the formulas that point at it along; a move always asks first, and its question names the formulas that refer by address to cells it pastes over (checked across the spreadsheet's formulas, up to 200,000 cells, or says when that check cannot finish), since Sheets turns those references into #REF!; values pasted onto the range itself freeze its formulas without asking, and an array formula in its first cell (a generated table) is frozen whole, as the sheet shows it, however little of its result the range covers, unless that area holds another entry outside the range, which is refused; the freeze keeps the date, time and percent formats the formulas only showed (read from each column's last row), which pasted values would otherwise lose, so dates never read as serial numbers | Inspected range |
 | `insert_rows`, `insert_columns` | Insert before a 1-based `start`; always asks first | 500 per call |
@@ -210,10 +235,10 @@ ignoring case and surrounding spaces unless asked.
 | `highlight_duplicates` | One live conditional-format rule that colours repeated keys; an error cell (#N/A) counts as no match, so it never turns the rule off for every row; with `wholeSheet` the rule covers every data row of the tab and compares each key with the whole column | Inspected range, or the whole tab's data up to 50,000 cells |
 | `trim_whitespace` | Trims spaces in text cells | Inspected range |
 | `split_columns` | Splits one column to the right by comma, semicolon, period, space, a custom separator or auto, which takes the first of comma, semicolon, tab, pipe and space that any cell holds and sends that separator, so the split checked is the split made; dates and numbers split by what they show; asks before writing over filled cells, and refuses a piece by the same rule as a `find_replace` result | Inspected range |
-| `data_validation` | Dropdown from a list (up to 500 values) or a range of this spreadsheet (which may run to the last row, as `A2:A`, or be whole columns), checkbox, number or date conditions, strict or not; `clear` removes it; rows a filter hides are included | Inspected range |
+| `data_validation` | Dropdown from a list (up to 500 values) or a range of this spreadsheet (which may run to the last row, as `A2:A`, or be whole columns), checkbox, number or date conditions, strict or not; `clear` removes it; rows a filter hides are included; over more than 50,000 cells it asks first | Inspected range, or without an `editToken` any range, such as a whole column `J2:J`; a range is required |
 | `set_notes`, `set_links` | Notes, or rich-text links on literal text (https only; an empty URL removes the link) | Inspected range |
 | `named_range` | Add, update (rename or move) or delete a named range, bounded or open (`C2:C`, `C:C`) | One name per call |
-| `duplicate_sheet`, `delete_sheet`, `hide_sheet`, `show_sheet` | Tab operations; duplicate and delete always ask, and delete never removes a tab a saved report or dashboard uses or the last visible tab | One tab per call |
+| `duplicate_sheet`, `delete_sheet`, `hide_sheet`, `show_sheet` | Tab operations; delete always asks and never removes a tab a saved report or dashboard uses or the last visible tab; duplicate asks nothing, as a copy changes nothing that exists | One tab per call |
 
 `create_pivot` makes a real Sheets pivot, by default in a new tab (see
 [Native pivot tables](#native-pivot-tables)). `conditional_format` adds, lists and deletes
@@ -241,7 +266,10 @@ dataset, removes the record; output written before records existed gets one at i
 refresh. Renaming a tab is refused while report or dashboard output lies on it, or while one of
 your reports or dashboards names it as a destination in any capitals; a rename that only
 changes capitals is allowed. Formatting, conditional formats, filters and frozen panes stay
-allowed, because a refresh keeps them, and report output may be the source of a pivot. Tables chat wrote with
+allowed, and report output may be the source of a pivot. A refresh keeps conditional formats,
+filters and frozen panes; of cell formats, a saved report's refresh keeps its plain table's while
+its columns stay the same and formats the whole table afresh when they change, and a dashboard
+refresh formats its data tabs and pages afresh every time. Tables chat wrote with
 write_to_sheet remain yours to edit. Editing report values by hand still makes the next refresh
 stop until the report is moved to a fresh output area.
 
@@ -252,8 +280,8 @@ non-empty cells (counting values a spilled array formula or a pivot table shows,
 the edits of one request, so an overwrite split into smaller calls still asks; a yes to that
 question covers every cell replaced so far, so the count starts again after it), deleting rows, columns or a tab, removing duplicates, find and replace over a
 whole tab or more than 200 cells, and anything that cannot be undone here, which includes
-inserting, deleting, grouping and ungrouping rows or columns, `move_range`, `duplicate_sheet` and
-`delete_sheet`. The tool answers
+inserting, deleting, grouping and ungrouping rows or columns, `move_range` and `delete_sheet`.
+The tool answers
 `{needsConfirmation, confirmToken, summary}` and changes nothing; chat asks you, and the sidebar
 shows **Yes** and **No** under the question, above them DataMoov's own summary of each change
 Yes approves (not the model's wording). The change happens only when your next message is
@@ -264,8 +292,8 @@ own, for other input, a second time or after 30 minutes is refused. A typed yes 
 change offered in the previous answer, and only a plain one counts: yes, ok, sure, confirm, go
 ahead or similar, with at most please or "go ahead and delete it" after it; "ok, now chart
 revenue" is a new request, not a yes. Any other answer, or pressing No, drops the question. A
-question belongs to its conversation: a message in another sidebar, or after **New chat**, neither
-answers nor drops it. The approval matches the call however the model spells out a default
+question belongs to its conversation: a message in another conversation, or after **New chat**,
+neither answers nor drops it; a reopened sidebar that continues the conversation can answer it. The approval matches the call however the model spells out a default
 (such as `keep: first`) or orders `keyColumns`; a different call is told which call was approved,
 so the model can repeat it exactly.
 
@@ -283,12 +311,12 @@ ranges, conditional-format rules, hidden tabs and a pivot placed on an existing 
 Undoing a copy that puts conditional-format rules back, or a conditional-format change, is refused
 once the tab's rules changed since, because a rule is found by its position. Undoing `format` is
 allowed over report output, like the edit.
-Row, column, move and tab edits (insert, delete, group and ungroup rows or columns, `move_range`,
-`duplicate_sheet` and `delete_sheet`) are not undone by chat: each asks first, saying so, and
+Row, column, move and tab edits (insert, delete, group and ungroup rows or columns, `move_range`
+and `delete_sheet`) are not undone by chat: each asks first, saying so, and
 undo answers that File > Version history can restore it, rather than undo an older edit instead.
-Creating or renaming a tab, a pivot on a new tab and a chart neither ask nor are undone: they are
-listed without data, and undo right after one answers how to reverse it (delete the tab or chart,
-or rename the tab back) rather than undo the chat edit before it.
+Creating, duplicating or renaming a tab, a pivot on a new tab and a chart neither ask nor are
+undone: they are listed without data, and undo right after one answers how to reverse it (delete
+the tab, copy or chart, or rename the tab back) rather than undo the chat edit before it.
 Each undo entry keeps its cells and checks under cache keys of its own, so the list of entries
 stays well under the 100 KB a cache value holds: past about 30,000 characters its oldest entries
 are dropped, but never those of the current request, whose ids chat already gave out. Should a
@@ -343,8 +371,12 @@ they need, at most the first 100,000 data rows. Each column the pivot uses needs
 columns in the range may have any header or none, and a number or date header counts as its text. It validates the requested fields and numeric aggregates first.
 The range may include future blank rows within the existing sheet grid, so later values inside
 that range participate automatically. Data outside it requires a larger source range.
-Native date grouping requires actual Sheets date cells; ISO dates written as text cannot be
-passed as native date groups. An already prepared month column can be an ordinary pivot group.
+Native date grouping requires actual Sheets date cells (report output writes plain days as
+dates); ISO dates written as text cannot be passed as native date groups. An already prepared month column can be an ordinary pivot group.
+Formulas over report or `write_to_sheet` dates read them as dates, not text: a month helper is
+`TEXT(A2,"yyyy-mm")` rather than `LEFT(A2,7)` (which now returns the serial's digits), and
+QUERY compares them with date literals (`where A >= date '2026-09-01'`), since a text literal no
+longer matches. The prompt tells chat so in one sentence.
 
 Pivots also take MEDIAN, values shown as a percent of the row, column or grand total, quarter
 buckets, a sort per group (by its labels or by a value), up to 6 filters (chosen text values, or a
@@ -354,7 +386,11 @@ empty and not report output (at most 50,000 cells; undo removes it). A source wi
 currency-code column holds one currency; money beside one must be grouped by it, every numeric row needs a code there, and with several currencies, totals that would add them up are left out (the
 result says which) and percentages that would mix them are refused. A pivot with one row group and
 no column groups or filters returns `chartRange`: its header row and one row per group, above any
-grand total, so `create_chart` can chart it without an inspection. Its groups are counted on every
+grand total, so `create_chart` can chart it without an inspection; a chart range in this request
+that starts at that summary's header and ends one group short of its last group (as models chart
+it) or past it (into the grand total) takes all its group rows, keeping its columns, and the
+result names the range charted; a shorter range (the top 3 groups) is charted as given, and one
+that starts below the header is refused, since it would read a group as the header. Its groups are counted on every
 source row, so past the first 30,000 rows that one column is read whole, as are the currency
 column and the numeric columns for the currency checks. Calls with only the original
 options run the original path unchanged.
@@ -383,7 +419,9 @@ has values, where SUMIFS would read 0. Change lines print their numbers in the s
 locale, like the cells around them.
 A dashboard over data already in a tab (a pasted sales table, say) is not a saved dashboard: Chat
 builds a new tab in several small steps, with KPI formulas over your tab, a native pivot table and
-charts over its summary, then formats it in a call or two, so the build finishes before the polish.
+charts over its summary, then formats it in a call or two, so the build finishes before the polish:
+the prompt asks for bold Title Case headers, number or currency formats over whole value columns
+and `autoFit` column widths, so labels and values read without clipping.
 These recalculate with the sheet and have no **Refresh dashboard** card.
 
 For example: **"Create a performance dashboard for Google Ads and Facebook Ads for the last 3
@@ -665,7 +703,15 @@ the card. Chat-created cards say "from Chat" in their subtitle.
   (the first five and last three). Small results (20 rows or fewer) are returned whole.
   Summaries follow the same sampling rule. The requested summary limit controls the complete
   aggregate stored privately and available for writing; it does not send large tables to the model.
-- Data you read with **read_sheet** is sampled the same way.
+- Data you read with **read_sheet** is sampled the same way. It reads the whole used range (or
+  the range given, to the tab's last row at most) up to 50,000 cells and 30 columns, so summaries
+  of an ordinary tab cover every row; a longer tab is read from the top and the result, and every
+  summary of it, carries `metadata.partial` naming the rows it holds of the tab's total, which
+  chat must state, or use formulas over whole columns instead. A range is partial too when the
+  row below it holds values in its columns, or when the row above does (it starts inside a table,
+  so its first row was read as the header); a side table with empty rows around it is whole.
+  `combine_results` keeps each source's `partial` label (up to 400 characters, so both
+  sentences and the closing instruction survive).
 - After a dashboard refresh: the scorecard values, the Highlights sentences and a preview of each
   chart and table (its first five rows, or the latest five points of a trend, eight columns at
   most, within a fixed size per tile), so the answer can quote the Highlights and state findings

@@ -659,7 +659,7 @@ test('the prompt, capabilities and edit_sheet keep formatting and freezing on re
   const prompt = f.api.dmvChatSystemPrompt_(f.session);
   assert.match(
     prompt,
-    /Never edit report or dashboard output \(change the report instead\), except to format it, add conditional formats or a filter, or freeze panes, which a refresh keeps;/
+    /Never edit report or dashboard output \(change the report instead\), except to format it \(a dashboard refresh resets formats\), add conditional formats or a filter, or freeze panes;/
   );
   const can = prompt.split('\n').find((line) => line.startsWith('Chat (sidebar:chat) can:'));
   assert.doesNotMatch(can, /never over report or dashboard output/);
@@ -671,7 +671,7 @@ test('the prompt, capabilities and edit_sheet keep formatting and freezing on re
   assert.doesNotMatch(edit.description, /cannot be changed here/);
   assert.match(
     edit.description,
-    /On report and dashboard output only format, filter and freeze are allowed \(conditional_format too\), since a refresh keeps them; change the report for anything else\./
+    /On report and dashboard output only format, filter and freeze are allowed \(conditional_format too; a dashboard refresh resets formats\); change the report for anything else\./
   );
   // What the text allows is what the tools do on that output.
   assert.equal(f.edit('format', { format: { bold: true } }, f.inspect('A1:C1')).ok, true, 'format');

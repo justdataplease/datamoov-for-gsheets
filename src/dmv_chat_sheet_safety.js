@@ -220,50 +220,104 @@ function dmvChatGridCells_(grid) {
   );
 }
 
-// The cells of bounded GridRanges in one Sheets request, as [{ grid, cells }] in the order given;
-// cells is a full rows x columns matrix with {} for empty cells. values names other cell fields
-// to read instead of the ones undo needs.
-function dmvChatSheetCells_(session, grids, values) {
-  if (!grids.length) return [];
-  dmvChatSheetDeadline_(session);
-  var ranges = grids.map(function (grid) {
+// Reads bounded GridRanges in row bands packed into requests of at most requestCells cells, so no
+// single answer is too large for the memory of an execution, and calls visit(index, row, column,
+// cell) for each cell read, with index the grid's position in grids and 0-based tab positions.
+// fields names the cell fields to read.
+function dmvChatSheetBands_(session, grids, fields, visit) {
+  var limit = DMV_SHEET_SEARCH.requestCells,
+    requests = [],
+    size = limit,
+    count = 0;
+  grids.forEach(function (grid, index) {
     var sheet = dmvChatSheetById_(session, grid.sheetId);
     if (!sheet) throw new Error('A tab this change needs no longer exists. Use list_sheets.');
-    return dmvChatActionTab_(sheet.getName()) + dmvChatGridA1_(grid);
+    var band = Math.max(
+      1,
+      Math.floor(limit / (grid.endColumnIndex - (grid.startColumnIndex || 0)))
+    );
+    for (var top = grid.startRowIndex || 0; top < grid.endRowIndex; top += band) {
+      var part = Object.assign({}, grid, {
+        startRowIndex: top,
+        endRowIndex: Math.min(top + band, grid.endRowIndex),
+      });
+      if (size + dmvChatGridCells_(part) > limit) {
+        requests.push([]);
+        size = 0;
+      }
+      size += dmvChatGridCells_(part);
+      requests[requests.length - 1].push({
+        index: index,
+        part: part,
+        range: dmvChatActionTab_(sheet.getName()) + dmvChatGridA1_(part),
+      });
+    }
   });
-  var result = Sheets.Spreadsheets.get(session.spreadsheetId, {
-    ranges: ranges,
-    includeGridData: true,
-    fields:
-      'sheets(properties(sheetId),data(startRow,startColumn,rowData(values(' +
-      (values || DMV_SHEET_UNDO.readFields) +
-      '))))',
-  });
-  // The API answers one data block per requested range, per tab, in request order.
-  var used = Object.create(null);
-  return grids.map(function (grid) {
-    var read = ((result && result.sheets) || []).filter(function (entry) {
-      return entry.properties && entry.properties.sheetId === grid.sheetId;
-    })[0];
-    var index = (used[grid.sheetId] = (used[grid.sheetId] || 0) + 1) - 1;
-    var block = read && (read.data || [])[index];
-    var rows = grid.endRowIndex - (grid.startRowIndex || 0),
-      columns = grid.endColumnIndex - (grid.startColumnIndex || 0);
-    var cells = Array.from({ length: rows }, function () {
-      return Array.from({ length: columns }, function () {
-        return {};
+  requests.forEach(function (parts) {
+    dmvChatSheetDeadline_(session);
+    var result = Sheets.Spreadsheets.get(session.spreadsheetId, {
+      ranges: parts.map(function (item) {
+        return item.range;
+      }),
+      includeGridData: true,
+      fields:
+        'sheets(properties(sheetId),data(startRow,startColumn,rowData(values(' + fields + '))))',
+    });
+    // The API answers one data block per requested range, per tab, in request order.
+    var used = Object.create(null);
+    parts.forEach(function (item) {
+      var part = item.part;
+      var read = ((result && result.sheets) || []).filter(function (entry) {
+        return entry.properties && entry.properties.sheetId === part.sheetId;
+      })[0];
+      var position = (used[part.sheetId] = (used[part.sheetId] || 0) + 1) - 1;
+      var block = read && (read.data || [])[position];
+      ((block && block.rowData) || []).forEach(function (line, r) {
+        (line.values || []).forEach(function (cell, c) {
+          if (++count % 5000 === 0) dmvChatSheetDeadline_(session);
+          var row = (block.startRow || 0) + r,
+            column = (block.startColumn || 0) + c;
+          if (
+            row >= part.startRowIndex &&
+            row < part.endRowIndex &&
+            column >= (part.startColumnIndex || 0) &&
+            column < part.endColumnIndex
+          )
+            visit(item.index, row, column, cell);
+        });
       });
     });
-    ((block && block.rowData) || []).forEach(function (row, r) {
-      (row.values || []).forEach(function (cell, c) {
-        var rowIndex = (block.startRow || 0) + r - (grid.startRowIndex || 0),
-          columnIndex = (block.startColumn || 0) + c - (grid.startColumnIndex || 0);
-        if (rowIndex >= 0 && rowIndex < rows && columnIndex >= 0 && columnIndex < columns)
-          cells[rowIndex][columnIndex] = cell;
-      });
-    });
-    return { grid: grid, cells: cells };
   });
+}
+
+// The cells of bounded GridRanges, as [{ grid, cells }] in the order given; cells is a full rows x
+// columns matrix with {} for empty cells. values names other cell fields to read instead of the
+// ones undo needs. Read in bands (dmvChatSheetBands_).
+function dmvChatSheetCells_(session, grids, values) {
+  var found = grids.map(function (grid) {
+    return {
+      grid: grid,
+      cells: Array.from({ length: grid.endRowIndex - (grid.startRowIndex || 0) }, function () {
+        return Array.from(
+          { length: grid.endColumnIndex - (grid.startColumnIndex || 0) },
+          function () {
+            return {};
+          }
+        );
+      }),
+    };
+  });
+  dmvChatSheetBands_(
+    session,
+    grids,
+    values || DMV_SHEET_UNDO.readFields,
+    function (index, row, column, cell) {
+      var grid = grids[index];
+      found[index].cells[row - (grid.startRowIndex || 0)][column - (grid.startColumnIndex || 0)] =
+        cell;
+    }
+  );
+  return found;
 }
 
 function dmvChatGridKey_(grid) {
@@ -277,7 +331,7 @@ function dmvChatGridKey_(grid) {
 }
 
 // The cells of each bounded grid, reusing those already read ([{ grid, cells }]) and reading the
-// rest in one request.
+// rest (dmvChatSheetCells_).
 function dmvChatGridsRead_(session, grids, known) {
   function find(list, grid) {
     return list.filter(function (item) {

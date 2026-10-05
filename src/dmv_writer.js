@@ -53,12 +53,16 @@ function dmvOutputRow_(row) {
 // one, other cells when rows or columns move there) and drops quotes a simple tab name does not
 // need. None of that edits the formula, and the next write puts its own references back. Nor
 // does the spelling Sheets may store outside the text (names in capitals, a number in another
-// notation, spaces), so case, spaces and number notation do not count there either.
-function dmvOutputEntered_(values, formulas) {
+// notation, spaces), so case, spaces and number notation do not count there either. A tab returns
+// a date cell as a date, read back as the serial it holds in the spreadsheet's timezone.
+function dmvOutputEntered_(values, formulas, timezone) {
   return values.map(function (row, r) {
     return row.map(function (value, c) {
       var formula = formulas ? formulas[r][c] : value instanceof DmvFormula_ ? value.formula : '';
-      if (!formula) return value;
+      if (!formula)
+        return Object.prototype.toString.call(value) === '[object Date]'
+          ? dmvDaySerial_(Utilities.formatDate(value, timezone, 'yyyy-MM-dd HH:mm'))
+          : value;
       return String(formula)
         .split(/("(?:[^"]|"")*")/)
         .map(function (part, index) {
@@ -96,6 +100,53 @@ function dmvNumberPattern_(written) {
     return Math.abs(value) < 1;
   });
   return whole ? '#,##0' : small ? '0.0000' : '#,##0.00';
+}
+
+// A result's matrix and table columns with every date column whose values are all plain days
+// written as date serials shown yyyy-mm-dd, so sorting, filters and formulas read them as dates;
+// the table aligns them left like the text they were. Other values, timestamps included, are
+// written as fetched. dates names the columns written as serials.
+function dmvDayColumns_(result) {
+  var matrix = result.matrix,
+    dates = Object.create(null),
+    any = false;
+  result.columns.forEach(function (column, index) {
+    if (column.type !== 'date' || matrix.length < 2) return;
+    for (var at = 1; at < matrix.length; at++)
+      if (matrix[at][index] !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(matrix[at][index])) return;
+    dates[index] = any = true;
+  });
+  return {
+    dates: dates,
+    // Copied only when a column changes: a data tab may hold 100,000 rows.
+    matrix: !any
+      ? matrix
+      : matrix.map(function (row, at) {
+          return !at
+            ? row
+            : row.map(function (value, index) {
+                return dates[index] && value !== '' ? dmvDaySerial_(value) : value;
+              });
+        }),
+    columns: result.columns.map(function (column, index) {
+      return dates[index] ? { type: 'date', pattern: 'yyyy-mm-dd' } : column;
+    }),
+  };
+}
+
+// A yyyy-mm-dd day, or a yyyy-MM-dd HH:mm time, as a Sheets date serial: days since 30 Dec 1899.
+function dmvDaySerial_(day) {
+  return (
+    (Date.UTC(
+      Number(day.slice(0, 4)),
+      Number(day.slice(5, 7)) - 1,
+      Number(day.slice(8, 10)),
+      Number(day.slice(11, 13)) || 0,
+      Number(day.slice(14, 16)) || 0
+    ) -
+      Date.UTC(1899, 11, 30)) /
+    86400000
+  );
 }
 
 // Grid sizes and merged ranges of every tab, keyed by sheet id, from one metadata-only Sheets
@@ -282,6 +333,8 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
   var anchor = dmvCell_(report.target.startCell);
   var key = dmvOutputKey_(report.spreadsheetId, report.id);
   var old = JSON.parse(plan.all[key] || 'null');
+  var layout = result.layout;
+  if (!layout) result = dmvDayColumns_(result);
   var grids = plan.grids,
     sheetId,
     maxRows,
@@ -327,6 +380,25 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
     rows: result.matrix.length,
     columns: result.matrix[0].length,
   };
+  // A plain table records its header and column types, so a rerun over the same columns keeps
+  // the formats chat or the user gave its cells (fills, text colours, number formats). A number
+  // column records the pattern its values take, so whole numbers turning fractional reformat it.
+  if (!layout)
+    area.shape = dmvOutputDigest_([
+      result.matrix[0],
+      result.columns.map(function (column, index) {
+        return [
+          column.type,
+          column.type === 'number' && column.pattern === undefined
+            ? dmvNumberPattern_(
+                result.matrix.slice(1).map(function (row) {
+                  return row[index];
+                })
+              )
+            : column.pattern,
+        ];
+      }),
+    ]);
   if (old && (old.sheetId !== area.sheetId || old.row !== area.row || old.column !== area.column))
     old = null;
   if (old) {
@@ -342,7 +414,11 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
       var previousRange = sheet.getRange(old.row, old.column, old.rows, old.columns);
       if (
         dmvOutputDigest_(
-          dmvOutputEntered_(previousRange.getValues(), previousRange.getFormulas())
+          dmvOutputEntered_(
+            previousRange.getValues(),
+            previousRange.getFormulas(),
+            spreadsheet.getSpreadsheetTimeZone()
+          )
         ) !== old.digest
       )
         throw new Error(ownershipError);
@@ -430,6 +506,7 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
   // result.layout places a page in the output area. Rows and columns are 0-based, relative to
   // the area's first cell, and every range lies inside the area; all members are optional.
   //   tables       [{row, column?, rows, columns: [{type, pattern?}]}] a header row, typed columns
+  //                (a date pattern also aligns its column left)
   //   styles       [{row, column?, rows?, columns?, style, type?, pattern?}] DMV_LAYOUT_STYLES
   //   columnWidths [px, ...] the area's columns from its first, set on every write
   //   rowHeights   [{row, rows?, height}] present (even empty): every row of the previous and the
@@ -450,8 +527,8 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
   // A pattern overrides the type's number format. Merges reaching into the previous or the new
   // area, and its formats (borders included), are removed first. Sizes apply to whole sheet rows
   // and columns.
-  var layout = result.layout,
-    merges = grids[sheetId].merges || [],
+  var keep = !layout && !!old && old.shape === area.shape && old.rows > 1;
+  var merges = grids[sheetId].merges || [],
     // The merges this output makes, on the sheet's own 1-based grid.
     created = [];
   var list = function (name) {
@@ -471,19 +548,31 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
       },
     });
   };
+  var span = {
+    sheetId: area.sheetId,
+    row: area.row,
+    column: area.column,
+    rows: Math.max(area.rows, old ? old.rows : 0),
+    columns: Math.max(area.columns, old ? old.columns : 0),
+  };
+  // The formats of the previous output (borders and links included) go before it is formatted
+  // again: a layout's blocks move between refreshes, and a plain table whose columns changed is
+  // formatted afresh as a whole, never leaving pieces of the old style (white text on its fill).
+  var clearFormats = function () {
+    requests.push({
+      repeatCell: {
+        range: range(span.row, span.column, span.rows, span.columns),
+        cell: {},
+        fields: 'userEnteredFormat',
+      },
+    });
+  };
   if (layout) {
     Object.keys(layout).forEach(function (name) {
       if (DMV_LAYOUT_MEMBERS.indexOf(name) < 0 || !Array.isArray(layout[name]))
         throw new Error('Invalid layout member "' + name + '".');
     });
     // A layout owns the formats, merges and row heights of its previous and its new area.
-    var span = {
-      sheetId: area.sheetId,
-      row: area.row,
-      column: area.column,
-      rows: Math.max(area.rows, old ? old.rows : 0),
-      columns: Math.max(area.columns, old ? old.columns : 0),
-    };
     // Sheets refuses a range that cuts through a merge. The merges reaching into the span go in
     // one request over the box that holds them all (a page merges every table row apart), or by
     // their exact ranges when that box would touch another merge, such as one an earlier output
@@ -515,15 +604,7 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
         });
       });
     }
-    // Blocks move between refreshes, so formats of the previous layout (borders and links
-    // included) are cleared first.
-    requests.push({
-      repeatCell: {
-        range: range(span.row, span.column, span.rows, span.columns),
-        cell: {},
-        fields: 'userEnteredFormat',
-      },
-    });
+    clearFormats();
     var widths = list('columnWidths');
     if (widths.length > area.columns) throw new Error('Layout column widths exceed the output.');
     widths.forEach(function (width, index) {
@@ -540,7 +621,7 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
         size('ROWS', area.row + entry.row, entry.rows, dmvLayoutPixels_(item.height));
       });
     }
-  }
+  } else if (old && !keep) clearFormats();
   if (rewrite) {
     area.rewrite = true;
     plan.rewrites.push({ area: area, matrix: result.matrix });
@@ -610,19 +691,22 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
             backgroundColor: { red: 0.93, green: 0.95, blue: 1 },
           },
         },
-        fields: 'userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor',
+        fields: 'userEnteredFormat.textFormat,userEnteredFormat.backgroundColor',
       },
     });
     if (tableRows > 1)
       columns.forEach(function (item, index) {
         var written = values(row + 1, column + index, tableRows - 1, 1);
+        var format = { numberFormat: numberFormat(item.type, written, item.pattern) };
+        // Dates read left, like the text they were before Sheets knew them as dates.
+        if (format.numberFormat.type === 'DATE') format.horizontalAlignment = 'LEFT';
         requests.push({
           repeatCell: {
             range: range(area.row + row + 1, area.column + column + index, tableRows - 1, 1),
-            cell: {
-              userEnteredFormat: { numberFormat: numberFormat(item.type, written, item.pattern) },
-            },
-            fields: 'userEnteredFormat.numberFormat',
+            cell: { userEnteredFormat: format },
+            fields:
+              'userEnteredFormat.numberFormat' +
+              (format.horizontalAlignment ? ',userEnteredFormat.horizontalAlignment' : ''),
           },
         });
       });
@@ -770,7 +854,16 @@ function dmvPrepareReportWrite_(spreadsheet, report, result, plan) {
         mergeCells: { range: block(entry), mergeType: byRow ? 'MERGE_ROWS' : 'MERGE_ALL' },
       });
     });
-  } else table(0, 0, area.rows, result.columns);
+  } else if (!keep) table(0, 0, area.rows, result.columns);
+  else if (area.rows > old.rows)
+    // Rows a rerun adds take the formats of the last row it had.
+    requests.push({
+      copyPaste: {
+        source: range(area.row + old.rows - 1, area.column, 1, area.columns),
+        destination: range(area.row + old.rows, area.column, area.rows - old.rows, area.columns),
+        pasteType: 'PASTE_FORMAT',
+      },
+    });
   plan.requests = plan.requests.concat(requests);
   plan.areas.push(area);
   plan.receipts.push({ key: key, area: area });
@@ -1155,7 +1248,13 @@ function dmvRecoverOutputJournal_(spreadsheet, properties) {
     var range = sheet.getRange(area.row, area.column, area.rows, area.columns);
     if (
       area.rewrite ||
-      dmvOutputDigest_(dmvOutputEntered_(range.getValues(), range.getFormulas())) === area.digest
+      dmvOutputDigest_(
+        dmvOutputEntered_(
+          range.getValues(),
+          range.getFormulas(),
+          spreadsheet.getSpreadsheetTimeZone()
+        )
+      ) === area.digest
     )
       properties.setProperty(receipt.key, JSON.stringify(area));
   });

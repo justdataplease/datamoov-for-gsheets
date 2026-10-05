@@ -674,17 +674,14 @@ test('filter without a range is a tab action over the tab data, however large', 
     endColumnIndex: 10,
   });
   assert.deepEqual(Object.keys(filter.criteria), ['0']);
-  // The filter it made is kept; one over another range is refused as before.
+  // The filter it made is kept; one over another range is replaced by the tab's data.
   assert.equal(f.tabAction('filter', { sheetName: 'Output', filter: {} }).ok, true);
   assert.deepEqual(Object.keys(f.requests()[0].setBasicFilter.filter.criteria), ['0']);
   const small = chatSheetFixture();
   small.column(small.sheet, 1, ['Name', 'a', 'b']);
   small.edit('filter', { filter: {} }, small.inspect('A1:A3'));
   small.setCell(small.sheet, 1, 2, 'Total');
-  assert.throws(
-    () => small.tabAction('filter', { sheetName: 'Output' }),
-    /An existing filter covers a different range/
-  );
+  assert.equal(small.tabAction('filter', { sheetName: 'Output' }).range, 'A1:B3');
   const empty = chatSheetFixture();
   assert.throws(
     () => empty.tabAction('filter', { sheetName: 'Output' }),

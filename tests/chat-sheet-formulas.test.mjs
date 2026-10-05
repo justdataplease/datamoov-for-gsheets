@@ -315,7 +315,7 @@ test('unknown functions, names and tabs are refused by name; custom and named fu
     /^Error: B2: unknown name NOPE: it is not a function call, a LET or LAMBDA name, or a named range of this spreadsheet \(named ranges: TargetCPA, Regions\)\. Put text in double quotes\.$/
   );
   assert.throws(() => f.check('=LET(x,1,y)'), /unknown name Y/);
-  assert.throws(() => f.check('=Missing!A1'), /^Error: B2: No tab named "Missing"\. Tabs: .*Use list_sheets first \(at character 2, near "Missing!A1"\)\.$/);
+  assert.throws(() => f.check('=Missing!A1'), /^Error: B2: No tab named "Missing"\. Tabs: .* \(closest first\)\. Never search for it: for a new tab, make it first with edit_sheet create_sheet; otherwise tell the user it does not exist \(at character 2, near "Missing!A1"\)\.$/);
   assert.throws(() => f.check("='Old tab'!A1:B2"), /No tab named "Old tab"/);
   // Malformed formulas say where.
   for (const [formula, message] of [

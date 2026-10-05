@@ -415,7 +415,7 @@ function dmvChatCreatePivot_(session, input) {
       note: 'The native pivot stays linked to this bounded source range. No source cells were changed; currency-mixing totals are disabled.',
     };
     if (chartRange) result.chartRange = chartRange;
-    return result;
+    return dmvChatPivotKeep_(session, result);
   });
 }
 
@@ -466,7 +466,7 @@ function dmvChatPivotAnalyst_(session, input) {
   dmvChatSheetDeadline_(session);
   // The pipeline adds the lock, the protected-output guard, undo for a pivot placed on an
   // existing tab, the single batch, the write event and the output link.
-  return dmvChatSheetRunAction_(
+  var result = dmvChatSheetRunAction_(
     session,
     { action: 'create_pivot', pivot: input },
     {
@@ -477,6 +477,7 @@ function dmvChatPivotAnalyst_(session, input) {
       },
     }
   );
+  return dmvChatPivotKeep_(session, result);
 }
 
 function dmvChatPivotValues_(input, width) {
@@ -655,6 +656,50 @@ function dmvChatPivotChartRange_(session, all, area, pivot, anchor) {
     ':' +
     dmvChatA1_(anchor.row + groups.leaves, anchor.column + pivot.values.length)
   );
+}
+
+// Keeps the chartRange of a pivot made in this request, for dmvChatPivotChartEnd_.
+function dmvChatPivotKeep_(session, result) {
+  if (result.chartRange)
+    session.pivots.push({ sheetName: result.sheetName, range: result.chartRange });
+  return result;
+}
+
+// The last row to chart of a range from start to end on sheetName: end's own, unless the range
+// begins in the summary (chartRange) of a pivot this request made. From its header row, a range
+// one group short (as models chart it) or past its last group (into the grand total) takes all
+// its groups; a shorter one (the top 3) is charted as given. A range below the header would read
+// a group as the header, so it is refused.
+function dmvChatPivotChartEnd_(session, sheetName, start, end) {
+  var last = end.row;
+  session.pivots.forEach(function (pivot) {
+    var parts = pivot.range.split(':'),
+      top = dmvCell_(parts[0]),
+      bottom = dmvCell_(parts[1]);
+    if (
+      pivot.sheetName.toLowerCase() !== sheetName.toLowerCase() ||
+      start.row < top.row ||
+      start.row > bottom.row ||
+      start.column < top.column ||
+      start.column > bottom.column
+    )
+      return;
+    if (start.row > top.row)
+      throw new Error(
+        dmvChatA1_(start.row, start.column) +
+          ' is inside the pivot summary ' +
+          pivot.sheetName +
+          '!' +
+          pivot.range +
+          ': start the range at its header row ' +
+          top.row +
+          ' (' +
+          pivot.range +
+          ' charts every group).'
+      );
+    if (end.row >= bottom.row - 1) last = bottom.row;
+  });
+  return last;
 }
 
 // The create_pivot plan for dmvChatSheetRunAction_. Source checks match the original options;

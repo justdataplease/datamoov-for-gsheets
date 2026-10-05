@@ -1644,7 +1644,7 @@ test('datasets with different columns each get their own tab, and a tile reads o
   assert.equal(f.state.batches.length, 1);
   assert.deepEqual(rowsOf(f, 'Source 1 data').slice(3), [['date', 'campaign', 'spend', 'clicks'], ['2026-08-01', '=literal', 3, 2]]);
   const channels = rowsOf(f, 'Channel data');
-  assert.equal(channels[0][0], 'Channels · Fixture source · two · Channels');
+  assert.equal(channels[0][0], 'Channels · Fixture source · two', 'a report named like its dataset is said once');
   assert.match(channels[1][0], /^No date range · 2 rows · /);
   assert.deepEqual(channels.slice(3), [['Channel', 'Sessions'], ['Organic', 30], ['Paid', 12]]);
   assert.deepEqual(result.datasets.map((dataset) => [dataset.id, dataset.rowCount]), [['source0', 1], ['channels', 2]]);
@@ -2619,4 +2619,18 @@ test('a refresh past the cell budget names its largest datasets, rows by columns
   assert.ok(f.state.batches.length > 1);
   assert.ok(f.state.batches.every((batch) => Buffer.byteLength(JSON.stringify(batch.body)) <= 1500000));
   assert.equal(f.value(f.tab('Assets Data'), 4004, 1), 'Item number 3999');
+});
+
+// A live sweep of build 1bbe049 found a data tab titled "Google Ads 5317611041 Prev · Google Ads ·
+// Google Ads 5317611041 · Daily campaign performance": the dataset label already named the
+// source and its account.
+test('a data tab title names its dataset, source and report once each', () => {
+  const f = fixture();
+  const [first, second] = [['Fixture source 5317611041', 'one'], ['Fixture source 7700', 'two']].map(([label, account]) =>
+    f.api.dmvSaveConnection({ connectorId: 'fixture_source', label, credentials: { account, token: 'private-dashboard-token' } }));
+  Object.assign(f.input.datasets[0], { label: 'Fixture source 5317611041 Prev', connectionId: first.id });
+  Object.assign(f.input.datasets[1], { label: 'Current', connectionId: second.id });
+  f.run(f.save().id);
+  assert.equal(rowsOf(f, 'Source 1 data')[0][0], 'Fixture source 5317611041 Prev · Daily');
+  assert.equal(rowsOf(f, 'Source 2 data')[0][0], 'Current · Fixture source 7700 · Daily');
 });

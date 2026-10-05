@@ -365,7 +365,10 @@ test('filters reject formula-bearing criteria, normalize numbers and preserve ot
   f.edit('filter', { filter: { column: 1, condition: 'TEXT_CONTAINS', value: 'High' } });
   assert.equal(f.sheet.filter.criteria[1].condition.values[0].userEnteredValue, '=1.5');
   assert.equal(f.sheet.filter.criteria[0].condition.values[0].userEnteredValue, 'High');
-  assert.throws(() => f.edit('filter', { filter: {} }, f.inspect('A1:A3')), /different range/);
+  // A filter over another range would drop these criteria, which no undo puts back, so it asks
+  // first and changes nothing.
+  assert.equal(f.edit('filter', { filter: {} }, f.inspect('A1:A3')).needsConfirmation, true);
+  assert.equal(f.sheet.filter.criteria[0].condition.values[0].userEnteredValue, 'High');
 });
 
 test('a decimal filter threshold goes as a formula, which reads the same in every locale', () => {

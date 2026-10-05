@@ -1010,6 +1010,7 @@ function dmvChatSheetFormulaReadBack_(session, written) {
 
 var DMV_SHEET_SEARCH = {
   maxCells: 200000,
+  requestCells: 20000,
   maxMatches: 200,
   defaultLimit: 50,
   maxQuery: 200,
@@ -1045,44 +1046,18 @@ function dmvChatSearchArea_(sheet, text, data) {
   };
 }
 
-// The cells of whole tabs or ranges in one request, lean: shown value, typed value and, for
-// formulas, the formula. Calls visit(sheetIndex, row, column, cell) with 0-based positions.
-// values names other cell fields to read instead.
+// The cells of whole tabs or ranges, lean: shown value, typed value and, for formulas, the
+// formula. Calls visit(planIndex, row, column, cell) with 0-based positions. values names other
+// cell fields to read instead. Read in bands (dmvChatSheetBands_).
 function dmvChatSearchRead_(session, plan, visit, values) {
-  dmvChatSheetDeadline_(session);
-  var result = Sheets.Spreadsheets.get(session.spreadsheetId, {
-    ranges: plan.map(function (item) {
-      return dmvChatActionTab_(item.sheet.getName()) + dmvChatGridA1_(item.grid);
+  dmvChatSheetBands_(
+    session,
+    plan.map(function (item) {
+      return item.grid;
     }),
-    fields:
-      'sheets(properties(sheetId),data(startRow,startColumn,rowData(values(' +
-      (values || 'formattedValue,effectiveValue,userEnteredValue') +
-      '))))',
-  });
-  var used = Object.create(null),
-    count = 0;
-  plan.forEach(function (item, number) {
-    var id = item.grid.sheetId;
-    var read = ((result && result.sheets) || []).filter(function (entry) {
-      return entry.properties && entry.properties.sheetId === id;
-    })[0];
-    var position = (used[id] = (used[id] || 0) + 1) - 1;
-    var block = read && (read.data || [])[position];
-    ((block && block.rowData) || []).forEach(function (line, r) {
-      (line.values || []).forEach(function (cell, c) {
-        if (++count % 5000 === 0) dmvChatSheetDeadline_(session);
-        var row = (block.startRow || 0) + r,
-          column = (block.startColumn || 0) + c;
-        if (
-          row >= item.grid.startRowIndex &&
-          row < item.grid.endRowIndex &&
-          column >= item.grid.startColumnIndex &&
-          column < item.grid.endColumnIndex
-        )
-          visit(number, row, column, cell);
-      });
-    });
-  });
+    values || 'formattedValue,effectiveValue,userEnteredValue',
+    visit
+  );
 }
 
 function dmvChatSearchShown_(cell) {

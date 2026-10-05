@@ -334,10 +334,7 @@ test('tab and row or column actions ignore an inspected range and editToken, and
   assert.equal(asInspected('group_rows', { start: 2, count: 1 }).needsConfirmation, true);
   assert.equal(asInspected('delete_rows', { start: 2, count: 1 }).needsConfirmation, true);
   assert.equal(asInspected('hide_sheet', {}, 'Notes').ok, true);
-  assert.equal(
-    asInspected('duplicate_sheet', { newName: 'Notes copy' }, 'Notes').needsConfirmation,
-    true
-  );
+  assert.equal(asInspected('duplicate_sheet', { newName: 'Notes copy' }, 'Notes').ok, true);
   assert.equal(asInspected('delete_sheet', {}, 'Old Q2').needsConfirmation, true);
   // A yes to the delete covers the call with or without the ignored fields.
   const yes = f.answer('Yes');
@@ -1237,7 +1234,7 @@ test('duplicate_sheet copies a tab next to it', () => {
   const f = fixture();
   f.book.insertSheet('Last');
   f.column(f.sheet, 1, ['a', 'b']);
-  const result = confirmed(f, 'duplicate_sheet', { sheetName: 'Output' });
+  const result = f.tabAction('duplicate_sheet', { sheetName: 'Output' });
   assert.equal(result.ok, true);
   assert.equal(result.sheetName, 'Copy of Output');
   const copy = f.tab('Copy of Output');
@@ -1252,14 +1249,14 @@ test('duplicate_sheet copies a tab next to it', () => {
     newSheetName: 'Copy of Output',
   });
   assert.equal(
-    confirmed(f, 'duplicate_sheet', { sheetName: 'Output' }).sheetName,
+    f.tabAction('duplicate_sheet', { sheetName: 'Output' }).sheetName,
     'Copy of Output 2'
   );
   assert.throws(
     () => f.tabAction('duplicate_sheet', { sheetName: 'Output', newName: 'last' }),
     /already exists/
   );
-  const named = confirmed(f, 'duplicate_sheet', { sheetName: 'Output', newName: 'Backup' });
+  const named = f.tabAction('duplicate_sheet', { sheetName: 'Output', newName: 'Backup' });
   assert.equal(named.sheetName, 'Backup');
 });
 
@@ -1318,7 +1315,7 @@ test('delete_sheet asks first, keeps no hidden copy, and undo points to version 
   assert.equal(f.value(f.sheet, 1, 1), '');
 });
 
-test('row, column, move and duplicate edits ask first, and undo points to version history', () => {
+test('row, column and move edits ask first, and undo points to version history', () => {
   const f = fixture();
   f.column(f.sheet, 1, ['a', 'b']);
   for (const [action, input, question, text] of [
@@ -1345,12 +1342,6 @@ test('row, column, move and duplicate edits ask first, and undo points to versio
       { start: 2, count: 3 },
       'Ungroup rows 2-4 of tab "Output"?',
       'Ungrouped rows 2-4 of Output',
-    ],
-    [
-      'duplicate_sheet',
-      {},
-      'Duplicate the tab "Output" as "Copy of Output"?',
-      'Duplicated Output as Copy of Output',
     ],
   ]) {
     const { asked, done } = f.confirm((session, extra) =>
@@ -1429,9 +1420,12 @@ test('every cell-changing range action refuses report output and needs a fresh i
       /would touch the output of the saved report "Daily" on tab "Output"/,
       action
     );
+    // data_validation needs no inspection (chat-sheet-sweep-edits); the guard still refuses it.
     assert.throws(
       () => f.api.dmvChatEditSheet_(f.session, { action, sheetName: 'Output', range, ...input }),
-      /^Error: Inspect the target range before editing it\.$/,
+      action === 'data_validation'
+        ? /would touch the output of the saved report "Daily" on tab "Output"/
+        : /^Error: Inspect the target range before editing it\.$/,
       action
     );
     const inspected = f.inspect(range);

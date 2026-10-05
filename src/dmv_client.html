@@ -19,6 +19,8 @@
       columns: [],
       activeTab: 'reports',
       loaded: false,
+      // The open spreadsheet, whose output links show their tab in place.
+      spreadsheetId: null,
     };
     const api = (name, ...args) =>
       new Promise((resolve, reject) => {
@@ -497,6 +499,16 @@
         link.href = url.href;
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
+        // A tab of this spreadsheet is shown in place: as a link it would load in a new browser
+        // tab, leaving this window on the tab it showed. A link to another spreadsheet opens as a
+        // link, within the click: a window opened after the server answers can be blocked.
+        link.addEventListener('click', (event) => {
+          if (url.pathname !== '/spreadsheets/d/' + state.spreadsheetId + '/edit') return;
+          event.preventDefault();
+          api('dmvShowSheet', url.href)
+            .then((shown) => shown || window.open(url.href, '_blank', 'noopener'))
+            .catch(() => window.open(url.href, '_blank', 'noopener'));
+        });
         return link;
       } catch {
         return null;
@@ -1573,6 +1585,7 @@
       state.reportId = null;
       $('report-form').reset();
       $('data-preview').hidden = true;
+      $('report-missing').hidden = true;
       $('report-editor-title').textContent = 'Build a report';
       $('save-report').textContent = 'Save report';
       fillProviders($('report-provider'), connectorId);
@@ -1750,7 +1763,17 @@
       $('step-shape').open = shape;
       $('step-send').open = send;
     }
+    // The browser's own hint names one field, on a step the user may have scrolled past; the
+    // line under Save names every field still to fill in or fix.
+    function showMissing(show) {
+      const names = [...$('report-form').querySelectorAll(':invalid')]
+        .filter((node) => node.labels?.length)
+        .map((node) => node.labels[0].textContent.trim());
+      $('report-missing').textContent = 'Fill in or fix: ' + names.join(', ') + '.';
+      $('report-missing').hidden = !show || !names.length;
+    }
     function collectReport(validate = true) {
+      if (validate) showMissing(true);
       if (validate && !$('report-form').reportValidity()) return null;
       const fields = selectedColumnKeys();
       if (!fields.length) throw new Error('Choose at least one column for your report.');
@@ -1781,6 +1804,7 @@
     function editReport(report) {
       state.reportId = report.id || null;
       $('data-preview').hidden = true;
+      $('report-missing').hidden = true;
       fillProviders($('report-provider'), report.connectorId);
       changeProvider(report.reportType);
       refreshConnections(report.connectionId || '');
@@ -1919,6 +1943,7 @@
         state.dashboards = data.dashboards || [];
         state.limits = data.limits || state.limits;
         state.target = data.defaultTarget;
+        state.spreadsheetId = data.spreadsheetId;
         if (data.dateTimezone)
           $('date-help').textContent =
             'Recent day ranges end yesterday. Date presets use ' +
@@ -2003,6 +2028,8 @@
     }
     $('report-form').addEventListener('input', updateStepSummaries);
     $('report-form').addEventListener('change', updateStepSummaries);
+    for (const kind of ['input', 'change'])
+      $('report-form').addEventListener(kind, () => showMissing(!$('report-missing').hidden));
     // A control inside a folded step cannot take focus, so validation unfolds its step first.
     $('report-form').addEventListener(
       'invalid',

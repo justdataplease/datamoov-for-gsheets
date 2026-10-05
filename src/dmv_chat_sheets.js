@@ -58,10 +58,25 @@ function dmvChatSheetTarget_(session, name) {
       'No tab named "' +
         name +
         '". Tabs: ' +
-        (session.sheetNames || []).join(', ') +
-        '. Use list_sheets first.'
+        dmvChatClosestTabs_(session.sheetNames || [], sheetName).join(', ') +
+        ' (closest first). Never search for it: for a new tab, make it first with edit_sheet' +
+        ' create_sheet; otherwise tell the user it does not exist.'
     );
   return sheet;
+}
+
+// The tab names, those sharing more words with name first, in their order otherwise.
+function dmvChatClosestTabs_(names, name) {
+  var words = name.toLowerCase().split(/\s+/);
+  var shared = function (tab) {
+    tab = tab.toLowerCase();
+    return words.filter(function (word) {
+      return word && tab.indexOf(word) >= 0;
+    }).length;
+  };
+  return names.slice().sort(function (a, b) {
+    return shared(b) - shared(a);
+  });
 }
 
 // An A1 address without a leading name of sheet itself (Sales!A1:B5 or 'Sales'!A1:B5), as
@@ -76,19 +91,43 @@ function dmvChatOwnTabA1_(sheet, address) {
   return tab === sheet.getName() ? address.slice(at + 1) : address;
 }
 
-function dmvChatSheetArea_(sheet, address) {
-  address = dmvChatOwnTabA1_(sheet, address);
+// The corners and size of an explicit A1 cell or range (B2, A1:F20), or null for other text.
+function dmvChatSheetCorners_(address) {
   if (
     typeof address !== 'string' ||
     !/^[A-Za-z]{1,3}[1-9][0-9]{0,6}(?::[A-Za-z]{1,3}[1-9][0-9]{0,6})?$/.test(address)
   )
-    throw new Error('Use an explicit same-tab A1 range, such as B2 or A1:F20.');
+    return null;
   var parts = address.toUpperCase().split(':'),
     start = dmvCell_(parts[0]),
     end = dmvCell_(parts[1] || parts[0]);
-  var rows = end.row - start.row + 1,
-    columns = end.column - start.column + 1;
-  if (rows < 1 || columns < 1 || rows > 200 || columns > 30 || rows * columns > 1000)
+  return {
+    start: start,
+    end: end,
+    rows: end.row - start.row + 1,
+    columns: end.column - start.column + 1,
+  };
+}
+
+// True when an inspection can take the range: at most 1,000 cells, 200 rows and 30 columns.
+function dmvChatSheetFits_(corners) {
+  return (
+    corners.rows >= 1 &&
+    corners.columns >= 1 &&
+    corners.rows <= 200 &&
+    corners.columns <= 30 &&
+    corners.rows * corners.columns <= 1000
+  );
+}
+
+function dmvChatSheetArea_(sheet, address) {
+  var corners = dmvChatSheetCorners_(dmvChatOwnTabA1_(sheet, address));
+  if (!corners) throw new Error('Use an explicit same-tab A1 range, such as B2 or A1:F20.');
+  var start = corners.start,
+    end = corners.end,
+    rows = corners.rows,
+    columns = corners.columns;
+  if (!dmvChatSheetFits_(corners))
     throw new Error('Inspect or edit at most 1,000 cells, 200 rows and 30 columns at a time.');
   if (end.row > sheet.getMaxRows() || end.column > sheet.getMaxColumns())
     throw new Error('The requested range is outside the existing sheet grid.');
@@ -103,6 +142,37 @@ function dmvChatSheetArea_(sheet, address) {
       startColumnIndex: start.column - 1,
       endColumnIndex: end.column,
     },
+  };
+}
+
+// format, data_validation, sort and filter act on the inspected cells when given an editToken
+// and a range an inspection can take, and (but for filter) refuse a token without a range;
+// otherwise they need no inspection (dmvChatSheetWideArea_).
+function dmvChatSheetWideTarget_(input) {
+  if (input.editToken === undefined) return 'sheet';
+  if (input.range === undefined) return 'range';
+  var corners = dmvChatSheetCorners_(String(input.range).replace(/^.*!/, ''));
+  return corners && dmvChatSheetFits_(corners) ? 'range' : 'sheet';
+}
+
+// The cells of such an action without an inspection: its range of any size, or columns to the
+// grid's last row (D2:D, D:F), or without a range the tab's data (from A1 to its last row and
+// column), as an area bounded by the grid. verb names the action when the tab has no data.
+function dmvChatSheetWideArea_(sheet, range, verb) {
+  var grid;
+  if (range === undefined) {
+    if (!sheet.getLastRow()) throw new Error('The tab has no data to ' + verb + '.');
+    grid = dmvChatActionUsed_(sheet);
+  } else
+    grid = Object.assign(
+      { startRowIndex: 0, endRowIndex: sheet.getMaxRows() },
+      dmvChatSheetRuleRange_(sheet, dmvChatOwnTabA1_(sheet, range)).grid
+    );
+  return {
+    a1: dmvChatGridA1_(grid),
+    rows: grid.endRowIndex - grid.startRowIndex,
+    columns: grid.endColumnIndex - grid.startColumnIndex,
+    grid: grid,
   };
 }
 
@@ -282,15 +352,14 @@ function dmvChatSheetColor_(value, label) {
 
 // The setBasicFilter request of a filter action over area, keeping an existing filter of the
 // same range (basicFilter, whose range the API gives without its zero indexes) with its criteria.
+// A filter of another range is replaced, as a tab holds one.
 function dmvChatSheetFilter_(filter, area, basicFilter) {
   filter = filter || {};
   dmvChatSheetObject_(filter, ['column', 'condition', 'value']);
-  var basic = basicFilter || { range: area.grid };
-  if (dmvChatGridA1_(basic.range) !== area.a1)
-    throw new Error(
-      'An existing filter covers a different range. Choose its range or adjust it manually.'
-    );
-  basic = JSON.parse(JSON.stringify(basic));
+  var basic =
+    basicFilter && dmvChatGridA1_(basicFilter.range) === area.a1
+      ? JSON.parse(JSON.stringify(basicFilter))
+      : { range: area.grid };
   if (Object.keys(filter).length) {
     if (
       ['TEXT_CONTAINS', 'TEXT_EQ', 'NUMBER_GREATER', 'NUMBER_LESS', 'NOT_BLANK'].indexOf(
@@ -330,6 +399,8 @@ function dmvChatSheetFilter_(filter, area, basicFilter) {
   return { setBasicFilter: { filter: basic } };
 }
 
+// The repeatCell cell and fields of a format action; autoFit, which sizes columns rather than
+// cells, is left to dmvChatSheetFormatPlan_.
 function dmvChatSheetFormat_(input) {
   dmvChatSheetObject_(input, [
     'numberFormat',
@@ -339,8 +410,10 @@ function dmvChatSheetFormat_(input) {
     'backgroundColor',
     'horizontalAlignment',
     'wrap',
+    'autoFit',
   ]);
-  if (!Object.keys(input).length) throw new Error('Choose at least one formatting change.');
+  if (input.autoFit !== undefined && typeof input.autoFit !== 'boolean')
+    throw new Error('autoFit must be true or false.');
   // 'number' is Sheets' own Number format. '#,##0.###' printed whole numbers as "2,494.", and the
   // range's values can change after this edit, so the decimals are fixed rather than guessed.
   // currency shows only a code it is given: the locale's default symbol could show $ on amounts
@@ -393,6 +466,7 @@ function dmvChatSheetFormat_(input) {
     format.wrapStrategy = input.wrap ? 'WRAP' : 'CLIP';
     fields.push('wrapStrategy');
   }
+  if (!fields.length && !input.autoFit) throw new Error('Choose at least one formatting change.');
   return {
     cell: { userEnteredFormat: format },
     fields: fields
@@ -491,15 +565,28 @@ function dmvChatSheetEditActions_() {
   return {
     set_values: { builtIn: true, fields: ['values'], plan: dmvChatSheetSetPlan_ },
     set_formulas: { builtIn: true, fields: ['formulas'], plan: dmvChatSheetSetPlan_ },
-    format: { builtIn: true, fields: ['format'], plan: dmvChatSheetFormatPlan_ },
-    sort: { builtIn: true, fields: ['sortBy', 'headerRows'], plan: dmvChatSheetSortPlan_ },
-    // Without a range, a filter covers the tab's data and needs no inspection.
+    // Without an inspection these take a range of any size, or the tab's data, and can ask first
+    // (over more cells than undo keeps, or what dmvChatSheetSortPlan_ and dmvChatSheetFilterPlan_
+    // ask), so they take confirmToken.
+    format: {
+      builtIn: true,
+      target: dmvChatSheetWideTarget_,
+      fields: ['range', 'format', 'confirmToken'],
+      plan: dmvChatSheetFormatPlan_,
+    },
+    sort: {
+      builtIn: true,
+      target: dmvChatSheetWideTarget_,
+      fields: ['range', 'sortBy', 'headerRows', 'confirmToken'],
+      plan: dmvChatSheetSortPlan_,
+    },
     filter: {
       builtIn: true,
+      // Gemini sends a whole-tab filter with a token and no range; a filter changes no cell.
       target: function (input) {
-        return input.range === undefined ? 'sheet' : 'range';
+        return input.range === undefined ? 'sheet' : dmvChatSheetWideTarget_(input);
       },
-      fields: ['filter'],
+      fields: ['range', 'filter', 'confirmToken'],
       plan: dmvChatSheetFilterPlan_,
     },
     freeze: {
@@ -578,27 +665,46 @@ function dmvChatSheetSetPlan_(context) {
   };
 }
 
-// A refresh keeps formatting, so report and dashboard output may take it: nothing is guarded.
+// Report and dashboard output may take formats, which a saved report's refresh keeps while its
+// columns stay the same (a dashboard refresh resets them): nothing is guarded.
+// autoFit sizes the range's columns to their content; undo leaves those widths.
 function dmvChatSheetFormatPlan_(context) {
-  return {
-    requests: [
-      {
-        repeatCell: Object.assign(
-          { range: context.area.grid },
-          dmvChatSheetFormat_(context.input.format)
-        ),
+  var input = context.input,
+    area = context.area || dmvChatSheetWideArea_(context.sheet, input.range, 'format'),
+    format = dmvChatSheetFormat_(input.format),
+    requests = [];
+  if (format.fields) requests.push({ repeatCell: Object.assign({ range: area.grid }, format) });
+  if (input.format.autoFit)
+    requests.push({
+      autoResizeDimensions: {
+        dimensions: {
+          sheetId: area.grid.sheetId,
+          dimension: 'COLUMNS',
+          startIndex: area.grid.startColumnIndex,
+          endIndex: area.grid.endColumnIndex,
+        },
       },
-    ],
+    });
+  return {
+    requests: requests,
     touches: [],
-    undo: { snapshot: [context.area.grid] },
-    readBack: true,
-    sheetName: context.input.sheetName,
+    // Over more cells than undo keeps, the formats it replaces are lost, so it asks first.
+    undo: { snapshot: [area.grid] },
+    readBack: !!context.area,
+    range: area.a1,
+    sheetName: input.sheetName,
   };
 }
 
+// A sort that leaves out rows of the tab's data (from A1 to its last row and column) below one
+// header row says so: without an inspection it asks first, as it does when it leaves out data
+// columns, since the model has not seen the data and the rows split; after one, the result says
+// which rows it sorted, so the answer never calls the table sorted.
 function dmvChatSheetSortPlan_(context) {
   var input = context.input,
-    area = context.area;
+    area = context.area || dmvChatSheetWideArea_(context.sheet, input.range, 'sort'),
+    data = dmvChatActionUsed_(context.sheet),
+    whole = dmvChatGridA1_(data);
   if (!Array.isArray(input.sortBy) || !input.sortBy.length || input.sortBy.length > 5)
     throw new Error('Choose between one and five sort columns.');
   var sortRange = Object.assign({}, area.grid),
@@ -610,6 +716,36 @@ function dmvChatSheetSortPlan_(context) {
     );
   if (headers >= area.rows) throw new Error('The sort range must include a data row.');
   sortRange.startRowIndex += headers;
+  var split =
+      !context.area &&
+      (area.grid.startColumnIndex > data.startColumnIndex ||
+        area.grid.endColumnIndex < data.endColumnIndex),
+    rows =
+      sortRange.startRowIndex > data.startRowIndex + 1 || sortRange.endRowIndex < data.endRowIndex
+        ? 'rows ' +
+          (sortRange.startRowIndex + 1) +
+          ' to ' +
+          Math.min(sortRange.endRowIndex, data.endRowIndex) +
+          '; the other data rows of ' +
+          whole +
+          ' keep their place'
+        : '',
+    confirm = '',
+    result = {};
+  if (!context.area && (split || rows))
+    confirm =
+      'Sort only ' +
+      context.sheet.getName() +
+      '!' +
+      area.a1 +
+      '?' +
+      (split
+        ? ' The other data columns of ' +
+          whole +
+          ' keep their order, so its rows no longer line up.'
+        : '') +
+      (rows ? ' It sorts ' + rows + '.' : '');
+  else if (rows) result.partial = 'It sorted ' + rows + ', so do not call the table sorted.';
   return {
     requests: [
       {
@@ -630,8 +766,12 @@ function dmvChatSheetSortPlan_(context) {
         },
       },
     ],
-    readBack: true,
+    touches: [area.grid],
+    confirm: confirm,
+    readBack: !!context.area,
+    range: area.a1,
     sheetName: input.sheetName,
+    result: result,
   };
 }
 
@@ -642,23 +782,39 @@ function dmvChatSheetFilterPlan_(context) {
     current;
   if (area) current = context.snapshot.basicFilter;
   else {
-    // Without a range: the tab's data, however large.
-    if (!sheet.getLastRow()) throw new Error('The tab has no data to filter.');
-    var data = dmvChatActionUsed_(sheet);
-    area = {
-      a1: dmvChatGridA1_(data),
-      rows: data.endRowIndex,
-      columns: data.endColumnIndex,
-      grid: data,
-    };
+    area = dmvChatSheetWideArea_(sheet, context.input.range, 'filter');
     current = dmvChatSheetRead_(context.session, sheet, dmvChatSheetArea_(sheet, 'A1')).basicFilter;
   }
-  return {
+  var plan = {
     requests: [dmvChatSheetFilter_(context.input.filter, area, current)],
     touches: [],
     range: area.a1,
     sheetName: context.input.sheetName,
   };
+  // A tab holds one filter, so the user's filter of another range is gone: the result says so,
+  // and with criteria, which no undo puts back, it asks first.
+  var replaced = current && dmvChatGridA1_(current.range);
+  if (replaced && replaced !== area.a1) {
+    if (
+      Object.keys(current.criteria || {}).length ||
+      (current.filterSpecs && current.filterSpecs.length)
+    )
+      plan.confirm =
+        'Replace the filter on ' +
+        sheet.getName() +
+        '!' +
+        replaced +
+        ' and its criteria? A tab holds one filter, and chat cannot undo a filter.';
+    plan.text =
+      'Set filter on ' +
+      context.input.sheetName +
+      '!' +
+      area.a1 +
+      ', replacing the filter on ' +
+      replaced;
+    plan.result = { replacedFilter: replaced };
+  }
+  return plan;
 }
 
 function dmvChatSheetFreezePlan_(context) {
@@ -821,7 +977,7 @@ function dmvChatSheetTools_() {
     {
       name: 'edit_sheet',
       description:
-        'Perform a specifically requested sheet edit with one atomic batch. Existing edits take the inspected sheetName/editToken and its range or a part, and return a fresh editToken for that whole range; tab and row/column actions (freeze, filter without a range, insert/delete/group/ungroup rows or columns, duplicate/delete/hide/show_sheet) take sheetName only, no inspection. Supports the built-in and the analyst actions listed in action. Formula examples: =SUM(A2:A10), =XLOOKUP(A2,Data!A:A,Data!C:C), =QUERY(Data!A:F,"select B, sum(F) group by B"). The result lists the formula errors to fix. On report and dashboard output only format, filter and freeze are allowed (conditional_format too), since a refresh keeps them; change the report for anything else. A needsConfirmation answer means nothing changed: ask the user with ask_user (Yes/No) and on yes repeat the call with its confirmToken. undo_sheet_edit reverts cell edits.',
+        'Make a requested sheet edit in one atomic batch. Existing edits take the inspected sheetName/editToken and its range or a part, and return a fresh editToken for that whole range; tab and row/column actions (freeze, filter without a range, insert/delete/group/ungroup rows or columns, duplicate/delete/hide/show_sheet) take sheetName only, no inspection. Without editToken, format, data_validation, sort and filter take any range (D2:D: to the last row) or none (the tab data). Supports the analyst actions listed in action too. The result lists the formula errors to fix. On report and dashboard output only format, filter and freeze are allowed (conditional_format too; a dashboard refresh resets formats); change the report for anything else. A needsConfirmation answer changed nothing: ask with ask_user (Yes/No); on yes repeat the call with its confirmToken. undo_sheet_edit reverts cell edits.',
       input_schema: {
         type: 'object',
         properties: Object.assign({}, target, {
@@ -851,7 +1007,7 @@ function dmvChatSheetTools_() {
               items: { anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }] },
             },
             description:
-              'Exact rectangular literal cell matrix for set_values. Text beginning with = remains text; an empty string clears that selected cell.',
+              'Exact rectangular literal cell matrix for set_values. Text beginning with = remains text; an empty string clears the cell.',
           },
           formulas: {
             type: 'array',
@@ -878,6 +1034,7 @@ function dmvChatSheetTools_() {
               backgroundColor: { type: 'string', description: '#RRGGBB' },
               horizontalAlignment: { type: 'string', enum: ['LEFT', 'CENTER', 'RIGHT'] },
               wrap: { type: 'boolean' },
+              autoFit: { type: 'boolean', description: 'Fit column widths.' },
             },
           },
           sortBy: {
@@ -888,7 +1045,7 @@ function dmvChatSheetTools_() {
                 column: {
                   type: 'integer',
                   minimum: 1,
-                  description: 'One-based column within the inspected range.',
+                  description: 'One-based column of the range (A=1 without one).',
                 },
                 ascending: { type: 'boolean' },
               },
@@ -899,7 +1056,7 @@ function dmvChatSheetTools_() {
             type: 'integer',
             minimum: 0,
             maximum: 1,
-            description: 'Rows to exclude from sorting; default1.',
+            description: 'Rows to exclude from sorting; default 1.',
           },
           filter: {
             type: 'object',
@@ -912,7 +1069,7 @@ function dmvChatSheetTools_() {
               value: { type: 'string' },
             },
             description:
-              "One-based range column and literal criterion; omit or use empty object to enable filter controls. Without range: the tab's data.",
+              "One-based range column and literal criterion; omit for filter controls alone. Without range: the tab's data.",
           },
           frozenRows: { type: 'integer', minimum: 0 },
           frozenColumns: { type: 'integer', minimum: 0 },

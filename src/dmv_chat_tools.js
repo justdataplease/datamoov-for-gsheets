@@ -9,7 +9,7 @@ var DMV_CHAT_RESULTS = {
   sampleTail: 3,
   inlineRows: 20,
   maxSummaryRows: 30000,
-  readMaxRows: 500,
+  readMaxCells: 50000,
   maxDescribedTables: 60,
   readMaxColumns: 30,
   maxDiscoveredFields: 400,
@@ -426,6 +426,8 @@ function dmvChatRunReport_(session, input) {
   return dmvChatDescribe_(session, stored, id);
 }
 
+// The metadata kept of a source result, each value cut to 200 characters; a partial label, which
+// read_sheet can make of two sentences and its instruction, to 400.
 function dmvChatMetadata_(metadata) {
   var keep = {};
   [
@@ -437,8 +439,10 @@ function dmvChatMetadata_(metadata) {
     'attribution',
     'grain',
     'mode',
+    'partial',
   ].forEach(function (key) {
-    if (metadata && metadata[key]) keep[key] = String(metadata[key]).slice(0, 200);
+    if (metadata && metadata[key])
+      keep[key] = String(metadata[key]).slice(0, key === 'partial' ? 400 : 200);
   });
   return keep;
 }
@@ -1422,7 +1426,10 @@ function dmvChatReadSheet_(session, input) {
   input = input || {};
   var sheetName = dmvSheetName_(input.sheetName);
   var sheet = dmvChatSheetTarget_(session, sheetName);
-  var range;
+  var top = 1,
+    left = 1,
+    rows,
+    columns;
   if (input.range) {
     var match = /^([A-Z]{1,3})([1-9][0-9]{0,6}):([A-Z]{1,3})([1-9][0-9]{0,6})$/.exec(
       String(input.range).toUpperCase()
@@ -1432,16 +1439,16 @@ function dmvChatReadSheet_(session, input) {
       end = dmvCell_(match[3] + match[4]);
     if (end.row < start.row || end.column < start.column)
       throw new Error('range must end after it starts.');
-    range = sheet.getRange(
-      start.row,
-      start.column,
-      end.row - start.row + 1,
-      end.column - start.column + 1
-    );
-  } else range = sheet.getDataRange();
-  var rows = range.getNumRows(),
-    columns = range.getNumColumns();
-  if (rows > DMV_CHAT_RESULTS.readMaxRows + 1 || columns > DMV_CHAT_RESULTS.readMaxColumns)
+    top = start.row;
+    left = start.column;
+    rows = end.row - start.row + 1;
+    columns = end.column - start.column + 1;
+  } else {
+    var used = sheet.getDataRange();
+    rows = used.getNumRows();
+    columns = used.getNumColumns();
+  }
+  if (columns > DMV_CHAT_RESULTS.readMaxColumns)
     throw new Error(
       'Tab "' +
         sheetName +
@@ -1450,13 +1457,16 @@ function dmvChatReadSheet_(session, input) {
         ' rows × ' +
         columns +
         ' columns. Pass a range of at most ' +
-        DMV_CHAT_RESULTS.readMaxRows +
-        ' rows × ' +
         DMV_CHAT_RESULTS.readMaxColumns +
-        ' columns (header included).'
+        ' columns.'
     );
-  var values = range.getValues();
-  if (values.length < 2) throw new Error('The range needs a header row and at least one data row.');
+  // Rows past the tab's last row hold nothing; a range past the cell budget is read from its top,
+  // and the result then says which rows it holds.
+  var last = sheet.getLastRow(),
+    available = Math.min(rows, last - top + 1),
+    count = Math.min(available, Math.floor(DMV_CHAT_RESULTS.readMaxCells / columns));
+  if (count < 2) throw new Error('The range needs a header row and at least one data row.');
+  var values = sheet.getRange(top, left, count, columns).getValues();
   var seen = Object.create(null);
   var descriptors = values[0].map(function (header, index) {
     var label = String(header === '' ? 'Column ' + (index + 1) : header)
@@ -1511,10 +1521,54 @@ function dmvChatReadSheet_(session, input) {
     metadata: {},
     source: 'Tab ' + sheetName,
   };
+  // A read is partial when its table goes on past it: the budget cut it, or the row below or
+  // above it holds values in its columns. A side table with empty rows around it is whole.
+  var filled = function (row) {
+    return (
+      row >= 1 &&
+      row <= last &&
+      sheet
+        .getRange(row, left, 1, columns)
+        .getValues()[0]
+        .some(function (value) {
+          return value !== '';
+        })
+    );
+  };
+  var total = last - top,
+    cut = count < available || filled(top + count),
+    partial = [];
+  if (filled(top - 1))
+    partial.push(
+      'Starts inside a table: row ' +
+        top +
+        ' was read as its header and the rows above it are left out.'
+    );
+  if (cut)
+    partial.push(
+      'Holds ' +
+        data.length.toLocaleString() +
+        " of the tab's " +
+        total.toLocaleString() +
+        ' data rows (rows ' +
+        (top + 1) +
+        '-' +
+        (top + data.length) +
+        ').'
+    );
+  if (partial.length)
+    stored.metadata.partial =
+      partial.join(' ') +
+      ' Totals, counts and rankings from it are partial: say so, or use formulas over whole columns.';
   var id = dmvChatStoreResult_(session, stored);
   session.events.push({
     kind: 'read',
-    text: 'Read ' + data.length.toLocaleString() + ' rows from ' + sheetName,
+    text:
+      'Read ' +
+      data.length.toLocaleString() +
+      (cut ? ' of ' + total.toLocaleString() : '') +
+      ' rows from ' +
+      sheetName,
     ref: id,
     details: dmvChatDetails_([
       ['Range', input.range],
@@ -1568,7 +1622,8 @@ function dmvChatCreateChart_(session, input) {
   var type = DMV_CHART_TYPES[String(input.chartType || '').toLowerCase()];
   if (!type)
     throw new Error('chartType must be one of: ' + Object.keys(DMV_CHART_TYPES).join(', '));
-  var area = input.resultId ? session.written[input.resultId] : null;
+  var area = input.resultId ? session.written[input.resultId] : null,
+    snapped = false;
   if (input.resultId && !area) {
     var writtenIds = Object.keys(session.written);
     throw new Error(
@@ -1592,6 +1647,11 @@ function dmvChatCreateChart_(session, input) {
       );
     var start = dmvCell_(match[1] + match[2]),
       end = dmvCell_(match[3] + match[4]);
+    // A range from the header of the summary of a pivot made in this request may take all its
+    // groups, and the result then names the range charted.
+    var last = dmvChatPivotChartEnd_(session, sheetName, start, end);
+    snapped = last !== end.row;
+    end = { row: last, column: end.column };
     if (end.row <= start.row || end.column < start.column)
       throw new Error('range must cover a header row and at least one data row.');
     // As the sheet shows them: a formula's result, a date as formatted.
@@ -1744,7 +1804,7 @@ function dmvChatCreateChart_(session, input) {
       ['Anchor', dmvChatA1_(anchor.row, anchor.column)],
     ]),
   });
-  return {
+  var result = {
     ok: true,
     chartId: reply && reply.chart ? reply.chart.chartId : null,
     url: url,
@@ -1752,6 +1812,12 @@ function dmvChatCreateChart_(session, input) {
     anchorCell: dmvChatA1_(anchor.row, anchor.column),
     title: title,
   };
+  if (snapped)
+    result.range =
+      dmvChatA1_(area.row, area.column) +
+      ':' +
+      dmvChatA1_(area.row + area.rows - 1, area.column + area.columns.length - 1);
+  return result;
 }
 
 /* ask_user: terminal for the turn; the sidebar renders the options as chips. */

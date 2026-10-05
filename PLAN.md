@@ -179,7 +179,7 @@ for SQL sources, `dmvCell_`, sheet name rules). Errors become `{ error }` tool r
 | `discover_fields` | `connectionId`, `reportType`, `config?` | Field descriptors — needed for GA4 custom fields, HubSpot/Zendesk custom properties, and the columns of a Postgres/BigQuery SQL |
 | `summarize` | `resultId`, `groupBy?[]`, `metrics[{field, agg: sum|avg|min|max|count|count_distinct}]`, `filters?[{field, op, value}]`, `orderBy?`, `limit?` | A new `resultId` plus up to 50 aggregated rows. This is the in-memory query planner: "which campaign spent most", "total by month", "top 10 queries" never send rows to the model |
 | `write_to_sheet` | `resultId`, `sheetName`, `startCell?`, `title?` | Written range in A1 and the `sheetId`; goes through `dmvWriteReport_` so existing cells are never overwritten, header/number formats apply, and the write is one batch |
-| `read_sheet` | `sheetName`, `range?` | Up to 500 rows × 30 columns of the user's own tab as a `resultId` plus sample; lets the chat analyse data already in the spreadsheet |
+| `read_sheet` | `sheetName`, `range?` | Up to 50,000 cells and 30 columns of the user's own tab, labelled partial when it stops before the last row, as a `resultId` plus sample; lets the chat analyse data already in the spreadsheet |
 | `create_chart` | `sheetName`, `range` (A1 of a written table) or `resultId` written earlier, `chartType: line|column|bar|pie|area|scatter`, `title`, `xColumn`, `seriesColumns[]`, `anchorCell?` | Chart id; uses the Sheets API `addChart` request (basicChart / pieChart) anchored beside the table |
 | `ask_user` | `question`, `options?[]` (≤ 6 short labels) | Terminal; the sidebar renders chips; a click posts `Use <label>.` as the next user message |
 

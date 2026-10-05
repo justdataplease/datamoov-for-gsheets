@@ -33,6 +33,24 @@ function dmvDashboardPad_(row, width) {
   return row;
 }
 
+// A data tab's title: its dataset label, source, connection and report, each said once. A part
+// another part already holds in whole words goes, such as the source in "Google Ads 5317611041"
+// and that account in a dataset labelled "Google Ads 5317611041 Prev".
+function dmvDashboardProvenance_(parts) {
+  var words = parts.map(function (part) {
+    return ' ' + String(part).trim().toLowerCase().split(/\s+/).join(' ') + ' ';
+  });
+  return parts
+    .filter(function (part, index) {
+      return !words.some(function (other, at) {
+        return (
+          at !== index && other.indexOf(words[index]) >= 0 && (other !== words[index] || at < index)
+        );
+      });
+    })
+    .join(' · ');
+}
+
 // A connector that keeps only the top rows of a ranked list (a report's "Keep the top rows", a
 // query's own LIMIT) says so with metadata.topRows beside its note. It counts only when the
 // result holds exactly that many rows: a shorter list is the whole list.
@@ -649,7 +667,7 @@ function dmvRunDashboard(id, requestedDeadline) {
           .concat([notes[dataset.id]])
       );
       var width = result.columns.length,
-        tab = dmvDashboardDataTab_(result);
+        tab = dmvDayColumns_(result);
       tabs[dataset.id] = {
         sheet: dataset.sheetName,
         rows: result.rows.length,
@@ -667,7 +685,7 @@ function dmvRunDashboard(id, requestedDeadline) {
         result: {
           columns: result.columns,
           matrix: [
-            dmvDashboardPad_([provenance.slice(0, 4).join(' · ')], width),
+            dmvDashboardPad_([dmvDashboardProvenance_(provenance.slice(0, 4))], width),
             dmvDashboardPad_(
               [
                 provenance[4] +
@@ -690,7 +708,6 @@ function dmvRunDashboard(id, requestedDeadline) {
               { row: 0, style: 'section' },
               { row: 1, style: 'muted' },
             ],
-            formats: tab.formats,
           },
         },
       });
