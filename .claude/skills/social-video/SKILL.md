@@ -69,6 +69,11 @@ video).
 
 ## One-take style (product tours)
 
+Adapted from the onetake skill (https://github.com/feitangyuan/onetake): continuity at
+boundaries, so every beat grows out of the one before instead of cutting like a slideshow. To use
+the original as its own Claude Code skill:
+`git clone https://github.com/feitangyuan/onetake.git ~/.claude/skills/onetake`.
+
 `videos/product-tour-2/` is the example. Cards only at the very start and end; in between one
 camera never cuts: every beat starts from something still on screen (the pointer, the tab, the
 chat), the camera sets off before the thing it goes to see (its `lead` helper), holds with
