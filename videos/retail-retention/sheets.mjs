@@ -346,11 +346,11 @@ export async function buildSheets(dir) {
     'data-formula': pageOf(dataTab(12, rows, { values: false, to: 40 }), DATA_TAB, {
       maxRows: 41,
     }),
-    // Pasted as values, formatted and frozen, scrolled to row 10001. The tab ends there, so the
-    // stage draws no empty rows past it.
+    // Pasted as values, formatted and frozen, scrolled to the end: row 10001, the tab's last row,
+    // at the bottom of the window, so no empty sheet shows below the data.
     'data-end':
       '<meta name="rows" content="10001">' +
-      pageOf(dataTab(12, rows, { values: true, from: 9982 }), DATA_TAB),
+      pageOf(dataTab(12, rows, { values: true, from: 9963 }), DATA_TAB),
     dashboard: renderSheet(run.dashboard, run.model),
     'chart-data': renderSheet(run.chartData, run.model),
   };

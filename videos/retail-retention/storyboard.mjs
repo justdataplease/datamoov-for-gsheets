@@ -24,6 +24,22 @@ import {
 export const formats = ['square', 'portrait', 'landscape'];
 export const prepare = buildSheets;
 
+// The kit's default setup, with the run's provider and model (Gemini, gemini-3.8-flash) and no
+// connected sources: the shop starts from an empty spreadsheet, so chat suggests no ads report.
+// Serialised into the sidebar page, so it stands alone.
+export function setupSidebar(data) {
+  data.connections = [];
+  data.reports = [];
+  data.dashboards = [];
+  const provider = data.ai.providers.find((item) => item.id === 'gemini') || data.ai.providers[0];
+  Object.assign(data.ai, {
+    configured: true,
+    provider: provider.id,
+    providerLabel: provider.label,
+    model: 'gemini-3.8-flash',
+  });
+}
+
 const DATA_ASK = 'Generate a dataset of 10000 rows for a retail store selling clothes';
 const DASHBOARD_ASK = 'Now create a customer retention and segmentation dashboard';
 
@@ -221,6 +237,49 @@ function dashboardDone(f) {
 const lead = (first, ms, then) =>
   Promise.all([first, new Promise((r) => setTimeout(r, ms)).then(then)]);
 
+// Scrolls the sidebar so the last `selector` starts `at` (a fraction of the panel's height) below
+// the panel's top, over `ms`: the camera frames the lower part of the panel, so the chat's own
+// scrolling would leave a turn's progress and the top of its reply out of the shot.
+const scrollChat = (d, selector, at, ms = 700) =>
+  d.side
+    .locator(selector)
+    .last()
+    .evaluate(
+      (node, [at, ms]) =>
+        new Promise((resolve) => {
+          let box = node.parentElement;
+          while (
+            box &&
+            !(
+              /(auto|scroll)/.test(getComputedStyle(box).overflowY) &&
+              box.scrollHeight > box.clientHeight
+            )
+          )
+            box = box.parentElement;
+          const page = !box;
+          box = box || document.scrollingElement;
+          const top = page ? 0 : box.getBoundingClientRect().top;
+          const from = box.scrollTop;
+          const height = page ? window.innerHeight : box.clientHeight;
+          const to = Math.max(
+            0,
+            Math.min(
+              box.scrollHeight - height,
+              from + node.getBoundingClientRect().top - top - at * height
+            )
+          );
+          const start = performance.now();
+          (function step(now) {
+            const t = Math.min(1, (now - start) / ms);
+            const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+            box.scrollTop = from + (to - from) * e;
+            if (t < 1) requestAnimationFrame(step);
+            else resolve();
+          })(start);
+        }),
+      [at, ms]
+    );
+
 export default async function (d) {
   const f = facts();
   const dash = built.dashboard;
@@ -233,21 +292,24 @@ export default async function (d) {
   });
   const opened = Date.now();
   await d.stage('title', 'Fernhollow Apparel');
+  // Turn 1's nine steps tick at 420 ms. Turn 2 is queued on its own just before it is asked, at a
+  // slower step: the chat checks progress every 1.2 s, so faster steps would fall between two
+  // checks and never show.
+  const dashboardTurn = {
+    steps: [
+      'Checking saved dashboards',
+      'Inspecting selected cells',
+      'Inspecting selected cells',
+      'Saving the dashboard plan',
+      'Refreshing dashboard sources',
+    ],
+    reply: dashboardDone(f),
+  };
   await d.chatScript(
     [
       {
         steps: ['Checking spreadsheet tabs', EDIT, EDIT, EDIT, EDIT, EDIT, EDIT, EDIT, EDIT],
         reply: DATA_DONE,
-      },
-      {
-        steps: [
-          'Checking saved dashboards',
-          'Inspecting selected cells',
-          'Inspecting selected cells',
-          'Saving the dashboard plan',
-          'Refreshing dashboard sources',
-        ],
-        reply: dashboardDone(f),
       },
     ],
     420
@@ -258,18 +320,34 @@ export default async function (d) {
   await d.look('app', 1500, { ease: 'out', band: true });
   await d.say('Start from an empty spreadsheet', 1300);
 
-  // Wipes the tab off and loads the next one, so no frame shows a page half loaded.
-  const swap = async (name) => {
+  // Wipes the tab off and loads the next one, so no frame shows a page half loaded. The formula
+  // bar changes on the empty grid, so the new tab never shows the old tab's cell.
+  const swap = async (name, [ref, content]) => {
     await d.reveal(300, false);
+    await d.stage('wrapFormula', null);
+    await d.stage('formula', ref, content);
     await d.dashboard(name);
   };
   const bar = await d.stage('rect', 'fbar');
   // Room under the shot for the caption, in landscape too, where the camera otherwise fills the
   // frame: the caption lies on the rows below what the shot is about, never on it.
   const roomy = { reserve: Math.max(d.format.reserve, 0.16) };
+  // Frames `rect` from its left edge: widened to the frame's shape where its height decides the
+  // zoom, so a wide frame shows more of the sheet on the right, never black beyond the app's left.
+  const anchored = (rect, ms) => {
+    const across = (rect.h * d.format.width) / (d.format.height * (1 - roomy.reserve));
+    return d.look({ ...rect, w: Math.max(rect.w, across) }, ms, roomy);
+  };
   // A close-up from the app's top-left corner (title, menus, formula bar) down to world y
-  // `bottom`, `w` world pixels wide.
-  const close = (w, bottom, ms = 1100) => d.look({ x: bar.x, y: 0, w, h: bottom }, ms, roomy);
+  // `bottom`, at least `w` world pixels wide.
+  const close = (w, bottom, ms = 1100) => anchored({ x: bar.x, y: 0, w, h: bottom }, ms);
+  // The whole app height, so the caption lies on the black below the app, never on the sheet
+  // (landscape: the band below the app; square and portrait: their own room under it).
+  const whole = (ms) =>
+    d.format.reserve < 0.16
+      ? d.look('app', ms, { band: true })
+      : anchored({ x: bar.x, y: 0, w: 0, h: 1004 }, ms);
+  const portrait = d.format.name === 'portrait';
 
   /* ---- Ask 1 ---- */
   await d.say('Ask chat for 10,000 rows of clothing sales');
@@ -280,7 +358,6 @@ export default async function (d) {
   await d.say('Each step shows as it runs');
   await d.waitAnswers(1);
   await d.say('');
-  await d.drift(1200, 1.03);
 
   /* ---- The data tab: one formula ---- */
   await d.tab(DATA_TAB, true);
@@ -295,39 +372,50 @@ export default async function (d) {
   await d.drift(3200, 1.03);
 
   // The formula view wipes off as the camera pulls back, and the pasted values wipe in scrolled
-  // to the end, header frozen: row 10001 holds plain values. No caption over the empty sheet.
+  // to the end, header frozen: row 10001 holds plain values, the sheet's last row at the bottom of
+  // the window. No caption over the empty sheet.
   await d.say('', 300);
-  await Promise.all([
-    d.look({ x: bar.x, y: 0, w: 1000, h: bar.y + 480 }, 1100, roomy),
-    swap('data-end').then(async () => {
-      await d.stage('wrapFormula', null);
-      await d.stage('formula', 'A1', 'Order ID');
-      await d.reveal(700);
-    }),
-  ]);
+  await Promise.all([whole(1100), swap('data-end', ['A1', 'Order ID']).then(() => d.reveal(700))]);
   await d.cell('K10001', money(built.last[10]));
   await d.hidePointer();
   await d.say('Then frozen as values: 10,000 rows, down to row 10,001');
   await d.drift(2400, 1.03);
 
   /* ---- Ask 2 ---- */
+  // The camera keeps room under the chat in every format, so the caption never covers the input
+  // or the new turn.
   await d.say('Now ask for a retention and segmentation dashboard');
-  await d.look('chat', 1000);
+  // The panel scrolls the input fully into view as the camera arrives, the last reply above it.
+  await Promise.all([d.look('chat', 1000, roomy), scrollChat(d, '#chat-input', 0.66, 900)]);
+  await d.chatScript([dashboardTurn], 1300);
   await d.type('#chat-input', DASHBOARD_ASK, { cps: 48 });
   await d.click('#chat-send');
   await d.hidePointer();
+  // The new question near the top of the shot, its steps ticking below it.
+  await d.wait(250);
+  await scrollChat(d, '.chat-message.user', 0.33, 600);
   await d.say('It saves a dashboard plan, then refreshes it');
+  // The caption stays until the last step is on screen, then the reply arrives.
+  await d.side
+    .getByText('Refreshing dashboard sources')
+    .last()
+    .waitFor({ state: 'visible', timeout: 30_000 });
   await d.waitAnswers(2);
   await d.say('');
-  await d.drift(1400, 1.03);
+  // The top of the reply: its highlights and key findings, before the tab it describes.
+  await d.wait(150);
+  await scrollChat(d, '.chat-message.assistant', 0.31, 800);
+  await d.drift(2200, 1.03);
 
   /* ---- The dashboard: wide ---- */
   await d.tab(DASHBOARD_TAB, true);
-  await Promise.all([d.look('app', 1100, { band: true }), swap('dashboard')]);
-  await d.stage('formula', 'B2', 'Customer Retention and Segmentation');
+  await Promise.all([
+    d.look('app', 1100, { band: true }),
+    swap('dashboard', ['B2', 'Customer Retention and Segmentation']),
+  ]);
   await Promise.all([d.reveal(1000), d.dock(false, 900)]);
   await d.say(`A new dashboard tab: ${built.formulaCount.dashboard} live formulas over the data`);
-  await d.drift(2600, 1.03);
+  await d.drift(1600, 1.03);
 
   /* ---- KPI formulas ---- */
   await d.say('');
@@ -338,25 +426,40 @@ export default async function (d) {
   await d.hidePointer();
   await d.say('Customers: a COUNTUNIQUE over the Customer ID column');
   await d.drift(2400, 1.03);
-  const ratioBox = await d.stage('cellBox', f.refs.ratio);
+  // The ratio's cell lies far right of the formula bar's text, so no one frame reads both: the
+  // same close-up shows its formula, then the camera goes to the cell and its value.
   await d.say('');
-  await close(ratioBox.x + 300 - bar.x, kpis.y + kpis.h + 16, 900);
-  await d.cell(f.refs.ratio, dash[f.refs.ratio].formula);
-  await d.hidePointer();
+  await close(740, kpis.y + kpis.h + 16, 500);
+  await d.stage('select', f.refs.ratio, dash[f.refs.ratio].formula);
   await d.say('Avg price per unit: total sales over units, live');
-  await d.drift(2400, 1.03);
+  await d.drift(2200, 1.03);
+  const ratioBox = await d.stage('cellBox', f.refs.ratio);
+  await d.look(
+    { x: ratioBox.x - 180, y: ratioBox.y - 60, w: 640, h: ratioBox.h + 120 },
+    1000,
+    roomy
+  );
+  await d.drift(1600, 1.03);
 
   /* ---- Charts ---- */
   await d.say('');
   await d.stage('wrapFormula', null);
   await d.stage('formula', 'B23', 'Revenue by Product Category');
+  // Portrait is too tall for the charts side by side: it frames the category chart and pans
+  // across to the gender one, the monthly line below both, so the shot fills the frame.
+  const chartsW = portrait ? 960 : 1330;
   await d.section('Revenue by Product Category', {
     height: 760,
-    w: 1330,
+    w: chartsW,
     ms: 1300,
     say: 'Sales by category, by gender and by month',
   });
-  await d.drift(2600, 1.03);
+  if (portrait) {
+    const sheet = await d.stage('rect', 'sheet');
+    await d.look({ x: sheet.x + 1330 - chartsW, y: sheet.y, w: chartsW, h: 760 }, 2400, {
+      reserve: d.format.reserve * 0.55,
+    });
+  } else await d.drift(1600, 1.03);
 
   /* ---- Repeat customers ---- */
   await d.say('');
@@ -370,33 +473,50 @@ export default async function (d) {
     'cellBox',
     `B${f.refs.frequentTitleRow}:Y${f.refs.frequentTitleRow + 17}`
   );
-  await d.look(
+  await anchored(
     {
       x: bar.x,
       y: bar.y - 8,
       w: table.x + table.w + 30 - bar.x,
       h: table.y + table.h + 10 - bar.y,
     },
-    1200,
-    roomy
+    1200
   );
   await d.cell(f.refs.frequent, dash[f.refs.frequent].formula);
   await d.hidePointer();
   await d.say('Repeat buyers: top 15 customers by orders');
-  await d.drift(1800, 1.02);
+  // Portrait shows this wide table small: a short look, the close-ups below carry the numbers.
+  await d.drift(portrait ? 1000 : 1800, 1.02);
   await d.say('');
   await d.stage('wrapFormula', 560);
   const tableTop = await d.stage('cellBox', 'B' + (f.refs.frequentTitleRow + 3));
   await close(740, tableTop.y + 20, 1000);
   await d.say('Each count is a COUNTUNIQUEIFS on the data tab');
-  await d.drift(2600, 1.03);
+  await d.drift(2200, 1.03);
+  // The count's column lies far right of the formula's text: the camera goes along the row to
+  // the selected cell, its count beside the customer's total sales.
+  await d.say('');
+  // The count's column to the table's right edge, title to total: the caption lies below it.
+  const countColumn = f.refs.frequent.replace(/\d+$/, '');
+  const counts = await d.stage(
+    'cellBox',
+    `${countColumn}${f.refs.frequentTitleRow}:Y${f.refs.frequentTitleRow + 17}`
+  );
+  await d.look(
+    { x: counts.x - 300, y: counts.y - 10, w: counts.w + 330, h: counts.h + 20 },
+    1100,
+    roomy
+  );
+  await d.say(`Its result: ${f.top[1]} orders, the most of any customer`);
+  await d.drift(2000, 1.03);
 
   /* ---- The hidden helper tab ---- */
   await d.say('');
-  await d.stage('wrapFormula', null);
   await d.tab(CHART_DATA_TAB, true);
-  await Promise.all([d.look('app', 1100, { band: true }), swap('chart-data')]);
-  await d.stage('formula', 'A1', 'Revenue by Product Category');
+  await Promise.all([
+    d.look('app', 1100, { band: true }),
+    swap('chart-data', ['A1', 'Revenue by Product Category']),
+  ]);
   await d.reveal(800);
   await d.say('Behind the charts, a hidden helper tab the dashboard wrote');
   await d.drift(2000, 1.03);
