@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chatSheetFixture } from './helpers/chat-sheet-fixture.mjs';
+import { DOMAINS } from '../tools/chat-bench/scenarios.mjs';
 
 // The sheet tool calls of a dashboard built over a tab and of generated sample data, as a live
 // Gemini replay made them: labels beside KPI formulas, edit after edit of one range, a chart over
@@ -426,17 +427,27 @@ test('the prompt and tools say each edit returns the next editToken and large da
     prompt,
     /editToken \(each edit returns the next one\), sheetName and range or a part of it/
   );
+  // The example sizes its rows by a name for the rows asked, so no row count anchors the size.
+  const example = /Generate sample data \(about 10 columns unless asked\) as ONE set_formulas formula, header and rows in one array: (=LET\(n,\d+,\{.*MAKEARRAY\(n,.*\}\)), n the rows asked \(up to 100,000; on a new tab first create_sheet count n\+1\), then freeze it with copy_range values, range and destination its one cell\./.exec(
+    prompt
+  );
+  assert.ok(example, 'the generate rule');
+  assert.doesNotMatch(prompt, /MAKEARRAY\(\d/);
+  // The example is a formula the policy accepts, with its whole result known.
+  const n = Number(/^=LET\(n,(\d+),/.exec(example[1])[1]);
+  // A model that copies the example's size must not land on a benchmark scenario's row count, or
+  // the benchmark could not see the example anchoring the size it generates.
+  for (const domain of DOMAINS) assert.notEqual(n, domain.rows, domain.id + ' asks for ' + domain.rows + ' rows');
+  assert.deepEqual(
+    { ...f.api.dmvChatSheetFormulaCheck_(f.session, example[1], { sheet: f.sheet }).shape },
+    { rows: n + 1, columns: 2 }
+  );
+  // Realistic data in general terms, and a shortfall said as the tool gave it.
+  assert.match(prompt, /Skew it like real data: keys mostly seen once, a few often, seasonal dates\./);
   assert.match(
     prompt,
-    /Generate sample data \(about 10 columns unless asked\) as ONE set_formulas formula, header and rows in one array: (=\{.*MAKEARRAY.*RANDBETWEEN.*\}),/
+    /If fewer rows than asked land, say how many and the reason a tool gave; never name a limit no tool returned\./
   );
-  // The example is a formula the policy accepts, with its whole result guarded.
-  const example = /in one array: (=\{.*\}), then freeze/.exec(prompt)[1];
-  assert.deepEqual(
-    { ...f.api.dmvChatSheetFormulaCheck_(f.session, example, { sheet: f.sheet }).shape },
-    { rows: 1001, columns: 3 }
-  );
-  assert.match(prompt, /then freeze it with copy_range values, range and destination its one cell/);
   assert.match(
     prompt,
     /Never read every row of large data: KPIs are SUMIFS, COUNTIFS, AVERAGEIFS or QUERY over whole columns, charts read a create_pivot summary, not a QUERY/
@@ -692,10 +703,9 @@ test('filter without a range is a tab action over the tab data, however large', 
 test('the prompt and tools put pivots and charts before formats, and chart a pivot by its chartRange', () => {
   const f = chatSheetFixture();
   const prompt = f.api.dmvChatSystemPrompt_(f.session);
-  assert.match(
-    prompt,
-    /\(for data already in a tab: a new tab in small calls: edit_sheet KPI formulas, create_pivot, create_chart over its chartRange, then at most two format calls over whole blocks; not save_dashboard\)/
-  );
+  // A whole dashboard over tab data is save_dashboard with tab datasets (dashboard-tabs tests);
+  // pivots and charts stay the way to add to a tab by hand.
+  assert.doesNotMatch(prompt, /not save_dashboard/);
   const tools = Object.fromEntries(f.api.dmvChatTools_(f.session).map((tool) => [tool.name, tool]));
   assert.match(tools.create_pivot.description, /chartRange/);
   assert.match(tools.edit_sheet.description, /\(freeze, filter without a range, insert/);

@@ -1245,6 +1245,11 @@ function installPreview(initial) {
           if (name === 'withFailureHandler') return (next) => runner(success, next);
           return (...args) =>
             setTimeout(() => {
+              // A call Apps Script never answers: neither handler runs.
+              if (window.DATAMOOV_PREVIEW_HANG_NEXT === name) {
+                window.DATAMOOV_PREVIEW_HANG_NEXT = '';
+                return;
+              }
               try {
                 if (!handlers[name]) throw new Error('Unknown preview method: ' + name);
                 if (window.DATAMOOV_PREVIEW_FAIL_NEXT === name) {

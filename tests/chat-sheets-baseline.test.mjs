@@ -530,7 +530,8 @@ test('baseline: set_values refuses wrong shapes, non-literals and oversized edit
         },
         inspected
       ),
-    /^Error: Use only the documented fields for this sheet action\.$/
+    // The refusal names the field it does not take, and the ones it does.
+    /^Error: Use only the documented fields for this sheet action\. Not allowed here: requests\. Allowed: action, sheetName, range, editToken, confirmToken, values\.$/
   );
   assert.throws(
     () =>
@@ -592,10 +593,10 @@ test('baseline: every edit needs a matching, fresh, unchanged inspection and the
     'format',
     'sort',
     'filter',
-    'rename_sheet',
   ]) {
-    // freeze is a tab action (chat-sheet-dashboard-flow), like create_sheet; format, sort and
-    // filter without an editToken need no inspection (chat-sheet-sweep-edits).
+    // freeze is a tab action (chat-sheet-dashboard-flow), like create_sheet and rename_sheet
+    // (chat-sheet-own-tabs); format, sort and filter without an editToken need no inspection
+    // (chat-sheet-sweep-edits).
     if (!['format', 'sort', 'filter'].includes(action))
       assert.throws(
         () => f.api.dmvChatEditSheet_(f.session, { action, sheetName: 'Output', range: 'A1' }),
@@ -1257,7 +1258,7 @@ test('baseline: create_sheet sends one exact addSheet, needs no inspection and m
   for (const [input, message] of [
     [
       { newName: 'Analysis' },
-      /^Error: A tab with that name already exists\. Choose another name\.$/,
+      /^Error: This request already made the tab "Analysis" \(1,000 rows\): edit it \(no inspection needed\), or create_sheet a free name such as "Analysis 2"\.$/,
     ],
     [{ newName: 'Output' }, /already exists/],
     [{ newName: 'a/b' }, /^Error: The output tab name contains unsupported characters\.$/],
@@ -1266,7 +1267,7 @@ test('baseline: create_sheet sends one exact addSheet, needs no inspection and m
     // sheetName, range and editToken are left out (chat-sheet-dashboard-flow); others refused.
     [
       { newName: 'Fine', values: [['x']] },
-      /^Error: Use only the documented fields for this sheet action\.$/,
+      /^Error: Use only the documented fields for this sheet action\. Not allowed here: values\. Allowed: action, newName, count\.$/,
     ],
   ])
     assert.throws(
@@ -1306,17 +1307,18 @@ test('baseline: rename_sheet sends one exact title update and refuses tabs saved
       },
     ],
   });
+  // A tab action: the inspected range the call carries is left out (chat-sheet-own-tabs).
   assertIncludes(result, {
     ok: true,
     action: 'rename_sheet',
     sheetName: 'Renamed',
-    url: url(f.sheet.id, 'A1:B3'),
-    range: 'A1:B3',
+    url: url(f.sheet.id, 'A1'),
+    range: null,
   });
   assertIncludes(plain(f.session.events.at(-1)), {
     kind: 'write',
-    text: 'Updated Output!A1:B3',
-    links: [{ label: 'Renamed', url: url(f.sheet.id, 'A1:B3') }],
+    text: 'Renamed tab Output to Renamed',
+    links: [{ label: 'Renamed', url: url(f.sheet.id, 'A1') }],
   });
   assert.equal(f.sheet.name, 'Renamed');
   assert.throws(
@@ -1843,7 +1845,12 @@ test('baseline: create_chart over a sheet range draws bars sideways, pies withou
     sheetName: 'Output',
     url: url(f.sheet.id, 'H2'),
   });
-  assert.equal(f.state.gets.length, before, 'an explicit anchor reads no chart positions');
+  // An explicit anchor too reads the chart positions once, so it never lands on another chart
+  // (chat-sheet-placement).
+  assert.deepEqual(
+    f.state.gets.slice(before).map((get) => get.options),
+    [{ fields: 'sheets(properties.sheetId,charts(chartId,position))' }]
+  );
   const open = (column) => ({
     sourceRange: {
       sources: [

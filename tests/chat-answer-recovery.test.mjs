@@ -307,3 +307,22 @@ test('an empty reply without a reason is still a failed answer, as its progress 
   assert.match(result.text, /returned no answer/);
   assert.equal(f.progress().status, 'failed');
 });
+
+test('an empty reply after tool work asks once for the answer, with what the request did', () => {
+  const f = fixture();
+  f.replies.push(reply('', [f.runReport()]), reply(''), reply('Spend was EUR 125.50.'));
+  const result = f.chat();
+  assert.equal(result.text, 'Spend was EUR 125.50.');
+  assert.equal(result.failed, false);
+  assert.equal(f.requests.length, 3);
+  assert.equal(f.fetched, 1, 'nothing runs again');
+  assert.equal(f.requests[2].tools.length, 0);
+  assert.match(lastNote(f.requests[2]), /no text/);
+  // When that reply is empty too, the answer says the completed steps are listed with it.
+  const g = fixture();
+  g.replies.push(reply('', [g.runReport()]), reply(''), reply(''));
+  const silent = g.chat();
+  assert.equal(g.requests.length, 3);
+  assert.equal(silent.failed, true);
+  assert.match(silent.text, /steps completed so far are listed/);
+});

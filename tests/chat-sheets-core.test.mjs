@@ -549,10 +549,10 @@ test('replacing more than 200 non-empty cells needs the user to confirm in the n
     text: 'Asked to confirm: ' + asked.summary,
     ref: 'confirmToken ' + asked.confirmToken,
   });
-  // The model cannot approve its own question in the same request.
+  // The model cannot approve its own question in the same request: it is told to ask and wait.
   assert.throws(
     () => f.edit('set_values', { values, confirmToken: asked.confirmToken }, inspected),
-    /not approved by the user in this request/
+    /The user has not answered this question yet: its token was issued in this request\. Ask the user with ask_user/
   );
   assert.throws(
     () => f.edit('set_values', { values, confirmToken: 'yes' }, inspected),

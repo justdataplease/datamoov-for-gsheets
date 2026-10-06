@@ -214,7 +214,10 @@ test('the complete Gemini toolset uses JSON Schema and retains nested constraint
   assert.equal(datasets.maxItems, 8);
   const dataset = datasets.items;
   assert.equal(dataset.type, 'object');
-  assert.deepEqual(dataset.required, ['connectionId', 'reportType', 'id', 'label', 'sheetName']);
+  // A dataset is a source query (connectionId, reportType, sheetName) or a tab read in place
+  // (sourceSheet), so only what both share is required; validation names what each kind needs.
+  assert.deepEqual(dataset.required, ['id', 'label']);
+  assert.equal(dataset.properties.sourceSheet.type, 'string');
   assert.equal(dataset.properties.maxRows.maximum, 1256);
   assert.equal(dataset.properties.maxRows.default, 1256);
   assert.equal(dataset.properties.maxRows.minimum, 1);

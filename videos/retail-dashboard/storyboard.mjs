@@ -67,7 +67,7 @@ export default async function (d) {
   await d.stage('title', 'Retail store sales');
   await d.card({
     kicker: 'New in DataMoov for Google Sheets',
-    title: 'From empty sheet to formula dashboard.',
+    title: 'Ask for a dashboard. Never leave the sheet.',
     hold: 2500,
   });
 

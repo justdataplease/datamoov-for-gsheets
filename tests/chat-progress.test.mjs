@@ -274,6 +274,39 @@ test('a request longer than one execution continues in the next, runs every step
   assert.throws(() => f.api.dmvChat({ resume: true }), /valid chat request ID/);
 });
 
+test('the tabs a request made stay known to it in the next execution', () => {
+  const f = fixture();
+  let sent = 0;
+  f.api.dmvAiComplete_ = () => {
+    sent++;
+    if (sent === 1) return reply('', [call('make_tab')]);
+    if (sent === 2) return reply('', [call('use_tab')]);
+    return reply('Done');
+  };
+  const seen = [];
+  f.api.dmvChatTools_ = () => [
+    {
+      name: 'make_tab',
+      run(session) {
+        session.newTabs.push(77);
+        f.advance(90000); // leaves less than resumeBelowMs of this execution's budget
+        return { ok: true };
+      },
+    },
+    {
+      name: 'use_tab',
+      run(session) {
+        seen.push(plain(session.newTabs));
+        return { ok: true };
+      },
+    },
+  ];
+  assert.deepEqual(plain(chat(f)), { pending: true });
+  const done = plain(f.api.dmvChat({ requestId: REQUEST, resume: true }));
+  assert.equal(done.text, 'Done');
+  assert.deepEqual(seen, [[77]]);
+});
+
 test('the time limit spans executions, and a request without an id keeps one execution', () => {
   // A model that keeps asking for 90-second reports until the limit forces a final answer.
   function busy(f) {

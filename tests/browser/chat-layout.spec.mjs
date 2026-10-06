@@ -190,3 +190,86 @@ test('a reopened sidebar continues the latest conversation and New chat forgets 
   await expect(page.locator('.chat-message')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => window.DATAMOOV_PREVIEW_CONVERSATION)).toBeNull();
 });
+
+test('a wide table keeps its words whole and scrolls sideways instead of growing tall', async ({
+  page,
+}) => {
+  await configuredChat(page);
+  const header = [
+    'Segment',
+    'Demographic',
+    'Impressions',
+    'Conversions',
+    'Conversion rate',
+    'Average order value',
+    'Landing page',
+    'Notes',
+  ];
+  const rows = [
+    [
+      'Group A',
+      'demographic',
+      '1,234,567',
+      '12,345',
+      '1.00%',
+      'EUR 45.10',
+      'https://example.com/landing/path/that-is-quite-long?campaign=autumn&source=newsletter',
+      'Strongest segment this quarter, ahead of the previous best by a comfortable margin.',
+    ],
+    ['Group B', 'professional', '987,654', '9,876', '1.00%', 'EUR 39.80', 'https://example.com/b', 'Steady.'],
+  ];
+  const line = (cells) => '| ' + cells.join(' | ') + ' |';
+  await answer(page, 'Compare the groups', {
+    text: ['Here is the comparison:', '', line(header), line(header.map(() => '---')), ...rows.map(line)].join('\n'),
+    events: [],
+    transcriptAppend: [],
+  });
+  const table = page.locator('.chat-message.assistant .chat-table-scroll table');
+  await expect(table.locator('tbody tr')).toHaveCount(2);
+  const layout = await page.evaluate(() => {
+    const scroll = document.querySelector('.chat-message.assistant .chat-table-scroll');
+    const table = scroll.querySelector('table');
+    // Lines a cell's text takes: one rectangle per line box it spans.
+    const lines = (cell) => {
+      const range = document.createRange();
+      range.selectNodeContents(cell);
+      return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+    };
+    const cells = [...table.querySelectorAll('th, td')];
+    return {
+      width: document.documentElement.clientWidth,
+      pageScroll: document.documentElement.scrollWidth,
+      scrolls: scroll.scrollWidth > scroll.clientWidth,
+      bubbleRight: document.querySelector('.chat-message.assistant').getBoundingClientRect().right,
+      // Every word up to 20 letters stays on one line; a phrase of short words keeps its width.
+      broken: cells
+        .filter((cell) => cell.textContent.length <= 20)
+        .filter((cell) => lines(cell) > 1)
+        .map((cell) => cell.textContent),
+      widest: Math.max(...cells.map((cell) => cell.getBoundingClientRect().width)),
+      tallest: Math.max(...[...table.rows].map((row) => row.getBoundingClientRect().height)),
+    };
+  });
+  expect(layout.broken).toEqual([]);
+  expect(layout.scrolls).toBe(true);
+  expect(layout.pageScroll).toBeLessThanOrEqual(layout.width);
+  expect(layout.bubbleRight).toBeLessThanOrEqual(layout.width);
+  // Long text wraps inside a readable column rather than one very wide or very tall one.
+  expect(layout.widest).toBeLessThanOrEqual(240);
+  expect(layout.tallest).toBeLessThanOrEqual(120);
+});
+
+test('a markdown rule line renders as a divider, not as literal dashes', async ({ page }) => {
+  await configuredChat(page);
+  await answer(page, 'Summarize', {
+    text: ['First part.', '', '---', '', 'Second part.', '***', '- - -', 'Third part.'].join('\n'),
+    events: [],
+    transcriptAppend: [],
+  });
+  const reply = page.locator('.chat-message.assistant .markdown');
+  await expect(reply.locator('hr')).toHaveCount(3);
+  await expect(reply.locator('p')).toHaveText(['First part.', 'Second part.', 'Third part.']);
+  await expect(reply).not.toContainText('---');
+  await expect(reply).not.toContainText('***');
+  await expect(reply.locator('li')).toHaveCount(0);
+});

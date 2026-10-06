@@ -7,11 +7,12 @@
    named functions) is refused by name, and a LET or LAMBDA name is never called: NAME(...) on
    one could reach a custom function of that name. Text inside string literals is data: a QUERY
    string that says IMPORTRANGE is not a call. When the size of a formula's result can be worked
-   out from the formula alone (a bounded range, SEQUENCE or MAKEARRAY with literal sizes,
-   TRANSPOSE or ARRAYFORMULA over those, array literals of them side by side or stacked, LET
-   names bound to them), its spill area is guarded, kept for undo, refused when it holds data and
-   added to the tab when it runs past its end; other array results are left to Sheets, which
-   never spills over data and shows #REF! instead, and the read-back reports it.
+   out from the formula alone (a bounded range, SEQUENCE or MAKEARRAY with literal sizes or LET
+   names bound to numbers, TRANSPOSE or ARRAYFORMULA over those, array literals of them side by
+   side or stacked, LET names bound to them), the rows and columns it needs past the tab's end
+   are added, and its spill area is guarded, kept for undo and refused when it holds data while
+   it fits maxSpillCells; other array results are left to Sheets, which never spills over data
+   and shows #REF! instead, and the read-back reports it.
 
    dmvChatSheetFormulaCheck_(session, formula, options) is the same policy for one formula, for
    other formulas chat writes, such as custom conditional-format rules: it throws a message
@@ -24,12 +25,18 @@ var DMV_FORMULA = {
   maxDepth: 100,
   // Exact spills larger than this are left to Sheets rather than read for undo.
   maxSpillCells: 50000,
+  // A tab grows for an exact result up to the rows create_sheet allows, never past them.
+  maxTabRows: 200000,
   // After writing, the window read below and right of the range when a result size is unknown.
   probeRows: 20,
   probeColumns: 8,
   maxErrors: 10,
   maxSamples: 8,
   maxSpills: 5,
+  // The areas a request's edits wrote that its end reads again for errors, and at most this many
+  // of their cells (dmvChatSheetWrittenErrors_).
+  wroteAreas: 30,
+  closingCells: 20000,
 };
 
 // Refused anywhere outside string literals, as a call or a name: each reaches outside this
@@ -450,9 +457,12 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
         );
     } while (true);
   }
-  function literal(argument) {
+  // A number written out, or a LET name bound to one.
+  function literal(argument, scope) {
     var token = argument && argument.to - argument.from === 1 && tokens[argument.from];
-    return token && token.type === 'number' ? Number(token.text) : null;
+    if (token && token.type === 'number') return Number(token.text);
+    var bound = token && token.type === 'name' && scope[token.text.toUpperCase()];
+    return bound && typeof bound.value === 'number' ? bound.value : null;
   }
   function call(token, scope, arrays) {
     var upper = deny(token);
@@ -481,11 +491,12 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
     depth--;
     return shape;
   }
-  // A LET name has the size of its value; a LAMBDA's names are known only when it runs (null).
-  function bind(scope, token, shape) {
+  // A LET name has the size of its value, and the value of a number; a LAMBDA's names are known
+  // only when it runs (null).
+  function bind(scope, token, shape, value) {
     var upper = deny(token);
     if (upper === 'TRUE' || upper === 'FALSE') fail(upper + ' cannot be a name', token.at);
-    scope[upper] = { shape: shape || null };
+    scope[upper] = { shape: shape || null, value: value === undefined ? null : value };
   }
   function letCall(token, scope, arrays) {
     var inner = Object.assign(Object.create(null), scope),
@@ -495,7 +506,9 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
     while (peek() && peek().type === 'name' && is(tokens[index + 1], ',')) {
       var name = tokens[index];
       index += 2;
-      bind(inner, name, expression(inner, arrays));
+      var from = index,
+        value = expression(inner, arrays);
+      bind(inner, name, value, literal({ from: from, to: index }, inner));
       expect(',');
       bindings++;
     }
@@ -534,10 +547,10 @@ function dmvChatSheetFormulaCheck_(session, formula, options) {
         ? { rows: shapes[0].columns, columns: shapes[0].rows }
         : null;
     if (upper === 'SEQUENCE' || upper === 'MAKEARRAY') {
-      var rows = literal(list[0]),
+      var rows = literal(list[0], scope),
         columns =
           list.length > 1 && !(upper === 'SEQUENCE' && list[1].to === list[1].from)
-            ? literal(list[1])
+            ? literal(list[1], scope)
             : 1;
       return Number.isInteger(rows) && Number.isInteger(columns) && rows > 0 && columns > 0
         ? { rows: rows, columns: columns }
@@ -697,14 +710,17 @@ function dmvChatSheetFormulaPolicy_(session, sheet, area, formulas) {
         startColumnIndex: column,
         endColumnIndex: column + shape.columns,
       };
+      // Sheets shows #REF! for a result past the end of the tab, so the edit adds the rows and
+      // columns an exact result needs first, up to maxTabRows; undo leaves them, empty.
+      if (spill.endRowIndex <= DMV_FORMULA.maxTabRows) {
+        grow.rows = Math.max(grow.rows, spill.endRowIndex - maxRows);
+        grow.columns = Math.max(grow.columns, spill.endColumnIndex - maxColumns);
+      }
+      // Too large to read for undo: left to Sheets, and read back by its exact size.
       if (shape.rows * shape.columns > DMV_FORMULA.maxSpillCells) {
-        unknown.push([row, column]);
+        unknown.push([row, column, shape.rows, shape.columns]);
         return;
       }
-      // Sheets shows #REF! for a result past the end of the tab, so the edit adds the rows and
-      // columns a guarded result needs first; undo leaves them, empty.
-      grow.rows = Math.max(grow.rows, spill.endRowIndex - maxRows);
-      grow.columns = Math.max(grow.columns, spill.endColumnIndex - maxColumns);
       // Results start at their own cell and grow right and down, so two of them can only meet
       // over a cell this edit writes: a value there, or a blank another result already fills.
       if (
@@ -808,7 +824,8 @@ function dmvChatSheetFormulaPolicy_(session, sheet, area, formulas) {
         columns: spill.endColumnIndex - spill.startColumnIndex,
       };
     }),
-    // Results of unknown size are looked for in a window below and right of the range.
+    // Results of unknown size are looked for in a window below and right of the range: [row,
+    // column], with the rows and columns of an exact one too large to guard.
     unknown: unknown,
     probe: unknown.length
       ? {
@@ -904,6 +921,8 @@ function dmvChatSheetFormulaReadBack_(session, written) {
     errorCount = 0,
     loading = [],
     samples = [],
+    // #REF! results that found no room (dmvChatSheetRoom_), for the note that says how to fix them.
+    rooms = [],
     seen = Object.create(null);
   function check(row, column) {
     var key = row + ':' + column,
@@ -924,6 +943,8 @@ function dmvChatSheetFormulaReadBack_(session, written) {
         error: DMV_FORMULA_ERRORS[error.type] || '#ERROR!',
         message: String(error.message || '').slice(0, 300),
       });
+    var room = error.type === 'REF' && dmvChatSheetRoom_(error.message);
+    if (room && rooms.length < DMV_FORMULA.maxErrors) rooms.push({ cell: name, kind: room });
   }
   function block(row, column, rows, columns) {
     var lines = [];
@@ -971,8 +992,17 @@ function dmvChatSheetFormulaReadBack_(session, written) {
       while (spilled(row, column + right + 1)) right++;
       while (spilled(row + down + 1, column)) down++;
       if (!right && !down) return;
-      for (var y = 0; y <= down; y++)
-        for (var x = 0; x <= right; x++) if (y || x) check(row + y, column + x);
+      // An exact result that spilled fills its whole size; the cells past the window are unread,
+      // so only those inside it are checked.
+      var exact = origin.length > 2;
+      if (exact) {
+        down = origin[2] - 1;
+        right = origin[3] - 1;
+      }
+      var lastY = exact ? Math.min(down, policy.probe.endRowIndex - row - 1) : down,
+        lastX = exact ? Math.min(right, policy.probe.endColumnIndex - column - 1) : right;
+      for (var y = 0; y <= lastY; y++)
+        for (var x = 0; x <= lastX; x++) if (y || x) check(row + y, column + x);
       if (spills.length >= DMV_FORMULA.maxSpills) return;
       var item = {
         cell: dmvChatA1_(row + 1, column + 1),
@@ -987,8 +1017,9 @@ function dmvChatSheetFormulaReadBack_(session, written) {
         sample_rows: block(row, column, down + 1, right + 1),
       };
       if (
-        row + down + 1 >= policy.probe.endRowIndex ||
-        column + right + 1 >= policy.probe.endColumnIndex
+        !exact &&
+        (row + down + 1 >= policy.probe.endRowIndex ||
+          column + right + 1 >= policy.probe.endColumnIndex)
       )
         item.note = 'Continues past the cells read back.';
       spills.push(item);
@@ -1001,9 +1032,175 @@ function dmvChatSheetFormulaReadBack_(session, written) {
     result.formulaErrors = errors;
     result.errorCount = errorCount;
     result.next =
+      dmvChatSheetRoomNote_(written.sheet, rooms) +
       'Some formulas returned errors. Nothing was rolled back: fix them with set_formulas and the editToken returned, or undo the edit with undo_sheet_edit.';
   }
   return result;
+}
+
+// Why a #REF! shows from Sheets' message: 'rows' or 'columns' when the tab ends before the result
+// does ("Result was not automatically expanded, please insert more rows."), 'data' when cells in
+// its way hold data ("... would overwrite data in H22."), else ''.
+function dmvChatSheetRoom_(message) {
+  var text = String(message || '');
+  if (/not automatically expanded/i.test(text)) return /columns/i.test(text) ? 'columns' : 'rows';
+  return /would overwrite data/i.test(text) ? 'data' : '';
+}
+
+// The start of the read-back's note for #REF! results that found no room: the formula may well
+// be right, so the note says how to make room rather than leave the error or give the formula up.
+function dmvChatSheetRoomNote_(sheet, rooms) {
+  return (
+    rooms
+      .map(function (room) {
+        if (room.kind === 'data')
+          return (
+            room.cell +
+            ' shows #REF! because cells in the way of its result hold data: clear them or move the formula. '
+          );
+        var size =
+          room.kind === 'rows' ? sheet.getMaxRows() + ' rows' : sheet.getMaxColumns() + ' columns';
+        return (
+          room.cell +
+          ' shows #REF! because its result needs more ' +
+          room.kind +
+          ' than the tab has (' +
+          sheet.getName() +
+          ' has ' +
+          size +
+          '): the formula may be right. Add ' +
+          room.kind +
+          ' with edit_sheet insert_' +
+          room.kind +
+          (room.kind === 'rows'
+            ? ', or write it on a tab made with create_sheet with a count of rows that fits'
+            : '') +
+          '. '
+        );
+      })
+      .join('') +
+    (rooms.length
+      ? 'A formula given up on is cleared (set_values, an empty string), never left showing #REF!. '
+      : '')
+  );
+}
+
+/* Errors left in written cells */
+
+// Keeps the cells an edit wrote (bounded GridRanges, with the spills of its array results) for
+// the end of the request, which reads them again: an input changed later can still break a
+// formula the edit's own read-back saw working. The latest areas are kept, each once.
+function dmvChatSheetWrote_(session, grids) {
+  var kept = session.wrote || [];
+  grids.forEach(function (grid) {
+    if (!grid || !Number.isInteger(grid.endRowIndex) || !Number.isInteger(grid.endColumnIndex))
+      return;
+    var area = {
+      sheetId: grid.sheetId,
+      startRowIndex: grid.startRowIndex || 0,
+      endRowIndex: grid.endRowIndex,
+      startColumnIndex: grid.startColumnIndex || 0,
+      endColumnIndex: grid.endColumnIndex,
+    };
+    var key = dmvChatGridKey_(area);
+    kept = kept
+      .filter(function (item) {
+        return dmvChatGridKey_(item) !== key;
+      })
+      .concat([area]);
+  });
+  session.wrote = kept.slice(-DMV_FORMULA.wroteAreas);
+}
+
+// A request that ends on a question (ask_user) goes on in the request with the user's answer, so
+// the areas it wrote are kept for that one, per spreadsheet and conversation as confirmations are
+// (dmvChatConfirmKey_). Without this, a formula left showing an error before the question was
+// never read again.
+function dmvChatSheetWroteKeep_(session) {
+  try {
+    var key = dmvChatConfirmKey_(session, 'wrote');
+    if (!(session.wrote || []).length) CacheService.getUserCache().remove(key);
+    else
+      CacheService.getUserCache().put(
+        key,
+        JSON.stringify(session.wrote),
+        DMV_SHEET_UNDO.confirmTtlSeconds
+      );
+  } catch (ignored) {
+    /* The answer's request then reads only the cells it writes itself. */
+  }
+}
+
+// At the start of a new request (dmvChatConfirmBegin_ has set its conversation): the areas the
+// request before it kept when it asked, read once.
+function dmvChatSheetWroteCarry_(session) {
+  try {
+    var cache = CacheService.getUserCache(),
+      key = dmvChatConfirmKey_(session, 'wrote');
+    var areas = JSON.parse(cache.get(key) || 'null');
+    cache.remove(key);
+    if (Array.isArray(areas))
+      dmvChatSheetWrote_(
+        session,
+        areas.filter(function (area) {
+          return !!area && typeof area === 'object' && Number.isInteger(area.sheetId);
+        })
+      );
+  } catch (ignored) {
+    /* Without them the request reads only the cells it writes. */
+  }
+}
+
+// The cells the request wrote that show a formula error now, as "Tab!C1 (#DIV/0!)", at most
+// maxErrors of them and then how many more. Reads at most closingCells cells, of tabs that still
+// exist, in time left before until (a timestamp); without time or on a failed read, none.
+function dmvChatSheetWrittenErrors_(session, until) {
+  var areas = session.wrote || [];
+  if (!areas.length || Date.now() > until) return [];
+  var deadline = session.deadline,
+    budget = DMV_FORMULA.closingCells,
+    grids = [],
+    names = [];
+  // Smaller areas first: a formula cell is not crowded out by a large block of data written later,
+  // which is read as far as the budget goes.
+  areas
+    .slice()
+    .sort(function (a, b) {
+      return dmvChatGridCells_(a) - dmvChatGridCells_(b);
+    })
+    .forEach(function (area) {
+      var columns = area.endColumnIndex - area.startColumnIndex,
+        rows = Math.min(area.endRowIndex - area.startRowIndex, Math.floor(budget / columns));
+      var sheet = rows < 1 ? null : dmvChatSheetById_(session, area.sheetId);
+      if (!sheet) return;
+      budget -= rows * columns;
+      // Each tab's name is looked up once: on Apps Script a lookup lists every tab.
+      names.push(sheet.getName());
+      grids.push(Object.assign({}, area, { endRowIndex: area.startRowIndex + rows }));
+    });
+  var found = [],
+    count = 0,
+    seen = Object.create(null);
+  // The read keeps to until, not to the tool deadline this closing may already be past.
+  session.deadline = until;
+  try {
+    dmvChatSheetBands_(session, grids, 'effectiveValue', function (index, row, column, cell) {
+      var error = cell && cell.effectiveValue && cell.effectiveValue.errorValue;
+      if (!error || error.type === 'LOADING') return;
+      var name = names[index] + '!' + dmvChatA1_(row + 1, column + 1);
+      if (seen[name]) return;
+      seen[name] = true;
+      if (++count <= DMV_FORMULA.maxErrors)
+        found.push(name + ' (' + (DMV_FORMULA_ERRORS[error.type] || '#ERROR!') + ')');
+    });
+  } catch (ignored) {
+    /* The answer goes out without the list rather than wait or fail. */
+    return [];
+  } finally {
+    session.deadline = deadline;
+  }
+  if (count > found.length) found.push('and ' + (count - found.length) + ' more');
+  return found;
 }
 
 /* search_sheets */
@@ -1162,10 +1359,22 @@ function dmvChatSearchPlan_(sheets, input) {
   return { plan: plan, skipped: skipped, cells: cells };
 }
 
+// Without a query (a model peeking at a range sends none), the named range's non-empty cells are
+// listed, up to limit; across tabs that lists nothing useful, so it is refused with the way.
 function dmvChatSearchFind_(session, input, sheets, limit) {
   var query = typeof input.query === 'number' ? String(input.query) : input.query;
-  if (typeof query !== 'string' || !query.length || query.length > DMV_SHEET_SEARCH.maxQuery)
-    throw new Error('query must be text of 1 to ' + DMV_SHEET_SEARCH.maxQuery + ' characters.');
+  var missing = query === undefined || query === '',
+    peek = missing && input.range !== undefined && !input.regex;
+  if (peek) query = '';
+  else if (typeof query !== 'string' || !query.length || query.length > DMV_SHEET_SEARCH.maxQuery)
+    throw new Error(
+      'query must be text of 1 to ' +
+        DMV_SHEET_SEARCH.maxQuery +
+        ' characters' +
+        (missing
+          ? ': what to find. To list the cells of a range, pass sheetName and range without query.'
+          : '.')
+    );
   if (input.lookIn !== undefined && input.lookIn !== 'values' && input.lookIn !== 'formulas')
     throw new Error('Choose lookIn values or formulas.');
   if (input.columns !== undefined || input.headerRows !== undefined)
@@ -1194,6 +1403,10 @@ function dmvChatSearchFind_(session, input, sheets, limit) {
         return false;
       }
       return pattern.test(text);
+    };
+  } else if (peek) {
+    test = function () {
+      return true;
     };
   } else {
     var wanted = matchCase ? query : query.toLowerCase(),
@@ -1236,17 +1449,21 @@ function dmvChatSearchFind_(session, input, sheets, limit) {
     .filter(function (link) {
       return link.url;
     });
+  var where = peek
+    ? planned.plan[0].sheet.getName() + '!' + dmvChatGridA1_(planned.plan[0].grid)
+    : '';
   session.events.push({
     kind: 'summary',
-    text:
-      'Searched ' +
-      planned.plan.length +
-      (planned.plan.length === 1 ? ' tab' : ' tabs') +
-      ' for "' +
-      query.slice(0, 40) +
-      '": ' +
-      total +
-      (total === 1 ? ' match' : ' matches'),
+    text: peek
+      ? 'Listed the non-empty cells of ' + where + ': ' + total
+      : 'Searched ' +
+        planned.plan.length +
+        (planned.plan.length === 1 ? ' tab' : ' tabs') +
+        ' for "' +
+        query.slice(0, 40) +
+        '": ' +
+        total +
+        (total === 1 ? ' match' : ' matches'),
     links: links,
     details: dmvChatDetails_([
       [
@@ -1273,6 +1490,12 @@ function dmvChatSearchFind_(session, input, sheets, limit) {
   if (total > matches.length)
     result.note =
       'Only the first ' + matches.length + ' matches are listed; narrow the search to see others.';
+  if (peek)
+    result.note =
+      'No query: every non-empty cell of ' +
+      where +
+      ' is listed.' +
+      (result.note ? ' ' + result.note : '');
   if (longCells) {
     result.longCells = longCells;
     result.note =

@@ -385,7 +385,9 @@
       // indent is dropped from the code lines.
       const fence = (line) => /^(\s*)```/.exec(line);
       const heading = (line) => /^(#{1,6})\s+(.+)$/.exec(line);
-      const listItem = (line) => /^\s{0,3}([-+*]|\d+[.)])\s+(.+)$/.exec(line);
+      // Three or more of one of - * _ (spaces allowed between) is a divider, not a list item.
+      const rule = (line) => /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line);
+      const listItem = (line) => !rule(line) && /^\s{0,3}([-+*]|\d+[.)])\s+(.+)$/.exec(line);
       const tableRule = (line) =>
         /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line || '');
       const cells = (line) =>
@@ -453,6 +455,11 @@
           body.append(scroll);
           continue;
         }
+        if (rule(line)) {
+          body.append(el('hr'));
+          index++;
+          continue;
+        }
         const first = listItem(line);
         if (first) {
           const ordered = /^\d/.test(first[1]),
@@ -476,6 +483,7 @@
           lines[index].trim() &&
           !fence(lines[index]) &&
           !heading(lines[index]) &&
+          !rule(lines[index]) &&
           !listItem(lines[index]) &&
           !(lines[index].includes('|') && tableRule(lines[index + 1]))
         )

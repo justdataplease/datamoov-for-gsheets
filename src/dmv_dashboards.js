@@ -62,6 +62,79 @@ function dmvDashboardNames_(values, maximum, label) {
   return values.slice();
 }
 
+// The values of a tile as its rules name them: each by the name it is saved under (a metric's
+// field, a ratio or formula key), which a metric's key (field__agg) also names.
+function dmvDashboardValueNames_(metrics, ratios, formulas) {
+  return metrics
+    .map(function (metric) {
+      return { name: metric.field, names: [metric.field, metric.field + '__' + metric.agg] };
+    })
+    .concat(
+      ratios.concat(formulas).map(function (item) {
+        return { name: item.key, names: [item.key] };
+      })
+    );
+}
+
+// The entry ({ name, names }) a name means (dmvNameMatches_); entries saved under one name
+// count once. Without a subject, null when it means none or several; with one, an error that
+// says which and names the valid entries.
+function dmvDashboardPick_(name, entries, subject, unknown) {
+  var distinct = [];
+  var found = dmvNameMatches_(name, entries, function (entry) {
+    return entry.names;
+  }).filter(function (entry) {
+    if (distinct.indexOf(entry.name) >= 0) return false;
+    distinct.push(entry.name);
+    return true;
+  });
+  if (found.length === 1) return found[0];
+  if (subject === undefined) return null;
+  var valid = [];
+  entries.forEach(function (entry) {
+    if (valid.indexOf(entry.name) < 0) valid.push(entry.name);
+  });
+  throw new Error(
+    subject +
+      (found.length ? ' could be any of ' + distinct.join(', ') + '.' : unknown) +
+      ' Name one of: ' +
+      valid.join(', ') +
+      '.'
+  );
+}
+
+// What a name that is no column of a tile most likely meant, after the columns an error lists,
+// or ''. A metric's key (column__agg) names its column and agg apart; a bare count counts rows.
+function dmvDashboardKeyHint_(name, columns) {
+  var text = String(name),
+    shown = function (column) {
+      return column.label || column.key;
+    };
+  var parts = /^(.+?)__(sum|avg|min|max|count_distinct|count)$/i.exec(text);
+  var stem =
+    parts &&
+    dmvNameMatches_(parts[1], columns, function (column) {
+      return [column.key, column.label];
+    });
+  if (stem && stem.length === 1)
+    return (
+      '. "' +
+      text.slice(0, 80) +
+      '" is ' +
+      shown(stem[0]) +
+      ' with agg ' +
+      parts[2].toLowerCase() +
+      ': a metric names the column and its agg apart, and ratios and formulas sum their columns themselves.'
+    );
+  if (dmvLooseName_(text) === 'count' && columns.length)
+    return (
+      '. No column is named count: count rows with a metric such as {field: "' +
+      shown(columns[0]) +
+      '", agg: "count"}.'
+    );
+  return '';
+}
+
 // The type of a tile column by the report's declared fields, or null for a field that is only
 // discovered at refresh, where compared tables and charts check again. source and currency,
 // the columns a mapping adds, are text.
@@ -74,18 +147,26 @@ function dmvDashboardFieldType_(dataset, name) {
     if (!entry) return name === 'source' || name === 'currency' ? 'text' : null;
     field = entry.field;
   }
-  var found = dmvDashboardDeclared_(dataset).filter(function (item) {
-    return item.key === field;
-  })[0];
+  var found = dmvDashboardDeclaredField_(dataset, field);
   return found ? found.type || 'text' : null;
 }
 
 // The fields a dataset's report declares; a report that discovers its fields declares none.
 function dmvDashboardDeclared_(dataset) {
+  if (dmvDashboardIsTab_(dataset)) return dataset.tabFields || [];
   var fields = dmvDefinition_(dmvConnector_(dataset.connectorId), dataset.reportType).fields;
   return (Array.isArray(fields) ? fields : []).filter(function (item) {
     return !!item && typeof item.key === 'string';
   });
+}
+
+// A declared field by key; a tab's columns also by header, without regard to case.
+function dmvDashboardDeclaredField_(dataset, name) {
+  if (dmvDashboardIsTab_(dataset))
+    return dmvDashboardTabField_(dmvDashboardDeclared_(dataset), name);
+  return dmvDashboardDeclared_(dataset).filter(function (item) {
+    return item.key === name;
+  })[0];
 }
 
 function dmvDashboardDated_(dataset, name) {
@@ -139,7 +220,31 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
   var ids = Object.create(null),
     labels = Object.create(null),
     tabs = Object.create(null),
-    queries = Object.create(null);
+    queries = Object.create(null),
+    // The tab datasets, checked against the tabs dashboards write once those are known.
+    read = [];
+  var others = null;
+  // A tab dataset reads a tab the user keeps: never one this dashboard or another one writes.
+  function readable(sheetName) {
+    var shown = String(sheetName).trim(),
+      name = shown.toLowerCase();
+    if (tabs[name])
+      throw new Error(
+        '"' +
+          shown +
+          '" is written by this dashboard, so a dataset cannot read it. Name the tab that holds the data.'
+      );
+    if (stored) return;
+    others = others || dmvDashboardOutputTabs_(spreadsheet, input.id);
+    if (others[name])
+      throw new Error(
+        '"' +
+          shown +
+          '" is output of the dashboard "' +
+          others[name] +
+          '". Read the tab or source its data comes from instead.'
+      );
+  }
   tabs[target.sheetName.toLowerCase()] = true;
   tabs[dmvDashboardChartTab_(target).toLowerCase()] = true;
   var datasets = input.datasets.map(function (dataset, index) {
@@ -147,6 +252,8 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
       'id',
       'label',
       'sheetName',
+      'sourceSheet',
+      'dateColumn',
       'connectorId',
       'connectionId',
       'reportType',
@@ -156,13 +263,23 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
       'maxRows',
       'mapping',
     ]);
-    var query = dmvValidateQuery_(dataset, spreadsheet);
-    query.maxRows = dmvDashboardInteger_(
-      dataset.maxRows === undefined ? DMV_LIMITS.defaultRows : dataset.maxRows,
-      1,
-      DMV_LIMITS.maxRows,
-      'Dataset row limit'
-    );
+    if (typeof dataset.sourceSheet === 'string') readable(dataset.sourceSheet);
+    // A tab of this spreadsheet, read in place (dmv_dashboard_tabs.js), or a source query.
+    var tabbed = dmvDashboardTabDataset_(dataset, spreadsheet, input.id);
+    if (!tabbed && dataset.dateColumn !== undefined)
+      throw new Error('dateColumn belongs to a dataset that reads a tab (sourceSheet).');
+    if (!tabbed && dataset.connectionId === undefined)
+      throw new Error(
+        'Give each dataset a source query (connectionId) or a tab of this spreadsheet with data (sourceSheet).'
+      );
+    var query = tabbed || dmvValidateQuery_(dataset, spreadsheet);
+    if (!tabbed)
+      query.maxRows = dmvDashboardInteger_(
+        dataset.maxRows === undefined ? DMV_LIMITS.defaultRows : dataset.maxRows,
+        1,
+        DMV_LIMITS.maxRows,
+        'Dataset row limit'
+      );
     var id = dataset.id === undefined ? 'dataset' + (index + 1) : dataset.id;
     if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,40}$/.test(id) || ids[id])
       throw new Error(
@@ -172,17 +289,26 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
     var label = dmvText_(dataset.label, 'Dataset label', 80, true);
     if (labels[label]) throw new Error('Use distinct dataset labels.');
     labels[label] = true;
-    var sheetName = dmvSheetName_(dataset.sheetName);
-    if (tabs[sheetName.toLowerCase()])
-      throw new Error('Give every dataset and the dashboard its own tab: ' + sheetName + '.');
-    tabs[sheetName.toLowerCase()] = true;
-    var identityQuery = Object.assign({}, query, { fields: query.fields.slice().sort() });
+    var validated;
+    if (tabbed) {
+      validated = Object.assign({ id: id, label: label }, tabbed);
+      Object.defineProperty(validated, 'tabFields', { value: tabbed.tabFields, enumerable: false });
+      read.push(validated);
+    } else {
+      var sheetName = dmvSheetName_(dataset.sheetName);
+      if (tabs[sheetName.toLowerCase()])
+        throw new Error('Give every dataset and the dashboard its own tab: ' + sheetName + '.');
+      tabs[sheetName.toLowerCase()] = true;
+      validated = Object.assign({}, query, { id: id, label: label, sheetName: sheetName });
+    }
+    var identityQuery = Object.assign({}, query, {
+      fields: tabbed ? [] : query.fields.slice().sort(),
+    });
     delete identityQuery.maxRows;
     var identity = JSON.stringify(dmvCanonical_(identityQuery));
     if (queries[identity])
       throw new Error('Do not include the same dataset query twice in a dashboard.');
     queries[identity] = true;
-    var validated = Object.assign({}, query, { id: id, label: label, sheetName: sheetName });
     if (dataset.mapping !== undefined) {
       if (!Array.isArray(dataset.mapping) || !dataset.mapping.length || dataset.mapping.length > 78)
         throw new Error('Map between one and 78 dataset columns.');
@@ -193,9 +319,19 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
           typeof entry.field !== 'string' ||
           !entry.field ||
           entry.field.length > 150 ||
-          (query.fields.length && query.fields.indexOf(entry.field) < 0)
+          (tabbed
+            ? !dmvDashboardTabField_(tabbed.tabFields, entry.field)
+            : query.fields.length && query.fields.indexOf(entry.field) < 0)
         )
-          throw new Error('Map selected dataset fields only.');
+          throw new Error(
+            tabbed
+              ? 'Map columns of ' +
+                  tabbed.sourceSheet +
+                  ' only: ' +
+                  tabbed.tabFields.map(dmvDashboardFieldLabel_).join(', ') +
+                  '.'
+              : 'Map selected dataset fields only.'
+          );
         if (
           typeof entry.key !== 'string' ||
           !/^[a-zA-Z][a-zA-Z0-9_]{0,79}$/.test(entry.key) ||
@@ -208,6 +344,10 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
       });
     }
     return validated;
+  });
+  // Checked again once every data tab of this dashboard is known.
+  read.forEach(function (dataset) {
+    readable(dataset.sourceSheet);
   });
   if (
     !Array.isArray(input.tiles) ||
@@ -275,7 +415,12 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
           : Object.keys(ids).filter(function (id) {
               return compared || !previousIds[id];
             })
-        : dmvDashboardNames_(tile.datasets, DMV_DASHBOARD.maxDatasets, 'tile datasets');
+        : // A compare that names a dataset the list leaves out reads it too: it can mean nothing else.
+          dmvDashboardNames_(tile.datasets, DMV_DASHBOARD.maxDatasets, 'tile datasets').concat(
+            named.filter(function (id) {
+              return tile.datasets.indexOf(id) < 0;
+            })
+          );
     if (
       !from.length ||
       from.some(function (id) {
@@ -305,12 +450,48 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
     var mapped = members.every(function (dataset) {
       return !!dataset.mapping;
     });
-    if (members.length > 1 && !mapped)
+    // Two periods of one report or one tab, compared one against the other, share their columns
+    // already: such a tile needs no mapping.
+    var paired = !mapped && dmvDashboardPaired_(tile.compare, members);
+    if (members.length > 1 && !mapped && !paired) {
+      var unmapped = members.filter(function (dataset) {
+        return !dataset.mapping;
+      });
+      var example = dmvDashboardDeclared_(unmapped[0])
+        .slice(0, 3)
+        .map(function (field) {
+          return (
+            '{field: "' +
+            field.key +
+            '", key: "' +
+            (field.key
+              .split('.')
+              .pop()
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, '_') || 'value') +
+            '"}'
+          );
+        });
       throw new Error(
         '"' +
           title +
-          '" reads several datasets, so each of them needs a mapping that gives their columns shared names.'
+          '" reads several datasets, so each of them needs a mapping that gives their columns shared names; ' +
+          unmapped
+            .map(function (dataset) {
+              return dataset.id;
+            })
+            .join(', ') +
+          (unmapped.length === 1 ? ' has none' : ' have none') +
+          '. Add mapping to each of ' +
+          members
+            .map(function (dataset) {
+              return dataset.id;
+            })
+            .join(', ') +
+          (example.length ? ', for example [' + example.join(', ') + ']' : '') +
+          ', and name the mapped keys in the tiles; or let this tile read one dataset.'
       );
+    }
     // Mapped columns are known now; columns of an unmapped dataset are checked at refresh.
     var allowed = mapped
       ? members[0].mapping
@@ -326,14 +507,52 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
           })
           .concat(['source', 'currency'])
       : null;
+    // A tile over one tab names its columns by header or key, as a refresh finds them.
+    var tab =
+      !allowed && (members.length === 1 || paired) && dmvDashboardIsTab_(members[0]) && members[0];
+    // A mapped name is saved as its mapped key.
     function known(name) {
-      if (allowed && allowed.indexOf(name) < 0)
+      if (allowed) {
+        var mapped = dmvNameMatches_(name, allowed, function (key) {
+          return [key];
+        });
+        if (mapped.length !== 1)
+          throw new Error(
+            '"' +
+              title +
+              '": unknown column "' +
+              name +
+              '". Mapped columns: ' +
+              allowed.join(', ') +
+              dmvDashboardKeyHint_(
+                name,
+                allowed.map(function (key) {
+                  return { key: key, label: key };
+                })
+              )
+          );
+        return mapped[0];
+      }
+      if (tab && !dmvDashboardTabField_(tab.tabFields, name))
         throw new Error(
-          '"' + title + '": unknown column "' + name + '". Mapped columns: ' + allowed.join(', ')
+          '"' +
+            title +
+            '": unknown column "' +
+            String(name).slice(0, 80) +
+            '". Columns of ' +
+            tab.sourceSheet +
+            ': ' +
+            tab.tabFields.map(dmvDashboardFieldLabel_).join(', ') +
+            dmvDashboardKeyHint_(name, tab.tabFields)
         );
       return name;
     }
-    var groupBy = dmvDashboardNames_(tile.groupBy || [], 6, 'groupBy columns').map(known);
+    // Checked again once mapped: two spellings of one column are the same column.
+    var groupBy = dmvDashboardNames_(
+      dmvDashboardNames_(tile.groupBy || [], 6, 'groupBy columns').map(known),
+      6,
+      'groupBy columns'
+    );
     if (
       !Array.isArray(tile.metrics === undefined ? [] : tile.metrics) ||
       (tile.metrics || []).length > 8
@@ -343,16 +562,17 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
     var metrics = (tile.metrics || []).map(function (metric) {
       dmvDashboardObject_(metric, ['field', 'agg']);
       var agg = metric.agg === undefined ? 'sum' : metric.agg;
-      if (
-        typeof metric.field !== 'string' ||
-        !metric.field ||
-        metric.field.length > 150 ||
-        ['sum', 'avg', 'min', 'max', 'count', 'count_distinct'].indexOf(agg) < 0 ||
-        metricKeys[metric.field + '__' + agg]
-      )
+      var valid =
+        typeof metric.field === 'string' &&
+        metric.field &&
+        metric.field.length <= 150 &&
+        ['sum', 'avg', 'min', 'max', 'count', 'count_distinct'].indexOf(agg) >= 0;
+      // Keyed by the mapped name: two spellings of one column are the same metric.
+      var field = valid ? known(metric.field) : '';
+      if (!valid || metricKeys[field + '__' + agg])
         throw new Error('"' + title + '": choose distinct metrics with a supported agg.');
-      metricKeys[metric.field + '__' + agg] = true;
-      return { field: known(metric.field), agg: agg };
+      metricKeys[field + '__' + agg] = true;
+      return { field: field, agg: agg };
     });
     // Ratios and filters are summarize settings; their columns are checked like metrics.
     if (!Array.isArray(tile.ratios || []) || (tile.ratios || []).length > 8)
@@ -455,23 +675,23 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
       // Values on the right axis are usually rates beside counts; on a column chart they are
       // drawn as lines, which is what Sheets offers for two scales.
       if (tile.secondaryAxis !== undefined) {
-        var keys = metrics
-          .map(function (metric) {
-            return metric.field;
-          })
-          .concat(
-            ratios.concat(formulas).map(function (item) {
-              return item.key;
-            })
-          );
-        var right = dmvDashboardNames_(tile.secondaryAxis, 8, 'secondaryAxis columns');
+        var axisNames = dmvDashboardValueNames_(metrics, ratios, formulas);
+        var keys = axisNames.map(function (entry) {
+          return entry.name;
+        });
+        var right = dmvDashboardNames_(tile.secondaryAxis, 8, 'secondaryAxis columns').map(
+          function (name) {
+            var picked = dmvDashboardPick_(name, axisNames);
+            return picked ? picked.name : name;
+          }
+        );
         if (
           ['line', 'column', 'area', 'scatter'].indexOf(type) < 0 ||
           groupBy.length > 1 ||
           !right.length ||
           right.length >= keys.length ||
-          right.some(function (key) {
-            return keys.indexOf(key) < 0;
+          right.some(function (key, index) {
+            return keys.indexOf(key) < 0 || right.indexOf(key) !== index;
           })
         )
           throw new Error(
@@ -502,7 +722,14 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
         throw new Error(
           '"' +
             title +
-            '": compare belongs on a kpi or table tile, or on a line, area or column chart over one date groupBy column, not stacked.'
+            '": compare belongs on a kpi or table tile, or on a line, area or column chart over one date groupBy column, not stacked. ' +
+            (['line', 'area', 'column'].indexOf(type) < 0
+              ? 'Make it a table grouped by ' +
+                (groupBy[0] || 'its columns') +
+                ', or leave compare out.'
+              : validated.stacked
+                ? 'Leave stacked out.'
+                : 'Group it by its date column alone, or leave compare out.')
         );
       var sides = ['current', 'previous'].map(function (side) {
         var value = tile.compare[side];
@@ -584,15 +811,11 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
     if (tile.highlight !== undefined) {
       if (type !== 'table')
         throw new Error('"' + title + '": highlight rules belong on a table tile.');
-      var names = metrics
-        .map(function (metric) {
-          return metric.field;
+      var named = dmvDashboardValueNames_(metrics, ratios, formulas).concat(
+        groupBy.map(function (name) {
+          return { name: name, names: [name], group: true };
         })
-        .concat(
-          ratios.concat(formulas).map(function (item) {
-            return item.key;
-          })
-        );
+      );
       if (
         !Array.isArray(tile.highlight) ||
         !tile.highlight.length ||
@@ -604,13 +827,20 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
         var number = function (value) {
           return typeof value === 'number' && isFinite(value);
         };
-        if (names.indexOf(rule.field) < 0 && groupBy.indexOf(rule.field) >= 0) {
+        var picked = dmvDashboardPick_(
+          rule.field,
+          named,
+          '"' + title + '": highlight field "' + String(rule.field).slice(0, 80) + '"',
+          ' is not a metric field, ratio key, formula key or groupBy column of this tile.'
+        );
+        var field = picked.name;
+        if (picked.group) {
           if (rule.ofTotal !== undefined)
             throw new Error(
               '"' +
                 title +
                 '": ofTotal is a multiple of an overall number, so it applies to metric fields, ratio keys and formula keys; "' +
-                rule.field +
+                field +
                 '" is a groupBy column, matched by a text value.'
             );
           if (
@@ -624,19 +854,11 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
               '"' +
                 title +
                 '": "' +
-                rule.field +
+                field +
                 '" is a groupBy column, so its highlight needs op (eq, ne, contains or in), a text value (comma-separated for in) and color (red, green or amber).'
             );
-          return { field: rule.field, op: rule.op, value: rule.value, color: rule.color };
+          return { field: field, op: rule.op, value: rule.value, color: rule.color };
         }
-        if (names.indexOf(rule.field) < 0)
-          throw new Error(
-            '"' +
-              title +
-              '": highlight field "' +
-              String(rule.field).slice(0, 80) +
-              '" is not a metric field, ratio key, formula key or groupBy column of this tile.'
-          );
         if (
           ['gt', 'gte', 'lt', 'lte', 'eq'].indexOf(rule.op) < 0 ||
           (rule.value === undefined) === (rule.ofTotal === undefined) ||
@@ -653,7 +875,7 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
         // The overall value of a sum or count is the total of every row, which no single row of
         // several can exceed: ofTotal is then a share of it.
         var metric = metrics.filter(function (item) {
-          return item.field === rule.field;
+          return item.field === field;
         })[0];
         if (
           !stored &&
@@ -665,12 +887,12 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
             '"' +
               title +
               '": the overall value of ' +
-              rule.field +
+              field +
               ' is its total over every row, so ofTotal on it is a share below 1, such as 0.1 for the rows holding at least a tenth of it (top converters: {field: "' +
-              rule.field +
+              field +
               '", op: "gte", ofTotal: 0.1, color: "green"}).'
           );
-        var entry = { field: rule.field, op: rule.op, color: rule.color };
+        var entry = { field: field, op: rule.op, color: rule.color };
         if (rule.value !== undefined) entry.value = rule.value;
         else entry.ofTotal = rule.ofTotal;
         return entry;
@@ -726,19 +948,22 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
   // Polarity colours changes: a rise is good unless the value is lower-is-better (a cost) or
   // neutral (spend, budget). Names are metric fields, ratio or formula keys; a name no tile uses (a
   // generic cpm on a dashboard without one) is dropped.
-  var known = Object.create(null);
+  var valued = [];
   tiles.forEach(function (tile) {
-    tile.metrics.forEach(function (metric) {
-      known[metric.field] = true;
-    });
-    (tile.ratios || []).concat(tile.formulas || []).forEach(function (item) {
-      known[item.key] = true;
-    });
+    valued = valued.concat(
+      dmvDashboardValueNames_(tile.metrics, tile.ratios || [], tile.formulas || [])
+    );
   });
   var polarity = {};
   ['lowerIsBetter', 'neutral'].forEach(function (name) {
     if (input[name] === undefined) return;
-    polarity[name] = dmvDashboardNames_(input[name], DMV_DASHBOARD.maxPolarity, name + ' names');
+    polarity[name] = [];
+    dmvDashboardNames_(input[name], DMV_DASHBOARD.maxPolarity, name + ' names').forEach(
+      function (key) {
+        var picked = dmvDashboardPick_(key, valued);
+        if (picked && polarity[name].indexOf(picked.name) < 0) polarity[name].push(picked.name);
+      }
+    );
   });
   if (
     (polarity.lowerIsBetter || []).some(function (key) {
@@ -746,11 +971,6 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
     })
   )
     throw new Error('A value is either lowerIsBetter or neutral, not both.');
-  Object.keys(polarity).forEach(function (name) {
-    polarity[name] = polarity[name].filter(function (key) {
-      return known[key];
-    });
-  });
   var schedule = dmvSchedule_(input.schedule);
   var plan = {
     name: dmvText_(input.name, 'Dashboard name', 80, true),
@@ -897,9 +1117,7 @@ function dmvDashboardFormulaColumn_(members, key) {
           : { key: key, type: 'number', summable: true };
       name = entry.field;
     }
-    var field = dmvDashboardDeclared_(dataset).filter(function (item) {
-      return item.key === name;
-    })[0];
+    var field = dmvDashboardDeclaredField_(dataset, name);
     if (!field) return { key: key, type: 'number', summable: true };
     if (!dataset.mapping) column.label = field.label || field.key;
     if (column.type === null) column.type = field.type || 'text';
@@ -1085,6 +1303,9 @@ function dmvDashboardSave_(input, legacy) {
     var fresh = dmvReopen_(spreadsheet),
       store = dmvStore_();
     plan.datasets
+      .filter(function (dataset) {
+        return !dmvDashboardIsTab_(dataset);
+      })
       .map(function (dataset) {
         return { sheetName: dataset.sheetName, output: id + '-d-' + dataset.id };
       })
@@ -1104,7 +1325,7 @@ function dmvDashboardSave_(input, legacy) {
               tab.sheetName +
               '" already exists and has content. Give this dashboard tab names that are not in the spreadsheet yet, for example "' +
               tab.sheetName +
-              ' 2".'
+              ' 2"; a dataset reads a tab in place with sourceSheet.'
           );
       });
     var dashboard = {
@@ -1113,8 +1334,11 @@ function dmvDashboardSave_(input, legacy) {
       revision: previous ? previous.revision + 1 : 1,
       name: plan.name,
       target: plan.target,
+      // A tab dataset's output is the user's tab it reads (tab), which nothing writes.
       outputs: plan.datasets.map(function (dataset) {
-        return { id: dataset.id, label: dataset.label, sheetName: dataset.sheetName };
+        return dmvDashboardIsTab_(dataset)
+          ? { id: dataset.id, label: dataset.label, sheetName: dataset.sourceSheet, tab: true }
+          : { id: dataset.id, label: dataset.label, sheetName: dataset.sheetName };
       }),
       chartCount: plan.tiles.filter(dmvDashboardIsChart_).length,
       // Listed outside the packed plan so connection guards need not unpack every dashboard.
@@ -1123,7 +1347,7 @@ function dmvDashboardSave_(input, legacy) {
           return dataset.connectionId;
         })
         .filter(function (connectionId, index, all) {
-          return all.indexOf(connectionId) === index;
+          return !!connectionId && all.indexOf(connectionId) === index;
         }),
       plan: dmvPack_(dmvDashboardPacked_(plan, !legacy)),
       chartIds: (previous && previous.chartIds) || [],
@@ -1294,6 +1518,30 @@ function dmvKeepDashboard(id) {
   });
 }
 
+// Whether a compare sets one unmapped dataset against another of the same report or the same
+// tab, the tile's only datasets: their columns are the same, so the tile reads each side as it is.
+function dmvDashboardPaired_(compare, members) {
+  if (!compare || typeof compare !== 'object' || members.length !== 2) return false;
+  var sides = ['current', 'previous'].map(function (side) {
+    var list = typeof compare[side] === 'string' ? [compare[side]] : compare[side];
+    return Array.isArray(list) && list.length === 1 ? list[0] : null;
+  });
+  var same = function (dataset) {
+    return dmvDashboardIsTab_(dataset)
+      ? 'tab|' + dataset.sourceSheet
+      : dataset.connectorId + '|' + dataset.reportType;
+  };
+  return (
+    !!sides[0] &&
+    !!sides[1] &&
+    sides[0] !== sides[1] &&
+    members.every(function (dataset) {
+      return !dataset.mapping && sides.indexOf(dataset.id) >= 0;
+    }) &&
+    same(members[0]) === same(members[1])
+  );
+}
+
 // Each previous dataset of a compare beside the current one it stands for: the one of the same
 // connection and report, or by list position when one account holds several datasets. null
 // when the two sides cannot be paired.
@@ -1306,7 +1554,9 @@ function dmvDashboardPairs_(byId, tile) {
     });
   if (now.length !== before.length) return null;
   var key = function (dataset) {
-    return dataset.connectionId + '|' + dataset.reportType;
+    return dmvDashboardIsTab_(dataset)
+      ? 'tab|' + dataset.sourceSheet
+      : dataset.connectionId + '|' + dataset.reportType;
   };
   var unique = function (list) {
     return list.every(function (dataset) {
@@ -1411,9 +1661,7 @@ function dmvDashboardCheckPeriodsAhead_(plan, today) {
     })
   )
     return;
-  var dated = plan.datasets.filter(function (dataset) {
-    return !!dmvDefinition_(dmvConnector_(dataset.connectorId), dataset.reportType).dateRange;
-  });
+  var dated = plan.datasets.filter(dmvDashboardPeriodic_);
   var relative = dated.some(function (dataset) {
     return (dataset.dateRange || {}).preset !== 'custom';
   });

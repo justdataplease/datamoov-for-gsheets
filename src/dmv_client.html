@@ -59,14 +59,23 @@
     };
     const defaultValue = (field) => (field.default == null ? '' : field.default);
     const fieldKey = (field) => field.key || field.name;
-    function notice(message, kind = 'success') {
+    // A notice belongs to the tab it is about (by default the open one) and shows only there;
+    // scope null shows it on every tab.
+    let noticeScope = null;
+    function noticeHidden() {
+      return !$('notice').textContent || (noticeScope !== null && noticeScope !== state.activeTab);
+    }
+    function notice(message, kind = 'success', scope = state.activeTab) {
+      noticeScope = scope;
       $('notice').textContent = message;
       $('notice').className = 'notice ' + kind;
       $('notice').setAttribute('role', kind === 'error' ? 'alert' : 'status');
-      $('notice').hidden = !message;
-      if (message && kind === 'error')
+      $('notice').hidden = noticeHidden();
+      if (!$('notice').hidden && kind === 'error')
         $('notice').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
+    // Report and dashboard cards can finish a run after the user opened another tab.
+    const reportsNotice = (message, kind = 'success') => notice(message, kind, 'reports');
     const TABS = ['reports', 'chat', 'connections', 'settings'];
     // Editors are screens inside a tab, not tabs of their own.
     const SCREENS = { compose: 'reports', connect: 'connections' };
@@ -87,9 +96,12 @@
         $('tab-' + item).setAttribute('aria-selected', String(item === selected));
         $('tab-' + item).tabIndex = item === selected ? 0 : -1;
       }
+      $('notice').hidden = noticeHidden();
     }
     async function busy(node, label, work) {
       const previous = node.textContent;
+      // A failure is about the tab the action started on, even if the user has moved on.
+      const scope = state.activeTab;
       const icon = node.classList.contains('icon-button');
       node.disabled = true;
       if (!icon) node.textContent = label;
@@ -97,7 +109,7 @@
       try {
         return await work();
       } catch (error) {
-        notice(error.message || 'Something went wrong. Please try again.', 'error');
+        notice(error.message || 'Something went wrong. Please try again.', 'error', scope);
         return null;
       } finally {
         node.disabled = false;
@@ -352,7 +364,7 @@
               const kept = await api('dmvKeepReport', report.id);
               upsertReport({ ...report, ...kept, draft: false });
               renderReports();
-              notice('Report saved. Edit it to set a refresh schedule.');
+              reportsNotice('Report saved. Edit it to set a refresh schedule.');
             })
           )
         );
@@ -368,12 +380,12 @@
             state.reports = state.reports.filter((item) => item.id !== report.id);
             renderReports();
             if (state.reportId === report.id) resetReport();
-            notice('Report removed. Existing sheet data was kept.');
+            reportsNotice('Report removed. Existing sheet data was kept.');
           })
         ),
         button(paused ? '▶ Resume' : '▶ Run', 'run-button', (event) =>
           busy(event.currentTarget, paused ? 'Resuming…' : 'Running…', async () => {
-            notice((paused ? 'Resuming ' : 'Refreshing ') + report.name + '…', 'info');
+            reportsNotice((paused ? 'Resuming ' : 'Refreshing ') + report.name + '…', 'info');
             try {
               const result = await api('dmvRunReport', report.id);
               if (result.pending) {
@@ -381,7 +393,7 @@
                 report.lastError = null;
                 report.status = 'paused';
                 renderReports();
-                notice(continuationMessage(report), 'info');
+                reportsNotice(continuationMessage(report), 'info');
                 return;
               }
               report.lastRun = result.updatedAt || new Date().toISOString();
@@ -390,7 +402,7 @@
               report.status = 'success';
               delete report.fetchedRowCount;
               renderReports();
-              notice(
+              reportsNotice(
                 (result.rowCount || 0).toLocaleString() +
                   ' rows updated in ' +
                   report.target.sheetName +
@@ -630,9 +642,9 @@
         const kept = await api('dmvKeepDashboard', dashboard.id);
         const current = state.dashboards.find((item) => item.id === dashboard.id) || dashboard;
         upsert(state.dashboards, { ...current, ...kept, draft: false });
-        notice('Dashboard saved. You can now schedule its refreshes on the card.');
+        reportsNotice('Dashboard saved. You can now schedule its refreshes on the card.');
       } catch (error) {
-        notice(error.message || 'The dashboard could not be saved.', 'error');
+        reportsNotice(error.message || 'The dashboard could not be saved.', 'error');
       } finally {
         renderDashboards();
       }
@@ -684,7 +696,7 @@
       });
       renderDashboards();
       scheduleDashboardPoll();
-      notice('Refreshing ' + dashboard.name + '...', 'info');
+      reportsNotice('Refreshing ' + dashboard.name + '...', 'info');
       try {
         const result = await api('dmvRunDashboard', dashboard.id);
         if (dashboardView.disposed || dashboardView.runs.get(dashboard.id) !== token) return;
@@ -702,7 +714,7 @@
           target: result.target || current.target,
           datasets: refreshed.length ? refreshed : current.datasets,
         });
-        notice(
+        reportsNotice(
           Number(result.rowCount || 0).toLocaleString() +
             ' rows refreshed in ' +
             refreshed.length +
@@ -721,7 +733,7 @@
           statusMessage: '',
           lastError: error.message,
         });
-        notice(error.message || 'The dashboard could not be refreshed.', 'error');
+        reportsNotice(error.message || 'The dashboard could not be refreshed.', 'error');
       } finally {
         if (dashboardView.runs.get(dashboard.id) === token) {
           dashboardView.runs.delete(dashboard.id);
@@ -777,7 +789,7 @@
           at: saved.at ?? null,
           nextRunAt: saved.nextRunAt ?? null,
         });
-        notice(
+        reportsNotice(
           saved.schedule === 'manual'
             ? 'This dashboard refreshes on demand.'
             : 'This dashboard refreshes ' +
@@ -785,7 +797,7 @@
                 ' in the background, without AI.'
         );
       } catch (error) {
-        notice(error.message || 'The schedule could not be saved.', 'error');
+        reportsNotice(error.message || 'The schedule could not be saved.', 'error');
       } finally {
         renderDashboards();
       }
@@ -815,13 +827,13 @@
         if (dashboardView.disposed || dashboardView.removals.get(dashboard.id) !== token) return;
         state.dashboards = state.dashboards.filter((item) => item.id !== dashboard.id);
         const count = Number(removed?.deletedTabs || 0);
-        notice(
+        reportsNotice(
           'Dashboard removed' +
             (count ? ' with its ' + count + (count === 1 ? ' tab.' : ' tabs.') : '.')
         );
       } catch (error) {
         if (!dashboardView.disposed && dashboardView.removals.get(dashboard.id) === token)
-          notice(error.message || 'The dashboard could not be removed.', 'error');
+          reportsNotice(error.message || 'The dashboard could not be removed.', 'error');
       } finally {
         if (dashboardView.removals.get(dashboard.id) === token) {
           dashboardView.removals.delete(dashboard.id);
@@ -1764,7 +1776,8 @@
       $('step-send').open = send;
     }
     // The browser's own hint names one field, on a step the user may have scrolled past; the
-    // line under Save names every field still to fill in or fix.
+    // line under Save names every field still to fill in or fix. The form is novalidate, or the
+    // browser would stop Save before the submit handler runs; reportValidity still gives the hint.
     function showMissing(show) {
       const names = [...$('report-form').querySelectorAll(':invalid')]
         .filter((node) => node.labels?.length)
@@ -1929,57 +1942,90 @@
             .map((part) => part.replace(/ /g, '\u00a0'))
             .join(' · ');
     }
+    // An Apps Script call can go unanswered, which would leave the spinner up for good. After
+    // BOOT_TIMEOUT_MS the window offers Try again; a late answer still opens the workspace unless
+    // a newer attempt has started since.
+    const BOOT_TIMEOUT_MS = 45000;
+    let bootAttempt = 0;
     async function bootstrap() {
+      const attempt = ++bootAttempt;
+      const current = () => attempt === bootAttempt;
+      const failed = (error) => {
+        if (!current()) return;
+        notice(error.message || 'Could not open the workspace.', 'error', null);
+        $('retry-bootstrap').hidden = false;
+      };
       resetDashboards();
       $('boot-state').hidden = false;
       $('retry-bootstrap').hidden = true;
+      const timedOut = {};
+      let timer;
+      const request = api('dmvBootstrap');
       try {
-        const data = await api('dmvBootstrap');
-        state.catalog = data.catalog || [];
-        state.connections = data.connections || [];
-        state.credentials = data.credentials || [];
-        state.families = data.credentialFamilies || [];
-        state.reports = data.reports || [];
-        state.dashboards = data.dashboards || [];
-        state.limits = data.limits || state.limits;
-        state.target = data.defaultTarget;
-        state.spreadsheetId = data.spreadsheetId;
-        if (data.dateTimezone)
-          $('date-help').textContent =
-            'Recent day ranges end yesterday. Date presets use ' +
-            data.dateTimezone +
-            '; provider reporting timezones appear in the preview.';
-        $('sheet-options').replaceChildren(
-          ...(data.sheetNames || []).map((name) => option(name, name))
-        );
-        renderReports();
-        renderDashboards();
-        scheduleDashboardPoll();
-        renderConnections();
-        renderCredentials();
-        renderBuildStamp(data.build);
-        if (window.dmvChatUi) window.dmvChatUi.bootstrap(data);
-        if (!state.loaded) {
-          resetReport();
-          resetConnection();
-          resetCredential();
-          $('report-fields').disabled = false;
-          $('connection-fields').disabled = false;
-          $('credential-fieldset').disabled = false;
-          state.loaded = true;
-        } else {
-          refreshConnections();
-          refreshCredentialChoices();
+        const data = await Promise.race([
+          request,
+          new Promise((resolve) => {
+            timer = window.setTimeout(resolve, BOOT_TIMEOUT_MS, timedOut);
+          }),
+        ]);
+        if (data !== timedOut) {
+          if (current()) openWorkspace(data);
+          return;
         }
-        if (!credentialImportRunning) $('import-credentials').disabled = false;
-        notice('');
-        if (data.welcome?.offer) offerWelcome();
+        request.then((late) => current() && openWorkspace(late)).catch(failed);
+        failed(
+          new Error(
+            'Opening your workspace is taking longer than usual. Try again, or close and reopen DataMoov.'
+          )
+        );
       } catch (error) {
-        notice(error.message || 'Could not open the workspace.', 'error');
-        $('retry-bootstrap').hidden = false;
+        failed(error);
       } finally {
-        $('boot-state').hidden = true;
+        window.clearTimeout(timer);
+        if (current()) $('boot-state').hidden = true;
       }
+    }
+    function openWorkspace(data) {
+      $('retry-bootstrap').hidden = true;
+      state.catalog = data.catalog || [];
+      state.connections = data.connections || [];
+      state.credentials = data.credentials || [];
+      state.families = data.credentialFamilies || [];
+      state.reports = data.reports || [];
+      state.dashboards = data.dashboards || [];
+      state.limits = data.limits || state.limits;
+      state.target = data.defaultTarget;
+      state.spreadsheetId = data.spreadsheetId;
+      if (data.dateTimezone)
+        $('date-help').textContent =
+          'Recent day ranges end yesterday. Date presets use ' +
+          data.dateTimezone +
+          '; provider reporting timezones appear in the preview.';
+      $('sheet-options').replaceChildren(
+        ...(data.sheetNames || []).map((name) => option(name, name))
+      );
+      renderReports();
+      renderDashboards();
+      scheduleDashboardPoll();
+      renderConnections();
+      renderCredentials();
+      renderBuildStamp(data.build);
+      if (window.dmvChatUi) window.dmvChatUi.bootstrap(data);
+      if (!state.loaded) {
+        resetReport();
+        resetConnection();
+        resetCredential();
+        $('report-fields').disabled = false;
+        $('connection-fields').disabled = false;
+        $('credential-fieldset').disabled = false;
+        state.loaded = true;
+      } else {
+        refreshConnections();
+        refreshCredentialChoices();
+      }
+      if (!credentialImportRunning) $('import-credentials').disabled = false;
+      notice('');
+      if (data.welcome?.offer) offerWelcome();
     }
     document.querySelectorAll('[data-tab]').forEach((node) => {
       node.addEventListener('click', () => tab(node.dataset.tab));

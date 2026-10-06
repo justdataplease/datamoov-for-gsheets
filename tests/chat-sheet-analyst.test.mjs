@@ -282,8 +282,15 @@ test('a No, another message or a replayed token leaves the confirmation unused',
     );
     return { f, token, first, second };
   };
+  // A plain No ends the request with one answer and no tool round, so no call can use the token.
+  {
+    const { f, second } = run({ text: 'No', extra: () => ({}) });
+    assert.equal(f.state.batches.length, 0);
+    assert.equal(f.requests.at(-1).tools, undefined, 'the answer to a No has no tools');
+    assert.equal(second.events.filter((event) => event.kind !== 'summary').length, 0);
+    assert.equal(f.value(f.sheet, 4, 1), 'ann@x.com');
+  }
   for (const answer of [
-    { text: 'No', extra: () => ({}) },
     { text: 'Keep both rows', extra: () => ({}) },
     { text: 'Yes', extra: () => ({ confirmToken: 'c' + '0'.repeat(32) }) },
   ]) {

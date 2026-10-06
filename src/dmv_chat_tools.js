@@ -91,14 +91,49 @@ function dmvChatStoreResult_(session, result) {
   return id;
 }
 
+// The result ids a chat request can use: those its tools returned, in this execution or an
+// earlier one of the request (the refs of its events), and those earlier turns replayed
+// (session.priorResults, which only a chat request sets).
+function dmvChatKnownResults_(session) {
+  var known = Object.keys(session.results);
+  var add = function (id) {
+    if (id && known.indexOf(id) < 0) known.push(id);
+  };
+  (session.events || []).forEach(function (event) {
+    var match = /^r[a-f0-9]{8}\b/.exec(String(event.ref || ''));
+    add(match && match[0]);
+  });
+  (session.priorResults || []).forEach(add);
+  return known;
+}
+
+// What a chat request may use instead of an id it never had: models invent ids shaped like the
+// ones in their instructions, which "expired" would send back to the same guess.
+function dmvChatResultChoices_(session) {
+  if (!Array.isArray(session.priorResults)) return '';
+  var known = dmvChatKnownResults_(session);
+  return known.length
+    ? ' Results of this chat: ' +
+        known.slice(-10).join(', ') +
+        '. Use one of them, or get new data with run_report, or read_sheet for a tab.'
+    : ' No result exists yet in this chat: get the data first with run_report, or read_sheet for a tab.';
+}
+
 function dmvChatResult_(session, id) {
   id = String(id || '');
   if (!/^r[a-f0-9]{8}$/.test(id))
     throw new Error(
-      'Unknown resultId. Use a resultId returned by run_report, combine_results, summarize or read_sheet.'
+      'Unknown resultId. Use a resultId returned by run_report, combine_results, summarize or read_sheet.' +
+        dmvChatResultChoices_(session)
     );
   if (session.results[id]) return session.results[id];
   var text = dmvChatCacheGet_('dmv:chat:' + id);
+  if (
+    text === null &&
+    Array.isArray(session.priorResults) &&
+    dmvChatKnownResults_(session).indexOf(id) < 0
+  )
+    throw new Error(id + ' is not a result of this chat.' + dmvChatResultChoices_(session));
   if (text === null) throw new Error('Result ' + id + ' has expired. Run the report again.');
   var parsed;
   try {
@@ -276,37 +311,89 @@ function dmvChatReportDetails_(connection, definition, query, dates, rows) {
   );
 }
 
-// A name matches a key before a label, so a ratio or formula key is never taken for an earlier
-// column labelled the same way; an exact key wins over one that differs only by case.
-function dmvChatColumn_(result, name, label) {
-  var wanted = String(name || '').toLowerCase();
-  var match = function (test) {
-    return result.columns.filter(test)[0];
-  };
-  var column =
-    match(function (item) {
-      return item.key === name;
-    }) ||
-    match(function (item) {
-      return item.key.toLowerCase() === wanted;
-    }) ||
-    match(function (item) {
-      return String(item.label || '').toLowerCase() === wanted;
+// A name as a comparison sees it once case, spaces and punctuation are set aside: "Total
+// Amount__sum" and total_amount__sum are both total_amount_sum. Letters beyond ASCII stay.
+function dmvLooseName_(name) {
+  return String(name)
+    .toLowerCase()
+    .replace(/[\s!-\/:-@\[-`{-~]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+// The items a name means, the one resolver for every key a tile or summary names. namesOf(item)
+// gives an item's key first, then its other names (a label, a metric's field__agg). A key in
+// exactly that spelling wins, then a key in any case, then another name in any case: each takes
+// the first item, as before. Last, the loose spelling (dmvLooseName_) counts only when it fits
+// one item. Returns [] for none, [item], or the items a loose name fits when there are several.
+function dmvNameMatches_(name, items, namesOf) {
+  var text = String(name === undefined || name === null ? '' : name),
+    lower = text.toLowerCase(),
+    loose = dmvLooseName_(text);
+  var listed = items.map(function (item) {
+    return namesOf(item)
+      .filter(function (each, index) {
+        return index === 0 || (each !== undefined && each !== null && each !== '');
+      })
+      .map(String);
+  });
+  var pick = function (test) {
+    var found = [];
+    items.forEach(function (item, index) {
+      if (found.indexOf(item) < 0 && test(listed[index])) found.push(item);
     });
-  if (!column)
+    return found;
+  };
+  var tiers = [
+    function (names) {
+      return names[0] === text;
+    },
+    function (names) {
+      return names[0].toLowerCase() === lower;
+    },
+    function (names) {
+      return names.slice(1).some(function (each) {
+        return each.toLowerCase() === lower;
+      });
+    },
+  ];
+  for (var tier = 0; tier < tiers.length; tier++) {
+    var found = pick(tiers[tier]);
+    if (found.length) return found.slice(0, 1);
+  }
+  if (!loose) return [];
+  return pick(function (names) {
+    return names.some(function (each) {
+      return dmvLooseName_(each) === loose;
+    });
+  });
+}
+
+// A name matches a key before a label, so a ratio or formula key is never taken for an earlier
+// column labelled the same way; an exact key wins over one that differs only by case, and a
+// loose spelling ("Total Amount__sum") is taken only when it fits one column.
+function dmvChatColumn_(result, name, label) {
+  var keys = function (columns) {
+    return columns
+      .map(function (item) {
+        return item.key;
+      })
+      .join(', ');
+  };
+  var found = dmvNameMatches_(name, result.columns, function (item) {
+    return [item.key, item.label];
+  });
+  if (found.length !== 1)
     throw new Error(
       'Unknown ' +
         (label || 'column') +
         ' "' +
         String(name).slice(0, 80) +
-        '". Result columns are: ' +
-        result.columns
-          .map(function (item) {
-            return item.key;
-          })
-          .join(', ')
+        '"' +
+        (found.length ? ', which could be any of ' + keys(found) : '') +
+        '. Result columns are: ' +
+        keys(result.columns)
     );
-  return column;
+  return found[0];
 }
 
 /* run_report: the existing connector runtime, validated like a saved report. */
@@ -1151,14 +1238,14 @@ function dmvChatSummarize_(session, input) {
         'Use rankWithin groupBy columns and limitPerGroup together to rank separately within each group.'
       );
     var rankWithin = input.rankWithin.map(function (key) {
-      if (
-        typeof key !== 'string' ||
-        !groupBy.some(function (column) {
-          return column.key === key;
-        })
-      )
-        throw new Error('Every rankWithin column must also be in groupBy.');
-      return key;
+      var found =
+        typeof key === 'string'
+          ? dmvNameMatches_(key, groupBy, function (column) {
+              return [column.key, column.label];
+            })
+          : [];
+      if (found.length !== 1) throw new Error('Every rankWithin column must also be in groupBy.');
+      return found[0].key;
     });
     if (
       rankWithin.some(function (key, index) {
@@ -1328,7 +1415,17 @@ function dmvChatWriteSheet_(session, input) {
   try {
     dmvLocked_(function () {
       dmvWorkbookLocked_(function () {
-        if (session.spreadsheet.getSheetByName(sheetName)) dmvChatSheetTarget_(session, sheetName);
+        if (session.spreadsheet.getSheetByName(sheetName)) {
+          var tab = dmvChatSheetTarget_(session, sheetName),
+            matrix = normalized.matrix;
+          dmvChatChartCovers_(session, sheetName, {
+            sheetId: tab.getSheetId(),
+            startRowIndex: cell.row - 1,
+            endRowIndex: cell.row - 1 + matrix.length,
+            startColumnIndex: cell.column - 1,
+            endColumnIndex: cell.column - 1 + Math.max(1, (matrix[0] || []).length),
+          });
+        }
         dmvWriteReport_(session.spreadsheet, report, normalized);
         sheetUpdated = true;
       });
@@ -1593,26 +1690,83 @@ var DMV_CHART_TYPES = {
   pie: 'PIE',
 };
 
-// A new chart without an explicit anchor goes below the charts already beside the table,
-// so asking for a different chart never hides an earlier one.
-function dmvChatFreeChartAnchor_(session, sheetId, anchor) {
+// The cells the charts of a tab cover, as { top, left, bottom, right } (1-based, inclusive), at
+// the default 100-pixel columns and 21-pixel rows.
+function dmvChatChartRects_(session, sheetId) {
   var response = Sheets.Spreadsheets.get(session.spreadsheetId, {
     fields: 'sheets(properties.sheetId,charts(chartId,position))',
   });
-  var row = anchor.row;
+  var rects = [];
+  // How many cells of size pixels a chart's offset plus its extent spans, at least one.
+  var cells = function (offset, extent, size) {
+    return Math.max(1, Math.ceil(((offset || 0) + extent) / size));
+  };
   ((response && response.sheets) || []).forEach(function (item) {
     if (!item.properties || item.properties.sheetId !== sheetId) return;
     (item.charts || []).forEach(function (chart) {
       var overlay = chart.position && chart.position.overlayPosition;
       if (!overlay || !overlay.anchorCell) return;
-      var column = (overlay.anchorCell.columnIndex || 0) + 1;
-      // A 600px chart spans about six default columns; others sit elsewhere on the tab.
-      if (column < anchor.column - 5 || column > anchor.column + 5) return;
-      var height = (overlay.offsetYPixels || 0) + (overlay.heightPixels || 360);
-      row = Math.max(row, (overlay.anchorCell.rowIndex || 0) + 1 + Math.ceil(height / 21) + 1);
+      var top = (overlay.anchorCell.rowIndex || 0) + 1,
+        left = (overlay.anchorCell.columnIndex || 0) + 1;
+      rects.push({
+        top: top,
+        left: left,
+        bottom: top + cells(overlay.offsetYPixels, overlay.heightPixels || 360, 21) - 1,
+        right: left + cells(overlay.offsetXPixels, overlay.widthPixels || 600, 100) - 1,
+      });
     });
   });
-  return { row: row, column: anchor.column };
+  return rects;
+}
+
+function dmvChatRectA1_(rect) {
+  return dmvChatA1_(rect.top, rect.left) + ':' + dmvChatA1_(rect.bottom, rect.right);
+}
+
+// The first chart rect a block of rows by columns at { row, column } overlaps, or null.
+function dmvChatRectOver_(rects, at, rows, columns) {
+  return (
+    rects.filter(function (rect) {
+      return (
+        at.row <= rect.bottom &&
+        at.row + rows - 1 >= rect.top &&
+        at.column <= rect.right &&
+        at.column + columns - 1 >= rect.left
+      );
+    })[0] || null
+  );
+}
+
+// The nearest place in the same column, going down, where the block covers no chart.
+function dmvChatRectFree_(rects, at, rows, columns) {
+  var place = { row: at.row, column: at.column },
+    over;
+  for (var i = 0; i <= rects.length && (over = dmvChatRectOver_(rects, place, rows, columns)); i++)
+    place.row = over.bottom + 2;
+  return place;
+}
+
+// A new table must not go into empty cells under a chart, where nobody sees it: refused with the
+// first free place in its column. grid is the table's GridRange.
+function dmvChatChartCovers_(session, sheetName, grid) {
+  var rects = dmvChatChartRects_(session, grid.sheetId),
+    at = { row: grid.startRowIndex + 1, column: grid.startColumnIndex + 1 },
+    rows = grid.endRowIndex - grid.startRowIndex,
+    columns = grid.endColumnIndex - grid.startColumnIndex,
+    over = dmvChatRectOver_(rects, at, rows, columns);
+  if (!over) return;
+  var free = dmvChatRectFree_(rects, at, rows, columns);
+  throw new Error(
+    'The chart at ' +
+      dmvChatRectA1_(over) +
+      ' of "' +
+      sheetName +
+      '" covers ' +
+      dmvChatGridA1_(grid) +
+      ', so the table would sit hidden under it. Put it at ' +
+      dmvChatA1_(free.row, free.column) +
+      ' or another free cell instead.'
+  );
 }
 
 function dmvChatCreateChart_(session, input) {
@@ -1738,8 +1892,9 @@ function dmvChatCreateChart_(session, input) {
       }),
     };
   var anchor = input.anchorCell
-    ? dmvCell_(input.anchorCell)
-    : { row: area.row, column: area.column + area.columns.length + 1 };
+      ? dmvCell_(input.anchorCell)
+      : { row: area.row, column: area.column + area.columns.length + 1 },
+    moved = '';
   var text =
     'Added a ' +
     String(input.chartType).toLowerCase() +
@@ -1753,7 +1908,21 @@ function dmvChatCreateChart_(session, input) {
       throw new Error(
         'The chart source tab changed. Read or write the table again before charting.'
       );
-    if (!input.anchorCell) anchor = dmvChatFreeChartAnchor_(session, area.sheetId, anchor);
+    // A chart never hides an earlier one: from its anchor, it goes down to free space.
+    var rects = dmvChatChartRects_(session, area.sheetId),
+      over = dmvChatRectOver_(rects, anchor, 18, 6);
+    if (over) {
+      var free = dmvChatRectFree_(rects, anchor, 18, 6);
+      if (input.anchorCell)
+        moved =
+          dmvChatA1_(anchor.row, anchor.column) +
+          ' lay over the chart at ' +
+          dmvChatRectA1_(over) +
+          ', so the chart went to ' +
+          dmvChatA1_(free.row, free.column) +
+          '.';
+      anchor = free;
+    }
     var added = Sheets.Spreadsheets.batchUpdate(
       {
         requests: [
@@ -1812,6 +1981,7 @@ function dmvChatCreateChart_(session, input) {
     anchorCell: dmvChatA1_(anchor.row, anchor.column),
     title: title,
   };
+  if (moved) result.note = moved;
   if (snapped)
     result.range =
       dmvChatA1_(area.row, area.column) +

@@ -14,3 +14,7 @@ coverage/
 # Social videos: renders and intermediate frames stay local (the folder syncs to Drive).
 videos/kit/.render/
 videos/*/out/
+
+# Test browser profile and benchmark results: private, and outside .local/ because the video
+# privacy check scans .local/ for values to keep off screen and these hold generic ones.
+.scratch/

@@ -1334,8 +1334,12 @@
     overflow-x: auto;
     margin: 8px 0;
   }
+  /* Columns keep their natural width and the box scrolls sideways: a narrow sidebar would
+     otherwise squeeze every column and break its words. Long text wraps at 16em and only a
+     word wider than that (a URL) breaks. */
   .chat-table-scroll table {
-    width: 100%;
+    width: max-content;
+    min-width: 100%;
     border-collapse: collapse;
     font-size: 10px;
   }
@@ -1344,8 +1348,14 @@
     border: 1px solid var(--line);
     padding: 5px 7px;
     text-align: left;
-    min-width: 65px;
+    max-width: 16em;
     white-space: normal;
+    overflow-wrap: break-word;
+  }
+  .markdown hr {
+    border: 0;
+    border-top: 1px solid var(--line);
+    margin: 10px 0;
   }
   .chat-table-scroll th {
     background: #e9ebf2;

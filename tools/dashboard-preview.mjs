@@ -3,7 +3,7 @@
 // model per tab and renders each tab to HTML and a Playwright PNG under data/dashboard-preview/.
 // No network and no deployment: what you see is what the batch would draw, approximately.
 //
-//   node tools/dashboard-preview.mjs [--plan v2|v2-basic|v1] [--refresh] [--html-only] [--root <dir>]
+//   node tools/dashboard-preview.mjs [--plan v2|v2-basic|v1|tab] [--refresh] [--html-only] [--root <dir>]
 //                                    [--fixture <module>] [--out <dir>]
 //
 // --root runs another checkout's src/ and tests/helpers/ (for example a git archive of HEAD), so
@@ -625,6 +625,72 @@ function planFor(tier, connections) {
   });
 }
 
+// A dashboard over the saved report's tab: two periods of one tab compared, as chat plans it.
+function tabPlan() {
+  const period = (id, label, preset) => ({
+    id,
+    label,
+    sourceSheet: 'Campaign Report',
+    dateColumn: 'Date',
+    dateRange: { preset },
+  });
+  const compare = { current: 'now', previous: 'before' };
+  const cpa = { key: 'cpa', label: 'CPA', numerator: 'Spend', denominator: 'Conversions' };
+  const roas = { key: 'roas', label: 'ROAS', numerator: 'Conversion value', denominator: 'Spend' };
+  return {
+    name: 'Campaign report overview',
+    target: { sheetName: 'Campaign Report Dashboard' },
+    datasets: [
+      period('now', 'Last 30 days', 'last30'),
+      period('before', 'Previous 30 days', 'previous30'),
+    ],
+    tiles: [
+      {
+        title: 'Headline',
+        type: 'kpi',
+        metrics: sum('Spend', 'Conversions', 'Conversion value'),
+        ratios: [cpa, roas],
+        compare,
+      },
+      {
+        title: 'Weekly spend',
+        type: 'line',
+        groupBy: ['Date'],
+        dateBucket: 'week',
+        metrics: sum('Spend'),
+        compare,
+      },
+      {
+        title: 'Spend by campaign',
+        type: 'bar',
+        datasets: ['now'],
+        groupBy: ['Campaign'],
+        metrics: sum('Spend'),
+      },
+      {
+        title: 'Conversions by channel',
+        type: 'column',
+        datasets: ['now'],
+        groupBy: ['Channel type'],
+        metrics: sum('Conversions'),
+      },
+      {
+        title: 'Campaigns to act on',
+        type: 'table',
+        groupBy: ['Campaign'],
+        metrics: sum('Spend', 'Conversions'),
+        ratios: [cpa],
+        orderBy: { field: 'cpa', direction: 'desc' },
+        limit: 15,
+        compare,
+        highlight: [{ field: 'cpa', op: 'gt', ofTotal: 1.5, color: 'red' }],
+      },
+    ],
+    lowerIsBetter: ['cpa'],
+    neutral: ['Spend'],
+  };
+}
+
 // Saves the richest plan the runtime accepts (or the one asked for), then refreshes it.
 async function buildDashboard({ tier, refresh, sourceRoot }) {
   const sandbox = path.join(sourceRoot, 'tests', 'helpers', 'datamoov-sandbox.mjs');
@@ -634,9 +700,25 @@ async function buildDashboard({ tier, refresh, sourceRoot }) {
   f.book.timezone = 'America/Los_Angeles';
   f.advance(Date.parse('2026-10-01T10:29:00Z') - f.api.Date.now());
   const connections = registerFixture(f);
+  // --plan tab: a saved report's tab, read in place by a dashboard (sourceSheet datasets).
+  if (tier === 'tab') {
+    const report = plain(
+      f.api.dmvSaveReport({
+        name: 'Campaign report',
+        connectorId: 'google_ads_fixture',
+        connectionId: connections[0].id,
+        reportType: 'campaign_daily',
+        fields: CAMPAIGN_FIELDS.map((item) => item.key),
+        dateRange: { preset: 'last90' },
+        target: { sheetName: 'Campaign Report', startCell: 'A1' },
+        maxRows: 30000,
+      })
+    );
+    f.api.dmvRunReport(report.id);
+  }
   const attempts = [];
   for (const candidate of tier ? [tier] : TIERS) {
-    const input = planFor(candidate, connections);
+    const input = candidate === 'tab' ? tabPlan() : planFor(candidate, connections);
     try {
       const saved = plain(f.api.dmvSaveDashboard(input));
       const before = f.book.sheets.map((sheet) => ({
@@ -1859,7 +1941,8 @@ function useFixture(fixture) {
 async function main() {
   const args = process.argv.slice(2);
   const tier = args.includes('--plan') ? args[args.indexOf('--plan') + 1] : null;
-  if (tier && !TIERS.includes(tier)) throw new Error('--plan takes ' + TIERS.join(', '));
+  const plans = [...TIERS, 'tab'];
+  if (tier && !plans.includes(tier)) throw new Error('--plan takes ' + plans.join(', '));
   const sourceRoot = path.resolve(
     args.includes('--root') ? args[args.indexOf('--root') + 1] : root
   );
@@ -1885,11 +1968,15 @@ async function main() {
   const pages = [
     { name: 'dashboard', sheet: byTitle(target) },
     { name: 'chart-data', sheet: byTitle(target.slice(0, 86) + ' (chart data)') },
-    ...run.input.datasets.map((dataset) => ({
-      name: 'data-' + slug(dataset.sheetName),
-      sheet: byTitle(dataset.sheetName),
-      maxRows: DATA_TAB_ROWS,
-    })),
+    // A tab dataset's tab is the user's: drawn once, like a data tab.
+    ...run.input.datasets
+      .map((dataset) => dataset.sheetName || dataset.sourceSheet)
+      .filter((name, index, all) => all.indexOf(name) === index)
+      .map((name) => ({
+        name: 'data-' + slug(name),
+        sheet: byTitle(name),
+        maxRows: DATA_TAB_ROWS,
+      })),
   ].filter((page) => page.sheet);
   await mkdir(outDir, { recursive: true });
   await writeFile(

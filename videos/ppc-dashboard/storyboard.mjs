@@ -51,7 +51,7 @@ export default async function (d) {
   /* ---- Open ---- */
   await d.card({
     kicker: 'New in DataMoov for Google Sheets',
-    title: 'One prompt. A complete PPC dashboard.',
+    title: 'Ask once. Get the whole PPC dashboard.',
     hold: 2600,
   });
 

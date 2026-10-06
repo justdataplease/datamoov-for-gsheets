@@ -13,6 +13,19 @@ function dmvFormulaHas_(map, key) {
   return Object.prototype.hasOwnProperty.call(map, key);
 }
 
+// After an unknown column, what a metric's key (column__agg) in a formula should be: a formula
+// sums each column itself, so the summed column is named bare; other aggregates are metrics.
+function dmvFormulaKeyHint_(name, summable) {
+  var parts = /^(.+?)__(sum|avg|min|max|count_distinct|count)$/i.exec(String(name));
+  if (!parts) return '';
+  var stem = dmvNameMatches_(parts[1], summable, function (key) {
+    return [key];
+  });
+  if (parts[2].toLowerCase() === 'sum')
+    return stem.length === 1 ? '; a formula sums each column itself, so write ' + stem[0] : '';
+  return '; a formula reads summed columns only: a count, average, minimum or maximum is a metric of its own';
+}
+
 function dmvFormulaError_(problem, position, hint) {
   var error = new Error(problem + ' at position ' + position + (hint ? '; ' + hint : ''));
   error.position = position;
@@ -314,9 +327,9 @@ function dmvFormulaCompile_(formulas, columns, ratios) {
           throw dmvFormulaError_(
             'unknown column "' + node.name + '"',
             node.position,
-            summable.length
+            (summable.length
               ? 'summable columns are ' + summable.join(', ')
-              : 'this result has no summable columns'
+              : 'this result has no summable columns') + dmvFormulaKeyHint_(node.name, summable)
           );
         var column = columnMap[lower];
         if (!dmvFormulaSummable_(column))

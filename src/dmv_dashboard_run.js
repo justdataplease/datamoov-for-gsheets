@@ -130,6 +130,16 @@ function dmvDashboardInput_(session, datasets, tile, fetched, memo) {
     return tile.datasets.indexOf(dataset.id) >= 0;
   });
   if (members.length === 1 && !members[0].mapping) return (memo[key] = fetched[members[0].id]);
+  // Two unmapped periods of one report or tab (dmvDashboardPaired_): each side reads its own
+  // rows, and the tile's columns are the current side's.
+  if (dmvDashboardPaired_(tile.compare, members)) {
+    var current = fetched[dmvDashboardIds_(tile.compare.current)[0]];
+    memo['sides:' + current] = Object.create(null);
+    members.forEach(function (dataset) {
+      memo['sides:' + current][dataset.label] = fetched[dataset.id];
+    });
+    return (memo[key] = current);
+  }
   var shared = members[0].mapping.filter(function (entry) {
     return members.every(function (dataset) {
       return dataset.mapping.some(function (other) {
@@ -307,6 +317,24 @@ function dmvDashboardLabel_(value) {
 function dmvDashboardSide_(context, resultId, labels, renamed) {
   var key = 'side:' + resultId + JSON.stringify([labels, renamed || null]);
   if (context.memo[key]) return context.memo[key];
+  // A paired side is one dataset's own rows, with the source column a combined side has.
+  var direct = context.memo['sides:' + resultId];
+  if (direct && labels.length === 1 && direct[labels[0]]) {
+    var own = dmvChatResult_(context.session, direct[labels[0]]),
+      name = renamed ? renamed[0] : labels[0];
+    return (context.memo[key] = dmvChatStoreResult_(context.session, {
+      columns: [{ key: 'source', label: 'Source', type: 'text', role: 'dimension' }].concat(
+        own.columns.filter(function (column) {
+          return column.key !== 'source';
+        })
+      ),
+      rows: own.rows.map(function (row) {
+        return Object.assign({}, row, { source: name });
+      }),
+      metadata: own.metadata,
+      source: own.source,
+    }));
+  }
   var base = dmvChatResult_(context.session, resultId);
   var rows = base.rows
     .filter(function (row) {
@@ -487,6 +515,11 @@ function dmvRunDashboard(id, requestedDeadline) {
     );
     plan.toned = saved.toned === true;
     queries = plan.datasets.map(function (dataset, index) {
+      // A tab dataset reads its tab when the rows are read; its period is anchored here too.
+      if (dmvDashboardIsTab_(dataset)) {
+        dates[index] = dataset.dateRange ? dmvDateRange_(dataset.dateRange, today) : null;
+        return null;
+      }
       revisions[dataset.connectionId] = dmvConnectionRevision_(
         dmvReadConnection_(dataset.connectionId)
       );
@@ -567,16 +600,30 @@ function dmvRunDashboard(id, requestedDeadline) {
       tabs = {},
       notes = {},
       // What the page and its chart data hold, by output id, to name them in a write too large.
-      parts = {};
+      parts = {},
+      // Each tab the tab datasets read, read once, and how many data tabs this refresh writes.
+      read = {},
+      written = 0;
     plan.datasets.forEach(function (dataset, index) {
+      var tabbed = dmvDashboardIsTab_(dataset);
       phase(
-        'Fetching dataset ' + (index + 1) + ' of ' + plan.datasets.length + ': ' + dataset.label
+        (tabbed ? 'Reading' : 'Fetching') +
+          ' dataset ' +
+          (index + 1) +
+          ' of ' +
+          plan.datasets.length +
+          ': ' +
+          dataset.label
       );
-      var result;
+      var result, kept;
       try {
-        result = dmvFetchReport_(queries[index], spreadsheet, deadline);
+        if (tabbed) {
+          kept = dmvDashboardReadTab_(spreadsheet, dataset, dates[index], timezone, read);
+          result = kept.result;
+        } else result = dmvFetchReport_(queries[index], spreadsheet, deadline);
       } catch (error) {
         var reason = dmvSafeError_(error, {});
+        if (tabbed) throw new Error(dataset.label + ': ' + reason);
         // A dashboard needs the rows worth acting on, not every row: narrowing comes first,
         // the row limit setting only after it. A dataset's period is the page's, so a source's
         // advice to shorten the date range is left out: it would mix periods on one page.
@@ -644,6 +691,22 @@ function dmvRunDashboard(id, requestedDeadline) {
             : '';
       // A custom query without metrics (negative keywords, settings) reports no period.
       ranges[dataset.id] = dates[index] && metadata.dateFiltered !== false ? dates[index] : null;
+      if (tabbed) {
+        // The user's tab is read in place: formulas point at it and nothing is written to it.
+        tabs[dataset.id] = kept.tab;
+        sources.push([
+          dataset.label,
+          'Spreadsheet tab',
+          '',
+          dataset.dateColumn ? 'Rows by ' + dataset.dateColumn : 'Every row',
+          ranges[dataset.id] ? dmvDashboardPeriod_([ranges[dataset.id]]) : 'All dates',
+          result.rows.length,
+          dataset.sourceSheet,
+          '',
+        ]);
+        return;
+      }
+      written++;
       var connector = dmvConnector_(dataset.connectorId);
       var provenance = [
         dataset.label,
@@ -866,7 +929,7 @@ function dmvRunDashboard(id, requestedDeadline) {
       spreadsheet = dmvReopen_(spreadsheet);
       current.status = 'success';
       current.statusMessage =
-        'Updated ' + plan.datasets.length + ' data tabs and ' + page.charts.length + ' charts';
+        'Updated ' + written + ' data tabs and ' + page.charts.length + ' charts';
       current.lastRun = new Date().toISOString();
       current.lastRowCount = fetchedRows;
       current.outputs.forEach(function (output) {

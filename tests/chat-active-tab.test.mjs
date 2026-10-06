@@ -49,29 +49,28 @@ test('an empty active tab is named as empty', () => {
   assert.match(activeLine(promptWith(() => {})), /^Active tab[^\n]*"Sales"[^\n]*empty/);
 });
 
-test('the prompt says how to build a dashboard over data already in a tab', () => {
+test('the prompt sends a dashboard over data already in a tab to save_dashboard with tab datasets', () => {
   const prompt = promptWith(() => {});
   const rule = prompt.split('\n').find((line) => /data already in a tab/i.test(line));
   assert.ok(rule, 'a rule for dashboards over tab data');
-  for (const tool of ['create_pivot', 'create_chart', 'edit_sheet']) assert.match(rule, new RegExp(tool));
-  assert.match(rule, /not save_dashboard/);
-  assert.match(rule, /small/);
+  assert.ok(rule.startsWith('- DASHBOARDS.'), 'it is part of the DASHBOARDS rule');
+  assert.match(rule, /sourceSheet/);
+  assert.match(rule, /report output/);
+  assert.doesNotMatch(rule, /not save_dashboard/);
+  // The old hand-built path is gone: no KPI formulas, pivot and chart steps for a whole dashboard.
+  assert.doesNotMatch(prompt, /edit_sheet KPI formulas, create_pivot, create_chart over its chartRange/);
 });
 
-test('DASHBOARDS and CAPABILITIES scope save_dashboard to sources and name the tab-data way', () => {
+test('DASHBOARDS and CAPABILITIES name tabs as dashboard data', () => {
   const lines = promptWith(() => {}).split('\n');
-  const tabRules = lines.filter((line) => /data already in a tab/i.test(line));
-  assert.equal(tabRules.length, 2, tabRules.join('\n'));
-  assert.ok(tabRules[0].startsWith('- DASHBOARDS.'), 'the exception is part of the DASHBOARDS rule');
-  assert.match(tabRules[0], /^- DASHBOARDS\.[^.]*over selected sources/);
-  assert.ok(tabRules[1].startsWith('Dashboards (sidebar:dashboards)'), 'CAPABILITIES names it too');
-  assert.match(tabRules[1], /pivot/);
+  const capabilities = lines.find((line) => line.startsWith('Dashboards (sidebar:dashboards)'));
+  assert.match(capabilities, /tabs of this spreadsheet/);
+  assert.doesNotMatch(capabilities, /a pivot, charts/);
 });
 
-test('the exclusive save_dashboard call list is scoped to source dashboards', () => {
+test('the exclusive save_dashboard call list covers source and tab dashboards', () => {
   const rule = promptWith(() => {}).split('\n').find((line) => line.startsWith('- DASHBOARDS.'));
-  assert.match(rule, /Build a source dashboard with exactly these calls: list_dashboards/);
-  assert.doesNotMatch(rule, /Build a dashboard with exactly these calls/);
+  assert.match(rule, /Build it with exactly these calls: list_dashboards/);
 });
 
 test('headers are read as the sheet shows them, from the first non-empty row', () => {

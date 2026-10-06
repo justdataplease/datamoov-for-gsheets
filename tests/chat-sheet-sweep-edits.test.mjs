@@ -467,6 +467,40 @@ test('a chart one group short of a pivot summary, or with its total, charts ever
   assert.equal(chart('A20:B23').range, undefined);
 });
 
+test('undo of a format with autoFit puts the column widths back too', () => {
+  // A live undo said "autofit undone" while the widths stayed as autoFit left them.
+  const f = sweepFixture();
+  const widths = () => [1, 2, 3, 4].map((column) => f.pixelSize(f.sheet, 'COLUMNS', column));
+  f.byHand({
+    updateDimensionProperties: {
+      range: { sheetId: f.sheet.id, dimension: 'COLUMNS', startIndex: 1, endIndex: 2 },
+      properties: { pixelSize: 180 },
+      fields: 'pixelSize',
+    },
+  });
+  const before = widths();
+  const done = f.tabAction('format', {
+    sheetName: 'Sweep data',
+    range: 'A1:C1',
+    format: { bold: true, autoFit: true },
+  });
+  assert.equal(done.ok, true, JSON.stringify(done));
+  // The sandbox does not measure text, so the fitted widths are set as Sheets would.
+  for (const [index, size] of [[0, 64], [1, 90], [2, 75]])
+    f.byHand({
+      updateDimensionProperties: {
+        range: { sheetId: f.sheet.id, dimension: 'COLUMNS', startIndex: index, endIndex: index + 1 },
+        properties: { pixelSize: size },
+        fields: 'pixelSize',
+      },
+    });
+  const undone = f.undo();
+  assert.equal(undone.ok, true, JSON.stringify(undone));
+  assert.deepEqual(widths(), before);
+  assert.deepEqual(before, [100, 180, 100, 100]);
+  assert.deepEqual(f.format(f.sheet, 1, 1), {});
+});
+
 test('format can fit column widths to their content, alone or with a style', () => {
   const f = sweepFixture();
   const styled = f.tabAction('format', {

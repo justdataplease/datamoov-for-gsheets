@@ -186,6 +186,136 @@ test('copy_range values onto the source itself keeps the date format its formula
   assert.equal(frozen.note, undefined);
 });
 
+test('a freeze refuses a formula that shows an error, which has no result to keep', () => {
+  const f = fixture();
+  f.setError(
+    f.sheet,
+    1,
+    1,
+    { type: 'REF', message: 'Result was not automatically expanded, please insert more rows.' },
+    '=SEQUENCE(5000)'
+  );
+  const batches = f.state.batches.length;
+  assert.throws(
+    () => f.edit('copy_range', { destination: 'A1', pasteType: 'values' }, f.inspect('A1')),
+    /^Error: A1 shows #REF! \(Result was not automatically expanded, please insert more rows\.\)\. Fix its formula first:/
+  );
+  assert.equal(f.state.batches.length, batches);
+  assert.equal(f.formula(f.sheet, 1, 1), '=SEQUENCE(5000)');
+});
+
+test('a freeze leaves the blanks of a result blank, not stored as empty text', () => {
+  const formula = '={"Name","Score","Note";{"a";"b";"c"},{1;"";3},{"";"";""}}';
+  const f = chatSheetFixture({
+    formulaResult: (text) =>
+      text === formula
+        ? [
+            ['Name', 'Score', 'Note'],
+            ['a', 1, ''],
+            ['b', '', ''],
+            ['c', 3, ''],
+          ]
+        : text === '=""'
+          ? ''
+          : undefined,
+  });
+  f.edit('set_formulas', { formulas: [[formula]] }, f.inspect('A1'));
+  const frozen = f.edit('copy_range', { destination: 'A1', pasteType: 'values' }, f.inspect('A1'));
+  assert.equal(frozen.ok, true, JSON.stringify(frozen));
+  assert.equal(frozen.range, 'A1:C4');
+  // Sheets pastes a formula's "" as a stored empty text; the freeze clears those cells after it.
+  assert.deepEqual(
+    f.requests().slice(1),
+    [
+      [1, 2, 2, 3],
+      [2, 3, 1, 3],
+      [3, 4, 2, 3],
+    ].map(([top, bottom, left, right]) => ({
+      updateCells: { range: gridOf(f.sheet, top, bottom, left, right), fields: 'userEnteredValue' },
+    }))
+  );
+  const inspected = f.inspect('A1:C4');
+  assert.equal(inspected.nonEmptyCells, 8, 'the header, the names and two scores');
+  for (const [row, column] of [[2, 3], [3, 2], [3, 3], [4, 3]])
+    assert.equal(f.sheet.cells.has(row + ':' + column), false, row + ':' + column);
+  assert.equal(f.value(f.sheet, 4, 2), 3);
+  // A column with no value below its first row is named, so the reply cannot call it filled.
+  assert.deepEqual(frozen.blankColumns, ['C2:C4']);
+  // A blank left in place blocks no later result.
+  f.edit('set_formulas', { formulas: [['=""']] }, f.inspect('E1'));
+  const single = f.edit('copy_range', { destination: 'E1', pasteType: 'values' }, f.inspect('E1'));
+  assert.equal(single.ok, true);
+  assert.equal(f.sheet.cells.has('1:5'), false);
+  assert.equal(f.inspect('A1:C4').nonEmptyCells, 8);
+});
+
+test('the sandbox pastes a formula\'s "" as a stored empty text, as Sheets does', () => {
+  const formula = '={"x";""}';
+  const f = chatSheetFixture({
+    formulaResult: (text) => (text === formula ? [['x'], ['']] : undefined),
+  });
+  f.edit('set_formulas', { formulas: [[formula]] }, f.inspect('A1'));
+  f.byHand({
+    copyPaste: {
+      source: gridOf(f.sheet, 0, 2, 0, 1),
+      destination: gridOf(f.sheet, 0, 2, 0, 1),
+      pasteType: 'PASTE_VALUES',
+      pasteOrientation: 'NORMAL',
+    },
+  });
+  assert.equal(f.inspect('A1:A2').nonEmptyCells, 2, 'the empty text counts as a value');
+});
+
+test('a freeze larger than an inspection takes the formulas of its first row and refuses other ranges', () => {
+  const columns = ['=SEQUENCE(400)', '=SEQUENCE(400,1,2)', '=SEQUENCE(300,1,3)'];
+  const f = chatSheetFixture({
+    setup: (g) => (g.sheet.maxRows = 1000),
+    formulaResult: (text) => {
+      const at = columns.indexOf(text);
+      return at < 0 ? undefined : Array.from({ length: at === 2 ? 300 : 400 }, (_, r) => [r + 1 + at]);
+    },
+  });
+  f.edit('set_formulas', { formulas: [columns] }, f.inspect('A2:C2'));
+  const wide = (range, extra = {}) =>
+    f.tabAction('copy_range', {
+      sheetName: f.sheet.name,
+      range,
+      destination: range.split(':')[0],
+      pasteType: 'values',
+      ...extra,
+    });
+  // Not a freeze, or not starting at a formula: the inspection limit stands.
+  assert.throws(
+    () => wide('A2:C401', { destination: 'E2', editToken: f.inspect('A2:C3').editToken }),
+    /Inspect or edit at most 1,000 cells/
+  );
+  f.setCell(f.sheet, 1, 1, 'Label');
+  assert.throws(() => wide('A1:C401'), /A1 holds no formula/);
+  const batches = f.state.batches.length;
+  const frozen = wide('A2:C401');
+  assert.equal(frozen.ok, true, JSON.stringify(frozen));
+  assert.equal(frozen.range, 'A2:C401');
+  assert.equal(f.state.batches.length, batches + 1);
+  for (let column = 1; column <= 3; column++) assert.equal(f.formula(f.sheet, 2, column), '');
+  assert.equal(f.value(f.sheet, 401, 2), 401);
+  assert.equal(f.value(f.sheet, 301, 3), 302);
+  assert.equal(f.sheet.cells.has('302:3'), false);
+  // An entry of its own inside the range is not part of any result: refused, nothing changed.
+  f.edit('set_formulas', { formulas: [columns] }, f.inspect('E2:G2'));
+  f.setCell(f.sheet, 350, 7, 'by hand');
+  const before = f.state.batches.length;
+  assert.throws(() => wide('E2:G401'), /G350 there holds an entry of its own/);
+  assert.equal(f.state.batches.length, before);
+});
+
+test('set_formulas names a field it does not take, as other actions do', () => {
+  const f = fixture();
+  assert.throws(
+    () => f.edit('set_formulas', { formulas: [['=1', '=2'], ['=3', '=4']], destination: 'A1' }),
+    /Not allowed here: destination\. Allowed: action, sheetName, range, editToken, confirmToken, formulas\./
+  );
+});
+
 test('copy_range refuses bad destinations, needs its inspection and asks before replacing many cells', () => {
   const f = fixture();
   f.book.insertSheet('Summary');

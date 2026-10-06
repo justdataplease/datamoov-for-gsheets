@@ -10,15 +10,19 @@
              'none': needs neither (actions that create something new).
              Or a function of the input that returns one of these.
      fields  input keys the action takes besides action, sheetName, range, editToken and
-             confirmToken; any other key is refused.
-     builtIn  true for the built-in actions (dmv_chat_sheets.js): a refusal of other keys names
-             none, a tab-level one takes no confirmToken and a result without undo has no undoId.
+             confirmToken; any other key is refused, by a message that names it and the keys
+             the action takes.
+     builtIn  true for the built-in actions (dmv_chat_sheets.js): a tab-level one takes no
+             confirmToken and a result without undo has no undoId.
      plan(context)  validates the input and returns what to do. context holds session, input,
              sheet (the target tab or null), area (dmvChatSheetArea_ of the range or null) and
              snapshot (the inspected cells, from dmvChatSheetRead_, or null). It returns:
        requests   validated Sheets requests, sent in one batch (required)
        touches    bounded GridRanges whose cells change; guarded and, by default, snapshotted for
                   undo and checked unchanged before an undo (default: the inspected range)
+       wrote      GridRanges the edit enters values or formulas into, which the end of the
+                  request reads again for formula errors (default none: a sort, find/replace or
+                  cleanup only moves or edits what the user had, errors included)
        guard      more GridRanges to guard; a missing end index means the rest of the tab, so
                   { sheetId } guards a whole tab and { sheetId, startRowIndex: 9 } every row
                   from row 10 (what an insert or delete there moves)
@@ -30,7 +34,8 @@
                   confirm, the summary names the count once it passes 200 alone, and the yes
                   covers it); with overwrite, the count when undo cannot count touches
        confirm    a summary that makes the user confirm first (delete, dedupe, whole-tab
-                  find/replace)
+                  find/replace); row, column and tab changes on a tab this request made ask
+                  nothing (dmvChatActionOnMade_)
        undo       omit for a cell snapshot of touches; null when there is nothing to restore;
                   { none: DMV_SHEET_UNDO.noUndo } for row, column, move and tab edits, which
                   chat never undoes (asks first, and undo answers with version history), with
@@ -67,6 +72,11 @@
    call. */
 var DMV_SHEET_ACTIONS = {
   dimensionCount: 500,
+  // The most cleared rectangles a freeze sends to keep its blank cells blank (dmvChatActionBlanks_).
+  blankRanges: 5000,
+  // The most cells of a freeze whose shown values are read to find those blanks: a larger result
+  // (100,000 rows of 10 columns) is checked for entries alone, in the time an edit has.
+  blankCells: 300000,
   findCells: 50000,
   regexText: 5000,
   // Characters on which find_replace's ., $, \s and \b mean different things in JavaScript, Java
@@ -124,7 +134,8 @@ function dmvChatSheetActions_() {
   var span = ['start', 'count'];
   return {
     copy_range: {
-      fields: ['destination', 'pasteType'],
+      target: dmvChatActionPasteTarget_,
+      fields: ['range', 'destination', 'pasteType'],
       plan: function (context) {
         return dmvChatActionPaste_(context, false);
       },
@@ -525,6 +536,24 @@ function dmvChatActionListed_(items, total) {
 
 /* Copy and move */
 
+// copy_range values onto its own range needs no inspection when the range is larger than one
+// can take: a formula result too large to inspect is frozen from its formulas
+// (dmvChatActionFreezeArea_). Any other copy works on the inspected range.
+function dmvChatActionPasteTarget_(input) {
+  if (
+    !input ||
+    input.pasteType !== 'values' ||
+    typeof input.range !== 'string' ||
+    typeof input.destination !== 'string'
+  )
+    return 'range';
+  var range = input.range.replace(/^.*!/, ''),
+    corners = dmvChatSheetCorners_(range);
+  if (!corners || dmvChatSheetFits_(corners)) return 'range';
+  var to = input.destination.replace(/^.*!/, '').toUpperCase();
+  return to === corners.start.a1 || to === range.toUpperCase() ? 'sheet' : 'range';
+}
+
 function dmvChatActionPaste_(context, move) {
   var input = context.input,
     area = context.area,
@@ -544,6 +573,14 @@ function dmvChatActionPaste_(context, move) {
     );
   if (input.destination === undefined)
     throw new Error("Give the destination's top-left cell, such as 'Tab name'!B2.");
+  // A freeze too large to inspect (dmvChatActionPasteTarget_) starts from its range as given.
+  var inspected = !!area;
+  if (!inspected) {
+    var own = dmvChatActionA1_(context.session, input.range, sheet, 'range');
+    if (own.sheet.getSheetId() !== sheet.getSheetId())
+      throw new Error('range must be on tab "' + sheet.getName() + '", the sheetName given.');
+    area = context.area = { a1: own.a1, rows: own.rows, columns: own.columns, grid: own.grid };
+  }
   var target = dmvChatActionA1_(context.session, input.destination, sheet, 'destination');
   if (
     !(target.rows === 1 && target.columns === 1) &&
@@ -576,7 +613,10 @@ function dmvChatActionPaste_(context, move) {
     frozen = dmvChatGridKey_(destination) === dmvChatGridKey_(source);
   if (frozen && (move || type !== 'values'))
     throw new Error('The destination is the source itself. Choose another place.');
-  if (frozen) source = destination = dmvChatActionFreezeArea_(context);
+  if (!inspected && !frozen)
+    throw new Error('Inspect or edit at most 1,000 cells, 200 rows and 30 columns at a time.');
+  var freeze = frozen ? dmvChatActionFreezeArea_(context) : null;
+  if (freeze) source = destination = freeze.grid;
   var from = sheet.getName() + '!' + dmvChatGridA1_(source),
     to = target.sheet.getName() + '!' + dmvChatGridA1_(destination);
   var plan = {
@@ -607,9 +647,29 @@ function dmvChatActionPaste_(context, move) {
       },
     ];
     plan.touches = [destination];
+    // A paste of formats enters no values or formulas, so errors there are the user's own.
+    plan.wrote = type === 'formats' ? [] : [destination];
     plan.overwrite = !frozen;
-    if (frozen)
-      plan.requests = plan.requests.concat(dmvChatActionShownFormats_(context, destination));
+    if (freeze) {
+      var blanks = freeze.shown
+        ? dmvChatActionBlanks_(destination, freeze.shown)
+        : { requests: [], columns: [], left: 0 };
+      plan.requests = plan.requests.concat(
+        blanks.requests,
+        dmvChatActionShownFormats_(context, destination)
+      );
+      // So the reply never calls a column filled that the result left empty.
+      if (blanks.columns.length) plan.result.blankColumns = blanks.columns.slice(0, 10);
+      if (blanks.left)
+        plan.result.note =
+          blanks.left +
+          ' blank cells of the result were pasted as empty text, too scattered to clear in one edit.';
+      if (!freeze.shown)
+        plan.result.note =
+          'Any blank cells of the result were pasted as empty text: at more than ' +
+          DMV_SHEET_ACTIONS.blankCells +
+          ' cells, the result is too large to check for them in one edit.';
+    }
     if (type === 'all' || type === 'formats')
       plan.undo = dmvChatActionCopyUndo_(context.session, area.grid, destination, type === 'all');
     return plan;
@@ -637,6 +697,7 @@ function dmvChatActionPaste_(context, move) {
     },
   ];
   plan.touches = [area.grid, destination];
+  plan.wrote = [destination];
   plan.replaced = replaced;
   var reasons = ['Move ' + from + ' to ' + to + '?'];
   if (replaced > DMV_SHEET_UNDO.overwriteCells)
@@ -663,12 +724,6 @@ function dmvChatActionPaste_(context, move) {
   return plan;
 }
 
-// The range copy_range values freezes onto itself: the inspected range, grown to the whole array
-// result of a formula in its first cell, which can be larger than an inspection, so no result is
-// frozen in part. The result's size is read from the sheet, which shows it even when the formula
-// alone does not tell (QUERY, a computed MAKEARRAY): the cells right of and below the formula
-// that show a value nobody entered, up to the first entered cell, so an empty value inside the
-// result is kept too. Any other entry in the grown area outside the inspection is refused.
 // Pasted values keep no number format a formula's result only showed, so a date would read as
 // its serial number. Each column keeps the format its last row shows (a table's data row), set
 // on the cells where nothing was set.
@@ -698,60 +753,151 @@ function dmvChatActionShownFormats_(context, grid) {
   return requests;
 }
 
+// The range copy_range values freezes onto itself, as { grid, shown }: shown tells, per cell of
+// grid, whether it showed a value other than "" (null over blankCells cells, which are not read
+// for it). The range is grown to the whole array result of each formula it starts from, which
+// can be larger than an inspection, so no result is frozen in part. An inspected range starts from a formula in its first cell; a range larger than an inspection
+// (dmvChatActionPasteTarget_) from the formulas of its first row, the first in its first cell.
+// A result's size is read from the sheet, which shows it even when the formula alone does not
+// tell (QUERY, a computed MAKEARRAY): the cells right of and below the formula that show a value
+// nobody entered, up to the first entered cell, so an empty value inside the result is kept too.
+// Any other entry in the grown area, outside the inspection or besides those formulas, is
+// refused, and so is a formula that shows an error: it has no result to keep.
 function dmvChatActionFreezeArea_(context) {
-  var grid = context.area.grid,
-    entry = context.snapshot.cells[0][0].userEnteredValue;
-  if (!entry || !entry.formulaValue) return grid;
-  var row = grid.startRowIndex,
-    column = grid.startColumnIndex;
-  var right = {
+  var session = context.session,
+    sheet = context.sheet,
+    grid = context.area.grid,
+    row = grid.startRowIndex,
+    column = grid.startColumnIndex,
+    first = context.snapshot ? context.snapshot.cells[0][0] : null;
+  function entered(cell) {
+    return !!(cell.userEnteredValue && Object.keys(cell.userEnteredValue).length);
+  }
+  // A value other than "", which Sheets would paste as a stored empty text.
+  function shows(cell) {
+    return !!cell.effectiveValue && cell.effectiveValue.stringValue !== '';
+  }
+  function shown(cells) {
+    return cells.map(function (line) {
+      return line.map(shows);
+    });
+  }
+  function strip(top, bottom, left, right) {
+    return {
       sheetId: grid.sheetId,
-      startRowIndex: row,
-      endRowIndex: row + 1,
-      startColumnIndex: column + 1,
-      endColumnIndex: context.sheet.getMaxColumns(),
-    },
-    below = {
-      sheetId: grid.sheetId,
-      startRowIndex: row + 1,
-      endRowIndex: context.sheet.getMaxRows(),
-      startColumnIndex: column,
-      endColumnIndex: column + 1,
+      startRowIndex: top,
+      endRowIndex: bottom,
+      startColumnIndex: left,
+      endColumnIndex: right,
     };
-  var strips = [right, below].filter(function (strip) {
-    return dmvChatGridCells_(strip) > 0;
-  });
-  var extent = { right: 0, below: 0 };
-  dmvChatSheetCells_(context.session, strips, 'userEnteredValue,effectiveValue').forEach(
-    function (read) {
-      var across = read.grid === right,
-        line = across
-          ? read.cells[0]
-          : read.cells.map(function (cells) {
-              return cells[0];
-            });
-      for (var i = 0; i < line.length; i++) {
-        if (line[i].userEnteredValue && Object.keys(line[i].userEnteredValue).length) break;
-        if (line[i].effectiveValue) extent[across ? 'right' : 'below'] = i + 1;
-      }
+  }
+  // How many cells after a formula its result fills along a line.
+  function extent(line) {
+    var size = 0;
+    for (var i = 0; i < line.length; i++) {
+      if (entered(line[i])) break;
+      if (line[i].effectiveValue) size = i + 1;
     }
-  );
-  var grown = Object.assign({}, grid, {
-    endRowIndex: Math.max(grid.endRowIndex, row + 1 + extent.below),
-    endColumnIndex: Math.max(grid.endColumnIndex, column + 1 + extent.right),
+    return size;
+  }
+  var anchors = [],
+    last = sheet.getMaxColumns();
+  // The formula at line[at] of the first row and the width of its result.
+  function anchor(line, at) {
+    var cell = line[at],
+      a1 = dmvChatA1_(row + 1, column + at + 1);
+    if (!entered(cell) || !cell.userEnteredValue.formulaValue)
+      throw new Error(
+        a1 +
+          ' holds no formula. Only a formula result is frozen without an inspection: give its range from the row of its formulas, or inspect at most 1,000 cells.'
+      );
+    var error = cell.effectiveValue && cell.effectiveValue.errorValue;
+    if (error && error.type === 'LOADING')
+      throw new Error(a1 + ' is still calculating. Freeze it once it shows its result.');
+    if (error)
+      throw new Error(
+        a1 +
+          ' shows ' +
+          (DMV_FORMULA_ERRORS[error.type] || '#ERROR!') +
+          (error.message ? ' (' + String(error.message).slice(0, 200) + ')' : '') +
+          '. Fix its formula first: a freeze would keep the error, not a result.'
+      );
+    anchors.push({ column: column + at, right: extent(line.slice(at + 1)) });
+  }
+  if (first) {
+    if (!first.userEnteredValue || !first.userEnteredValue.formulaValue)
+      return { grid: grid, shown: shown(context.snapshot.cells) };
+    var across =
+      column + 1 < last
+        ? dmvChatSheetCells_(
+            session,
+            [strip(row, row + 1, column + 1, last)],
+            'userEnteredValue,effectiveValue'
+          )[0].cells[0]
+        : [];
+    anchor([first].concat(across), 0);
+  } else {
+    var line = dmvChatSheetCells_(
+      session,
+      [strip(row, row + 1, column, last)],
+      'userEnteredValue,effectiveValue'
+    )[0].cells[0];
+    for (var at = 0; at < grid.endColumnIndex - column; at++)
+      if (!at || entered(line[at])) anchor(line, at);
+  }
+  // How far each result reaches below its formula, read in bands without keeping the cells.
+  var downs = anchors.map(function (item) {
+      return strip(row + 1, sheet.getMaxRows(), item.column, item.column + 1);
+    }),
+    below = anchors.map(function () {
+      return 0;
+    }),
+    ended = [];
+  if (row + 1 < sheet.getMaxRows())
+    dmvChatSheetBands_(
+      session,
+      downs,
+      'userEnteredValue,effectiveValue',
+      function (index, r, c, cell) {
+        if (ended[index]) return;
+        if (entered(cell)) ended[index] = true;
+        else if (cell.effectiveValue) below[index] = r - row;
+      }
+    );
+  var grown = Object.assign({}, grid);
+  anchors.forEach(function (item, index) {
+    grown.endRowIndex = Math.max(grown.endRowIndex, row + 1 + below[index]);
+    grown.endColumnIndex = Math.max(grown.endColumnIndex, item.column + 1 + item.right);
   });
-  if (dmvChatGridKey_(grown) === dmvChatGridKey_(grid)) return grid;
+  if (first && dmvChatGridKey_(grown) === dmvChatGridKey_(grid))
+    return { grid: grid, shown: shown(context.snapshot.cells) };
   // Past an empty value the cells may belong to something else: an entry there, which the freeze
   // would turn into a value, means the result's end is not known. (Undo restores any other
-  // formula's array result this still reaches.)
-  var taken = [];
-  dmvChatSheetCells_(context.session, [grown], 'userEnteredValue')[0].cells.forEach(
-    function (line, r) {
-      line.forEach(function (cell, c) {
-        var inspected = row + r < grid.endRowIndex && column + c < grid.endColumnIndex;
-        if (!inspected && cell.userEnteredValue && Object.keys(cell.userEnteredValue).length)
-          taken.push(dmvChatA1_(row + r + 1, column + c + 1));
-      });
+  // formula's array result this still reaches.) One read in bands finds those entries and, up to
+  // blankCells, the cells that show a value.
+  var checked = dmvChatGridCells_(grown) <= DMV_SHEET_ACTIONS.blankCells,
+    found = checked
+      ? Array.from({ length: grown.endRowIndex - row }, function () {
+          return Array.from({ length: grown.endColumnIndex - column }, function () {
+            return false;
+          });
+        })
+      : null,
+    taken = [],
+    count = 0;
+  dmvChatSheetBands_(
+    session,
+    [grown],
+    checked ? 'userEnteredValue,effectiveValue' : 'userEnteredValue',
+    function (index, r, c, cell) {
+      if (found && shows(cell)) found[r - row][c - column] = true;
+      var own = first
+        ? r < grid.endRowIndex && c < grid.endColumnIndex
+        : r === row &&
+          anchors.some(function (item) {
+            return item.column === c;
+          });
+      if (!own && entered(cell) && ++count <= 3) taken.push(dmvChatA1_(r + 1, c + 1));
     }
   );
   if (taken.length)
@@ -760,13 +906,90 @@ function dmvChatActionFreezeArea_(context) {
         ': the result seems to fill ' +
         dmvChatGridA1_(grown) +
         ', but ' +
-        dmvChatActionListed_(taken) +
-        (taken.length === 1
-          ? ' there holds an entry of its own'
-          : ' there hold entries of their own') +
+        dmvChatActionListed_(taken, count) +
+        (count === 1 ? ' there holds an entry of its own' : ' there hold entries of their own') +
         ', so where it ends is not clear. Copy its values to another place instead.'
     );
-  return grown;
+  return { grid: grown, shown: found };
+}
+
+// Sheets pastes a formula's "" as a stored empty text, which is not blank: it counts as a value
+// and blocks array results. After a freeze, the cells of grid that showed no value or "" (false
+// in shown, as read before it) are cleared, in rectangles of rows blank in the same columns,
+// while there are at most blankRanges of them. Returns { requests, columns, left }: columns
+// names, as A1 ranges, the columns with no value below the first row, and left counts the blank
+// cells kept as empty text when they are too scattered to clear.
+function dmvChatActionBlanks_(grid, shown) {
+  var ranges = [],
+    open = Object.create(null),
+    count = 0,
+    empty =
+      shown.length > 1
+        ? shown[0].map(function () {
+            return true;
+          })
+        : [];
+  function place(item, end) {
+    ranges.push(
+      Object.assign({}, grid, {
+        startRowIndex: grid.startRowIndex + item.top,
+        endRowIndex: grid.startRowIndex + end,
+        startColumnIndex: grid.startColumnIndex + item.left,
+        endColumnIndex: grid.startColumnIndex + item.right,
+      })
+    );
+  }
+  shown.forEach(function (line, r) {
+    var runs = Object.create(null);
+    for (var c = 0; c < line.length; c++) {
+      if (line[c]) {
+        if (r) empty[c] = false;
+        continue;
+      }
+      var left = c;
+      while (c + 1 < line.length && !line[c + 1]) c++;
+      count += c + 1 - left;
+      runs[left + ':' + (c + 1)] = { top: r, left: left, right: c + 1 };
+    }
+    // A run of the row above that this row does not repeat ends there.
+    Object.keys(open).forEach(function (key) {
+      if (runs[key]) return;
+      place(open[key], r);
+      delete open[key];
+    });
+    Object.keys(runs).forEach(function (key) {
+      if (!open[key]) open[key] = runs[key];
+    });
+  });
+  Object.keys(open).forEach(function (key) {
+    place(open[key], shown.length);
+  });
+  ranges.sort(function (a, b) {
+    return a.startRowIndex - b.startRowIndex || a.startColumnIndex - b.startColumnIndex;
+  });
+  var columns = [];
+  empty.forEach(function (none, c) {
+    if (none)
+      columns.push(
+        dmvChatGridA1_(
+          Object.assign({}, grid, {
+            startRowIndex: grid.startRowIndex + 1,
+            startColumnIndex: grid.startColumnIndex + c,
+            endColumnIndex: grid.startColumnIndex + c + 1,
+          })
+        )
+      );
+  });
+  var fits = ranges.length <= DMV_SHEET_ACTIONS.blankRanges;
+  return {
+    requests: fits
+      ? ranges.map(function (range) {
+          return { updateCells: { range: range, fields: 'userEnteredValue' } };
+        })
+      : [],
+    columns: columns,
+    left: fits ? 0 : count,
+  };
 }
 
 // The undo of a copy of everything or of formats: besides the destination's cells, the copy
@@ -1018,7 +1241,7 @@ function dmvChatActionInsert_(context, dimension) {
           ? 'row ' + (span.startIndex + 1)
           : 'column ' + dmvChatActionColumn_(span.startIndex + 1));
   // New rows take the format of the row below them, like Insert above; appended ones the row above.
-  return {
+  return dmvChatActionOnMade_(context, {
     requests: [
       {
         insertDimension: {
@@ -1033,7 +1256,25 @@ function dmvChatActionInsert_(context, dimension) {
     text: 'Inserted ' + count + ' ' + noun + ' ' + where + ' in ' + sheet.getName(),
     details: [['Inserted', dmvChatActionSpanText_(span)]],
     result: { inserted: count, at: dmvChatActionSpanText_(span) },
-  };
+  });
+}
+
+// A row, column or tab change on a tab this request made changes nothing the user had, so it
+// asks nothing, and undo answers it by deleting the tab (or, once deleted, that nothing is left).
+function dmvChatActionOnMade_(context, plan) {
+  if (!dmvChatSheetIsMade_(context.session, context.sheet)) return plan;
+  var name = context.sheet.getName(),
+    gone = plan.requests.some(function (request) {
+      return !!request.deleteSheet;
+    });
+  return Object.assign({}, plan, {
+    confirm: '',
+    undo: {
+      hint: gone
+        ? 'This request made the tab "' + name + '"; deleting it left nothing to restore.'
+        : dmvChatUndoNewTab_(name),
+    },
+  });
 }
 
 function dmvChatActionDelete_(context, dimension) {
@@ -1065,7 +1306,7 @@ function dmvChatActionDelete_(context, dimension) {
     );
   var removed = dmvChatActionSpanGrid_(sheet, dimension, span.startIndex, span.endIndex);
   var pivots = dmvChatActionSpanPivots_(context.session, removed);
-  return {
+  return dmvChatActionOnMade_(context, {
     requests: [{ deleteDimension: { range: span } }],
     touches: [],
     guard: [dmvChatActionSpanGuard_(span)],
@@ -1086,7 +1327,7 @@ function dmvChatActionDelete_(context, dimension) {
     text: 'Deleted ' + label + ' of ' + sheet.getName(),
     details: [['Deleted', label]],
     result: { deleted: count, at: label },
-  };
+  });
 }
 
 // The pivot tables anchored in a span about to be deleted, which Sheets drops with it, in A1
@@ -2240,6 +2481,9 @@ function dmvChatActionDuplicateSheet_(context) {
     touches: [],
     // A copy changes nothing that exists, so it asks nothing; deleting it reverses it.
     undo: { hint: dmvChatUndoNewTab_(name) },
+    after: function () {
+      dmvChatSheetMade_(session, id);
+    },
     sheetName: name,
     sheetId: id,
     text: 'Duplicated ' + sheet.getName() + ' as ' + name,
@@ -2273,7 +2517,7 @@ function dmvChatActionDeleteSheet_(context) {
     return !item.isSheetHidden() && item.getSheetId() !== sheet.getSheetId();
   });
   if (!visible.length) throw new Error('A spreadsheet must keep at least one visible tab.');
-  return {
+  return dmvChatActionOnMade_(context, {
     requests: [{ deleteSheet: { sheetId: sheet.getSheetId() } }],
     touches: [],
     guard: [{ sheetId: sheet.getSheetId() }],
@@ -2286,7 +2530,7 @@ function dmvChatActionDeleteSheet_(context) {
     undo: { none: DMV_SHEET_UNDO.noUndo },
     text: 'Deleted tab ' + sheet.getName(),
     result: { deleted: sheet.getName() },
-  };
+  });
 }
 
 function dmvChatActionHide_(context, hide) {

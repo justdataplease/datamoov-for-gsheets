@@ -43,7 +43,18 @@ function dmvChatDashboardTools_(session, baseTools) {
     description:
       'Only for datasets that a tile reads together with another dataset: give matching columns the same key and type in each of them. Such tiles then use these keys, plus source (the dataset label) and currency.',
   };
-  dataset.required = dataset.required.concat(['id', 'label', 'sheetName']);
+  dataset.properties.sourceSheet = {
+    type: 'string',
+    description:
+      'Instead of a source query (connectionId, reportType, fields, sheetName): an existing tab of this spreadsheet, headers in row 1, read in place on every refresh; tiles name its headers.',
+  };
+  dataset.properties.dateColumn = {
+    type: 'string',
+    description:
+      'With sourceSheet and dateRange: the date header whose rows the period keeps, so two datasets of one tab compare periods it holds.',
+  };
+  // A dataset is a source query or a tab: each says what it needs in its own fields.
+  dataset.required = ['id', 'label'];
   var tile = {
     type: 'object',
     properties: {
@@ -271,12 +282,26 @@ function dmvChatSaveDashboard_(session, input) {
   if (input.id && !Number.isInteger(input.revision))
     throw new Error('List dashboards first and use the saved revision when editing a dashboard.');
   if (!Array.isArray(input.datasets)) throw new Error('Choose the dashboard datasets.');
+  // A dataset that reads a tab of this spreadsheet needs no source and no row cap: a refresh
+  // reads the tab as it is. One without a query may name its tab by sheetName, so whether it reads
+  // a tab is left to dmvValidateDashboard_ (dmvDashboardTabDataset_).
+  var tabbed = function (dataset) {
+    return (
+      !!dataset &&
+      typeof dataset === 'object' &&
+      (dataset.sourceSheet !== undefined ||
+        ['connectorId', 'connectionId', 'reportType', 'fields', 'config'].every(function (key) {
+          return dataset[key] === undefined;
+        }))
+    );
+  };
   input.datasets.forEach(function (dataset) {
-    dmvChatRequireSource_(session, dataset.connectionId);
+    if (!tabbed(dataset)) dmvChatRequireSource_(session, dataset && dataset.connectionId);
   });
   var cap = session.maxRows || DMV_LIMITS.chatDefaultRows;
   plan.datasets = input.datasets.map(function (dataset) {
     var item = Object.assign({}, dataset);
+    if (tabbed(item)) return item;
     item.maxRows = item.maxRows === undefined ? cap : item.maxRows;
     if (!Number.isInteger(item.maxRows) || item.maxRows < 1 || item.maxRows > cap)
       throw new Error(
@@ -343,22 +368,26 @@ function dmvChatRunDashboard_(session, input) {
       });
     throw error;
   }
+  var saved = dmvRead_('dashboard', input.id);
   result.datasets.forEach(function (dataset) {
+    var tab = (saved.outputs || []).some(function (output) {
+      return output.id === dataset.id && output.tab;
+    });
     session.events.push({
-      kind: 'report',
+      kind: tab ? 'read' : 'report',
       text:
-        'Fetched ' +
+        (tab ? 'Read ' : 'Fetched ') +
         dataset.label +
         ' · ' +
         Number(dataset.rowCount).toLocaleString() +
-        ' rows into ' +
+        (tab ? ' rows from ' : ' rows into ') +
         dataset.sheetName,
     });
   });
   session.events.push({
     kind: 'dashboard',
     action: 'refreshed',
-    record: { id: input.id, draft: dmvRead_('dashboard', input.id).draft === true },
+    record: { id: input.id, draft: saved.draft === true },
     links: result.links,
     text:
       'Built "' +

@@ -145,7 +145,7 @@ test('the real chat request carries artifact intent, reusable periods and bounde
   // No duplicate fetching: the dashboard runtime is the only fetch of a dashboard request.
   assert.match(
     request.system,
-    /Build a source dashboard with exactly these calls: list_dashboards \(reuse or update a matching one\), save_dashboard, run_dashboard/
+    /Build it with exactly these calls: list_dashboards \(reuse or update a matching one\), save_dashboard, run_dashboard/
   );
   assert.match(
     request.system,

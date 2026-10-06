@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDatamoovSandbox, plain } from './helpers/datamoov-sandbox.mjs';
+import { chatSheetFixture } from './helpers/chat-sheet-fixture.mjs';
 
 // A dashboard over a tab of 100,000 rows × 9 columns, built the way a spreadsheet user would:
 // KPI formulas over whole columns, a QUERY summary, a helper tab of formulas for a Month column,
@@ -236,4 +237,159 @@ test('a dashboard over 100,000 rows reads only the cells each call needs', () =>
   );
   assert.equal(column.result.total, 1);
   within('search_sheets over a column', column.read, ROWS + 1);
+});
+
+// A generated table of 30,000 rows × 9 columns, larger than undo keeps (50,000 cells). Its last
+// column is "" on every row, as a formula's IF(…, "") gives.
+const GENERATED_ROWS = 30000;
+const GENERATED_HEADER = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'h8', 'h9'];
+const GENERATOR =
+  '={' +
+  GENERATED_HEADER.map((label) => '"' + label + '"').join(',') +
+  ';MAKEARRAY(' +
+  GENERATED_ROWS +
+  ',9,LAMBDA(r,c,IF(c=9,"",r)))}';
+
+function generatedFixture() {
+  const table = [GENERATED_HEADER].concat(
+    Array.from({ length: GENERATED_ROWS }, (_, r) =>
+      GENERATED_HEADER.map((_, c) => (c === 8 ? '' : r + 1))
+    )
+  );
+  return chatSheetFixture({
+    setup: (g) => {
+      g.sheet.maxRows = 1000;
+      g.sheet.maxColumns = 26;
+    },
+    formulaResult: (text) => (text === GENERATOR ? table : undefined),
+  });
+}
+
+test('an exact result larger than undo keeps still grows the tab, so Sheets shows it instead of #REF!', () => {
+  const f = generatedFixture();
+  const written = f.edit('set_formulas', { formulas: [[GENERATOR]] }, f.inspect('A1'));
+  assert.equal(written.ok, true, JSON.stringify(written));
+  assert.deepEqual(f.requests()[0], {
+    appendDimension: { sheetId: f.sheet.id, dimension: 'ROWS', length: GENERATED_ROWS + 1 - 1000 },
+  });
+  assert.equal(f.sheet.maxRows, GENERATED_ROWS + 1);
+  assert.equal(written.formulaErrors, undefined);
+  assert.equal(written.spills[0].range, 'A1:I30001');
+  assert.equal(f.value(f.sheet, GENERATED_ROWS + 1, 1), GENERATED_ROWS);
+  // A size bound to a LET name is known too.
+  assert.equal(
+    f.edit('set_formulas', { formulas: [['=LET(n,40000,SEQUENCE(n))']] }, f.inspect('K1')).ok,
+    true
+  );
+  assert.equal(f.sheet.maxRows, 40000);
+  // Past the 200,000 rows create_sheet allows, the tab is left as it is.
+  assert.equal(f.edit('set_formulas', { formulas: [['=SEQUENCE(300000)']] }, f.inspect('M1')).ok, true);
+  assert.equal(
+    f.requests().some((request) => request.appendDimension),
+    false
+  );
+  assert.equal(f.sheet.maxRows, 40000);
+  // On a tab that existed before this request, a freeze too large to undo still asks.
+  const batches = f.state.batches.length;
+  const asked = f.edit('copy_range', { destination: 'A1', pasteType: 'values' }, f.inspect('A1'));
+  assert.equal(asked.needsConfirmation, true, JSON.stringify(asked));
+  assert.match(asked.summary, /too large to undo/);
+  assert.equal(f.state.batches.length, batches);
+});
+
+test('a tab this request made is frozen and formatted whole without asking, and undo says to delete it', () => {
+  const f = generatedFixture();
+  const created = f.tabAction('create_sheet', { newName: 'Generated', count: GENERATED_ROWS + 1 });
+  assert.equal(created.ok, true);
+  const tab = f.tab('Generated');
+  const written = f.edit('set_formulas', { range: 'A1', formulas: [[GENERATOR]] }, created);
+  assert.equal(written.ok, true, JSON.stringify(written));
+  assert.equal(
+    f.requests().some((request) => request.appendDimension),
+    false,
+    'the tab already has the rows'
+  );
+  const frozen = f.edit(
+    'copy_range',
+    { destination: 'A1', pasteType: 'values' },
+    f.inspect('A1', 'Generated')
+  );
+  assert.equal(frozen.ok, true, JSON.stringify(frozen));
+  assert.equal(frozen.needsConfirmation, undefined);
+  assert.equal(frozen.range, 'A1:I30001');
+  assert.equal(f.formula(tab, 1, 1), '');
+  assert.equal(f.value(tab, GENERATED_ROWS + 1, 8), GENERATED_ROWS);
+  // The "" of the last column stays blank, not stored as empty text, and the result says so.
+  assert.equal(tab.cells.has('2:9'), false);
+  assert.equal(tab.cells.has(GENERATED_ROWS + 1 + ':9'), false);
+  assert.equal(f.value(tab, 1, 9), 'h9');
+  assert.deepEqual(frozen.blankColumns, ['I2:I30001']);
+  const formatted = f.tabAction('format', {
+    sheetName: 'Generated',
+    range: 'B2:C',
+    format: { bold: true },
+  });
+  assert.equal(formatted.ok, true, JSON.stringify(formatted));
+  assert.throws(() => f.undo(), /Delete the tab "Generated" to remove it\./);
+});
+
+// The cells of an A1 range such as 'Tab'!A2:I30001, as the sandbox recorded it.
+function rangeCells(range) {
+  const corners = /([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/.exec(range);
+  const column = (letters) => [...letters].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+  const end = [corners[3] || corners[1], corners[4] || corners[2]];
+  return (
+    (Number(end[1]) - Number(corners[2]) + 1) * (column(end[0]) - column(corners[1]) + 1)
+  );
+}
+
+test('a freeze too large to check its blanks keeps them as empty text and reads no effective values of the whole result', () => {
+  const f = generatedFixture();
+  const created = f.tabAction('create_sheet', { newName: 'Generated', count: GENERATED_ROWS + 1 });
+  f.edit('set_formulas', { range: 'A1', formulas: [[GENERATOR]] }, created);
+  const tab = f.tab('Generated');
+  // The bound sits below this result's 270,009 cells, as 100,000 rows of 10 columns would.
+  f.api.DMV_SHEET_ACTIONS.blankCells = 100000;
+  const inspected = f.inspect('A1', 'Generated');
+  const gets = f.state.gets.length;
+  const frozen = f.edit('copy_range', { destination: 'A1', pasteType: 'values' }, inspected);
+  assert.equal(frozen.ok, true, JSON.stringify(frozen));
+  assert.equal(frozen.range, 'A1:I30001');
+  assert.equal(f.value(tab, GENERATED_ROWS + 1, 8), GENERATED_ROWS);
+  // Nothing is cleared: the "" of the last column stays as Sheets pasted it, and the result
+  // says so instead of naming blank columns it did not check.
+  assert.equal(tab.cells.has('2:9'), true);
+  assert.equal(frozen.blankColumns, undefined);
+  assert.match(frozen.note, /blank cells of the result were pasted as empty text/i);
+  assert.equal(
+    f.requests().some((request) => request.updateCells),
+    false,
+    JSON.stringify(f.requests().map((request) => Object.keys(request)[0]))
+  );
+  // Effective values are read for the formula's own lines (to size its result), never for the
+  // whole 270,009 cells.
+  let effective = 0;
+  for (const get of f.state.gets.slice(gets))
+    if (/\beffectiveValue\b/.test(get.options.fields || ''))
+      for (const range of get.options.ranges || []) effective += rangeCells(range);
+  assert.ok(effective < 2 * (GENERATED_ROWS + 1), effective + ' cells read with effective values');
+});
+
+test('a formula result larger than an inspection is frozen by its range, from the formulas of its first row', () => {
+  const f = generatedFixture();
+  const created = f.tabAction('create_sheet', { newName: 'Generated', count: GENERATED_ROWS + 1 });
+  f.edit('set_formulas', { range: 'A1', formulas: [[GENERATOR]] }, created);
+  const tab = f.tab('Generated');
+  // No inspection takes 270,009 cells: a freeze of the formula's own result needs none.
+  const frozen = f.tabAction('copy_range', {
+    sheetName: 'Generated',
+    range: 'A1:I30001',
+    destination: 'A1:I30001',
+    pasteType: 'values',
+    editToken: created.editToken,
+  });
+  assert.equal(frozen.ok, true, JSON.stringify(frozen));
+  assert.equal(frozen.range, 'A1:I30001');
+  assert.equal(f.formula(tab, 1, 1), '');
+  assert.equal(f.value(tab, GENERATED_ROWS + 1, 1), GENERATED_ROWS);
 });

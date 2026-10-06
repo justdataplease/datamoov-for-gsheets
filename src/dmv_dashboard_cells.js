@@ -8,7 +8,8 @@
    column of mixed types), it is a SUMPRODUCT or FILTER formula over the same ranges whose tests
    compare exactly as the summary does. */
 
-// The first data row of a data tab: three provenance rows and a header come before it.
+// The first data row of a data tab: three provenance rows and a header come before it. A tab the
+// user keeps (a tab dataset) sets its own firstRow.
 var DMV_DASHBOARD_FIRST_ROW = 5;
 
 // The datasets one side of a tile reads ('current' or 'previous' of a compare, or null for all of
@@ -49,13 +50,18 @@ function dmvDashboardMemberColumn_(member, key) {
   } catch (ignored) {
     return { value: '' };
   }
-  var index = tab.columns.indexOf(column),
-    letter = dmvChatActionColumn_(index + 1);
+  return dmvDashboardTabColumn_(tab, tab.columns.indexOf(column));
+}
+
+// Column index of a data tab as { range, date }: its cells from the first data row to the last.
+function dmvDashboardTabColumn_(tab, index) {
+  var letter = dmvChatActionColumn_(index + 1),
+    first = tab.firstRow || DMV_DASHBOARD_FIRST_ROW;
   return {
     range:
       dmvChatActionTab_(tab.sheet) +
-      ('$' + letter + '$' + DMV_DASHBOARD_FIRST_ROW) +
-      (':$' + letter + '$' + (DMV_DASHBOARD_FIRST_ROW + tab.rows - 1)),
+      ('$' + letter + '$' + first) +
+      (':$' + letter + '$' + (first + tab.rows - 1)),
     date: !!tab.dates[index],
   };
 }
@@ -293,16 +299,18 @@ function dmvDashboardMask_(column, condition, value) {
 // when they cannot say them exactly or would need two array criteria), arrayed when they hold an
 // array criterion, and mask, the product of the cell tests ('' for none). null when no row passes.
 // A condition's value may be a function of the member, such as the first day of its own period;
-// a tile filter (filter: true) keeps the rows dmvChatCompare_ keeps, blanks included.
+// a tile filter (filter: true) keeps the rows dmvChatCompare_ keeps, blanks included. A tab
+// dataset's period comes first, as conditions on its date column (tab.period).
 function dmvDashboardRows_(member, conditions) {
   var pairs = [],
     masks = [],
     arrays = 0,
     exact = true;
+  conditions = (member.tab.period || []).concat(conditions);
   for (var index = 0; index < conditions.length; index++) {
     var condition = conditions[index],
       value = typeof condition.value === 'function' ? condition.value(member) : condition.value,
-      column = dmvDashboardMemberColumn_(member, condition.key);
+      column = condition.column || dmvDashboardMemberColumn_(member, condition.key);
     if (!('range' in column)) {
       var keeps = condition.group
         ? String(column.value) === String(value === null || value === undefined ? '' : value)

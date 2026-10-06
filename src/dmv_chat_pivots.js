@@ -176,8 +176,23 @@ function dmvChatPivotFilled_(value) {
   return value !== '' && value !== null && value !== undefined;
 }
 
-// Numbers only under numeric summaries, and real dates under date buckets.
-function dmvChatPivotCheckTypes_(data, numeric, groups) {
+// Numbers only under numeric summaries, a number or date under COUNT (which counts nothing
+// else, so over text it shows 0 for every group), and real dates under date buckets.
+function dmvChatPivotCheckTypes_(data, numeric, groups, values, headers) {
+  values.forEach(function (value) {
+    if (value.summarizeFunction !== 'COUNT') return;
+    var filled = false;
+    var counted = data(value.sourceColumnOffset).some(function (entry) {
+      if (dmvChatPivotFilled_(entry)) filled = true;
+      return typeof entry === 'number' || Object.prototype.toString.call(entry) === '[object Date]';
+    });
+    if (filled && !counted)
+      throw new Error(
+        'COUNT counts numbers only; "' +
+          headers[value.sourceColumnOffset] +
+          '" holds text: use COUNTA.'
+      );
+  });
   numeric.forEach(function (value) {
     var seen = false;
     data(value.sourceColumnOffset).forEach(function (entry) {
@@ -334,7 +349,7 @@ function dmvChatCreatePivot_(session, input) {
     var numeric = values.filter(function (value) {
       return DMV_CHAT_PIVOT.numeric.indexOf(value.summarizeFunction) >= 0;
     });
-    dmvChatPivotCheckTypes_(data, numeric, rows.concat(columns));
+    dmvChatPivotCheckTypes_(data, numeric, rows.concat(columns), values, headers);
     dmvChatPivotCurrencies_(headers, numeric, grouped, all);
     var columnKeys = Object.create(null),
       labels = Object.create(null),
@@ -389,6 +404,7 @@ function dmvChatCreatePivot_(session, input) {
     ];
     dmvChatSheetDeadline_(session);
     Sheets.Spreadsheets.batchUpdate({ requests: requests }, session.spreadsheetId);
+    dmvChatSheetMade_(session, sheetId);
     if (session.sheetNames && session.sheetNames.indexOf(target) < 0)
       session.sheetNames.push(target);
     dmvChatSeeNewTabs_(session);
@@ -754,7 +770,7 @@ function dmvChatPivotPlan_(session, input) {
   var numeric = values.filter(function (value) {
     return DMV_CHAT_PIVOT.numeric.indexOf(value.summarizeFunction) >= 0;
   });
-  dmvChatPivotCheckTypes_(data, numeric, rows.concat(columns));
+  dmvChatPivotCheckTypes_(data, numeric, rows.concat(columns), values, headers);
   var mixed = dmvChatPivotCurrencies_(headers, numeric, used, all);
   var withheld = dmvChatPivotTotals_(input, rows, columns, values, mixed, headers);
   // Row groups are only read when a placed pivot or subtotals need their size.
@@ -933,6 +949,7 @@ function dmvChatPivotPlaced_(session, layout, target, cell) {
       },
     ],
     touches: [place],
+    wrote: [place],
     undo: {
       snapshot: [place],
       reverse: [

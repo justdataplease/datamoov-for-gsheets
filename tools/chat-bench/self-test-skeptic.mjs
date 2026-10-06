@@ -1,0 +1,827 @@
+// Skeptic's self-test: for each measure, cases built to fool it, each stating the true answer.
+//   rows_written     a two-cell title row and a totals row around the table; rows split over two
+//                    tabs; a generated table left as a live formula
+//   formula_share    a label built by a formula, a number shown as text by TEXT(), typed numbers
+//                    with a unit ("3,345 USD", "12.3k"), a formula showing an error; a pivot's
+//                    numbers against the same numbers pasted
+//   error_cells      a #DIV/0! inside a spill; an IFERROR hiding a reference to a missing tab
+//   charts           a chart whose series is all zeros (a filter that matched nothing)
+//   completed        a summary of headings only; a dashboard page of zeros; a dashboard on a tab
+//                    not named "dashboard"; a saved report that fetched no row
+//   failed_steps     a call to a tool that does not exist
+//   claims_mismatch  "I generated 500 shipments" when a cell happens to show 500
+//   answer_accuracy  plain figures, comma decimals, coarse rounding, the direction of a change,
+//                    a fabricated typed total quoted back, naming every campaign as waste, a
+//                    saved dashboard over a fake that returns nothing
+//   refresh          a dashboard of pasted figures (no whole-column total, no range) and one whose
+//                    bounded range has headroom
+import { createBenchRuntime } from './runtime.mjs';
+import { runConversation } from './conversation.mjs';
+import { snapshot, measureTurn, findDataSheet } from './metrics.mjs';
+import { checkClaims } from './claims.mjs';
+import { statedNumbers, checkNumbers, wasteRecall, adsFacts } from './accuracy.mjs';
+import { createGoogleAdsData, groundTruth } from './google-ads-fake.mjs';
+import { tabStats, a1 } from './cells.mjs';
+import { call, say, editToken, savedId, scripted, differences } from './self-test-script.mjs';
+
+const ROWS = 120;
+const regions = ['North', 'South', 'West'];
+const table = [['Region', 'Amount', 'Units']].concat(
+  Array.from({ length: ROWS }, (_, i) => [regions[i % 3], 10 * ((i % 7) + 1) + 0.25, (i % 5) + 1])
+);
+const total = (region) =>
+  table
+    .slice(1)
+    .filter((row) => !region || row[0] === region)
+    .reduce((a, row) => a + row[1], 0);
+const grouped = (x) =>
+  x.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const seed = {
+  tab: 'Data',
+  table,
+  transcript: [
+    { role: 'user', text: 'make 120 orders' },
+    {
+      role: 'assistant',
+      text: 'I created the Data tab with 120 rows in A1:C121.',
+      actions: ['Created tab Data'],
+    },
+  ],
+};
+// A new tab written in one batch of formulas (or values) with the editToken it needs.
+const write = (tab, range, rows, action = 'set_formulas') => [
+  () => call('edit_sheet', { action: 'create_sheet', newName: tab, count: 50 }),
+  () => call('inspect_sheet', { sheetName: tab, range }),
+  (b) =>
+    call('edit_sheet', {
+      action,
+      sheetName: tab,
+      range,
+      editToken: editToken(b),
+      [action === 'set_values' ? 'values' : 'formulas']: rows,
+    }),
+];
+const res = (text = '') => ({
+  tools: [],
+  stop: 'answer',
+  text,
+  rounds: 1,
+  seconds: 1,
+  confirmsSent: 0,
+});
+const put = (rt, sheet, rows, r0 = 1) =>
+  rows.forEach((row, r) =>
+    row.forEach((v, c) => {
+      if (v === '') return;
+      if (typeof v === 'string' && v.startsWith('=')) rt.f.setCell(sheet, r0 + r, c + 1, v, v);
+      else rt.f.setCell(sheet, r0 + r, c + 1, v);
+    })
+  );
+const bare = () =>
+  createBenchRuntime({ provider: scripted([]), apiKey: 'self-test-key', timeLimit: 60 });
+
+export function runSkeptic({ log = console.log } = {}) {
+  let checks = 0,
+    failures = 0;
+  const check = (ok, text, detail = []) => {
+    checks++;
+    if (!ok) failures++;
+    log(`${ok ? 'ok  ' : 'FAIL'} ${text}`);
+    if (!ok) for (const line of detail) log('       ' + line);
+  };
+  const expectRecord = (label, record, expected) => {
+    const bad = differences(record, expected);
+    check(
+      !bad.length,
+      `${label}: stop=${record.stop} done=${record.completed} rows=${record.rows_written} f=${record.formula_cells} live=${record.live_cells} v=${record.value_cells} share=${record.formula_share} errors=${record.error_cells} charts=${record.charts}/${record.charts_empty} nonzero=${record.nonzero_numbers} numbers=${record.numbers_matched}/${record.numbers_checked}`,
+      bad.concat(
+        record.tabs || [],
+        record.error_sample || [],
+        record.failed_step_sample || [],
+        record.answer_mismatches || [],
+        record.stale_sample || []
+      )
+    );
+  };
+
+  // ---------- rows_written ----------
+  {
+    // A title row of two cells and a blank row above a six-column table, a totals row below it.
+    const rt = bare();
+    const sheet = rt.f.book.sheets[0];
+    const before = snapshot(rt);
+    put(
+      rt,
+      sheet,
+      [
+        ['Orders export', 'Generated by chat'],
+        [],
+        ['ID', 'Region', 'Amount', 'Units', 'Price', 'Status'],
+      ]
+        .concat(Array.from({ length: 6 }, (_, i) => ['O' + i, 'North', 10 + i, 1, 5, 'Paid']))
+        .concat([['Total', '', '=SUM(C4:C9)', '=SUM(D4:D9)', '=SUM(E4:E9)', '']])
+    );
+    rt.recalc();
+    const m = measureTurn(rt, {
+      before,
+      result: res(),
+      turn: 1,
+      kind: 'generate',
+      rowsRequested: 6,
+      dataSheetId: sheet.id,
+      nouns: ['orders'],
+    });
+    expectRecord('rows: a two-cell title row is no header, a totals row is no data row', m, {
+      data_header_row: 3,
+      rows_written: 6,
+      data_summary_rows: 1,
+      completed: true,
+    });
+  }
+  {
+    // 60 rows on Sheet1 and 60 more on a second tab, 120 asked for: one dataset of 60 rows.
+    const rt = bare();
+    const before = snapshot(rt);
+    const second = rt.f.book.insertSheet('Orders');
+    put(rt, rt.f.book.sheets[0], table.slice(0, 61));
+    put(rt, second, [table[0]].concat(table.slice(61)));
+    const data = findDataSheet(rt);
+    const m = measureTurn(rt, {
+      before,
+      result: res(),
+      turn: 1,
+      kind: 'generate',
+      rowsRequested: ROWS,
+      dataSheetId: data.id,
+      nouns: ['orders'],
+    });
+    expectRecord('rows: a dataset split over two tabs is judged by one tab', m, {
+      rows_written: 60,
+      rows_ratio: 0.5,
+      completed: false,
+    });
+  }
+  {
+    // A generated table left as a live formula: its spilled rows are the data, and it is volatile.
+    const rt = bare();
+    const sheet = rt.f.book.sheets[0];
+    const before = snapshot(rt);
+    put(rt, sheet, [
+      [
+        `=VSTACK({"ID","Region","Amount"},MAKEARRAY(200,3,LAMBDA(r,c,CHOOSE(c,"ID-"&r,INDEX({"North","South"},MOD(r,2)+1),RANDBETWEEN(10,90)))))`,
+      ],
+    ]);
+    rt.recalc();
+    const m = measureTurn(rt, {
+      before,
+      result: res(),
+      turn: 1,
+      kind: 'generate',
+      rowsRequested: 200,
+      dataSheetId: sheet.id,
+      nouns: ['orders'],
+    });
+    expectRecord(
+      'rows: a generated table left live counts its spilled rows and is flagged volatile',
+      m,
+      {
+        rows_written: 200,
+        data_volatile: true,
+        completed: true,
+      }
+    );
+  }
+
+  // ---------- formula_share, error_cells ----------
+  {
+    // A #DIV/0! inside a spill: an error cell, and no live number.
+    const rt = bare();
+    rt.seedTab('Data', table);
+    const before = snapshot(rt, rt.f.book.sheets[0].id);
+    const calc = rt.f.book.insertSheet('Calc');
+    calc.cells.set('1:1', { value: 'Ratio', formula: '' });
+    calc.cells.set('2:1', { value: 5, formula: '=BYROW(Data!B2:B4,LAMBDA(r,r/Data!C2))' });
+    calc.cells.set('3:1', { value: '#DIV/0!', formula: '', spilledFrom: '2:1' });
+    calc.cells.set('4:1', { value: 7, formula: '', spilledFrom: '2:1' });
+    const m = measureTurn(rt, {
+      before,
+      result: res(),
+      turn: 2,
+      kind: 'summarize',
+      rowsRequested: ROWS,
+      dataSheetId: rt.f.book.sheets[0].id,
+      nouns: ['orders'],
+    });
+    expectRecord('errors: a #DIV/0! inside a spill is an error cell and no live number', m, {
+      formula_cells: 1,
+      live_cells: 2,
+      error_cells: 1,
+      error_cells_new: 1,
+    });
+  }
+  {
+    // A pivot's three numbers against the same three numbers pasted beside them.
+    const rt = bare();
+    rt.seedTab('Data', table);
+    const before = snapshot(rt, rt.f.book.sheets[0].id);
+    const tab = rt.f.book.insertSheet('Pivot');
+    tab.cells.set('1:1', { value: 'Region', formula: '', spilledFrom: 'pivot:1:1' });
+    regions.forEach((r, i) => {
+      tab.cells.set(`${i + 2}:1`, { value: r, formula: '', spilledFrom: 'pivot:1:1' });
+      tab.cells.set(`${i + 2}:2`, { value: total(r), formula: '', spilledFrom: 'pivot:1:1' });
+      rt.f.setCell(tab, i + 2, 5, total(r));
+    });
+    const m = measureTurn(rt, {
+      before,
+      result: res(),
+      turn: 2,
+      kind: 'summarize',
+      rowsRequested: ROWS,
+      dataSheetId: rt.f.book.sheets[0].id,
+      nouns: ['orders'],
+    });
+    expectRecord('share: pivot numbers are live, the same numbers pasted are typed', m, {
+      live_cells: 3,
+      value_cells: 3,
+      formula_share: 0.5,
+    });
+  }
+
+  // A conversation over seeded data: a summary of headings only, a dashboard of zeros on a tab
+  // not named "dashboard", a real one, numbers dressed up in four ways, a typed total quoted
+  // back, a live one quoted back, and a call to a tool that does not exist.
+  const steps = [
+    // Turn 2: headings only.
+    ...write('Summary', 'A1:B1', [['Region', 'Total']]),
+    () => say('The Summary tab is ready.'),
+    // Turn 3: zeros (a filter that matches nothing) and a chart of them.
+    ...write('Ops overview', 'A1:B4', [
+      ['Region', 'Total'],
+      ['North', '=SUMIFS(Data!B:B,Data!A:A,"Nowhere")'],
+      ['South', '=SUMIFS(Data!B:B,Data!A:A,"Nowhere")'],
+      ['West', '=SUMIFS(Data!B:B,Data!A:A,"Nowhere")'],
+    ]),
+    () =>
+      call('create_chart', {
+        sheetName: 'Ops overview',
+        range: 'A1:B4',
+        chartType: 'column',
+        title: 'Totals',
+        xColumn: 'Region',
+        seriesColumns: ['Total'],
+      }),
+    () => say('The Ops overview tab charts the totals per region.'),
+    // Turn 4: the real thing on a tab not named "dashboard".
+    ...write('Sales overview', 'A1:B4', [
+      ['Region', 'Total'],
+      ['North', '=SUMIFS(Data!B:B,Data!A:A,A2)'],
+      ['South', '=SUMIFS(Data!B:B,Data!A:A,A3)'],
+      ['West', '=SUMIFS(Data!B:B,Data!A:A,A4)'],
+    ]),
+    () =>
+      call('create_chart', {
+        sheetName: 'Sales overview',
+        range: 'A1:B4',
+        chartType: 'column',
+        title: 'Sales by region',
+        xColumn: 'Region',
+        seriesColumns: ['Total'],
+      }),
+    () => say('Sales overview charts the total per region.'),
+    // Turn 5: a label made by a formula, TEXT(), units, an error.
+    ...write('Mix', 'A1:B7', [
+      ['Metric', 'Value'],
+      ['Label', '="Total: "&SUM(Data!B:B)'],
+      ['Text total', '=TEXT(SUM(Data!B:B),"$#,##0")'],
+      ['Typed USD', '3,345 USD'],
+      ['Typed k', '12.3k'],
+      ['Broken', '=SUM(Data!B:B)/0'],
+      ['Units', '=SUM(Data!C:C)'],
+    ]),
+    () => call('no_such_tool', {}),
+    () => say('The Mix tab has the figures.'),
+    // Turn 6: fabricated typed totals quoted back as plain figures.
+    ...write(
+      'Typed',
+      'A1:B4',
+      [
+        ['Region', 'Total'],
+        ['North', 9999],
+        ['South', 8888],
+        ['West', 7777],
+      ],
+      'set_values'
+    ),
+    () => say('North totals 9,999.00 and South 8,888.00.'),
+    // Turn 7: live totals quoted back.
+    ...write('Live', 'A1:B4', [
+      ['Region', 'Total'],
+      ['North', '=SUMIFS(Data!B:B,Data!A:A,A2)'],
+      ['South', '=SUMIFS(Data!B:B,Data!A:A,A3)'],
+      ['West', '=SUMIFS(Data!B:B,Data!A:A,A4)'],
+    ]),
+    () => say(`North totals ${grouped(total('North'))} and the whole table ${grouped(total())}.`),
+  ];
+  {
+    const rt = createBenchRuntime({
+      provider: scripted(steps),
+      apiKey: 'self-test-key',
+      timeLimit: 60,
+    });
+    const records = runConversation(rt, {
+      id: 'skeptic-S',
+      rowsRequested: ROWS,
+      nouns: ['orders', 'rows'],
+      seed,
+      turns: [
+        { n: 2, kind: 'summarize', text: 'summary per region' },
+        { n: 3, kind: 'dashboard', text: 'dashboard' },
+        { n: 4, kind: 'dashboard', text: 'dashboard again' },
+        { n: 5, kind: 'summarize', text: 'some figures' },
+        { n: 6, kind: 'summarize', text: 'totals' },
+        { n: 7, kind: 'summarize', text: 'totals, live' },
+      ],
+    });
+    const expected = [
+      {
+        label: 'completed: a summary of headings only delivers nothing',
+        want: { stop: 'answer', delivered: false, completed: false, nonzero_numbers: 0 },
+      },
+      {
+        label: 'charts/completed: a chart of zeros is empty and a page of zeros is not done',
+        want: {
+          stop: 'answer',
+          charts: 0,
+          charts_empty: 1,
+          live_zero_cells: 3,
+          nonzero_numbers: 0,
+          dashboard_tab: false,
+          completed: false,
+        },
+      },
+      {
+        label: 'dashboard: a new tab with a chart counts whatever its name',
+        want: { stop: 'answer', charts: 1, dashboard_tab: true, completed: true },
+      },
+      {
+        // Live numbers: TEXT()'s "$1,234" and SUM(Units). Typed: "3,345 USD" and "12.3k". The
+        // label formula delivers no number; the /0 is an error.
+        label: 'share/errors: a label formula, TEXT(), typed units, an error, an unknown tool',
+        want: {
+          formula_cells: 4,
+          live_cells: 2,
+          value_cells: 2,
+          formula_share: 0.5,
+          error_cells: 1,
+          error_cells_new: 1,
+          failed_steps: 1,
+        },
+      },
+      {
+        label: 'accuracy: fabricated typed totals quoted back are not supported',
+        want: { value_cells: 3, numbers_checked: 2, numbers_matched: 0, answer_accurate: false },
+      },
+      {
+        label: 'accuracy: live totals quoted back as plain figures are supported',
+        want: { formula_share: 1, numbers_checked: 2, numbers_matched: 2, answer_accurate: true },
+      },
+    ];
+    records.forEach((record, i) => expectRecord(expected[i].label, record, expected[i].want));
+  }
+  {
+    // An IFERROR around a reference to a tab the book no longer has (the app refuses to write one,
+    // so it comes from a tab deleted later): Sheets shows the fallback 0, the formula is broken.
+    const rt = bare();
+    rt.seedTab('Data', table);
+    const before = snapshot(rt, rt.f.book.sheets[0].id);
+    const tab = rt.f.book.insertSheet('Checks');
+    rt.f.setCell(tab, 1, 1, 'Masked');
+    tab.cells.set('1:2', { value: 0, formula: "=IFERROR(SUM('Old data'!B:B),0)" });
+    tab.cells.set('2:2', { value: total(), formula: '=SUM(Data!B:B)' });
+    const m = measureTurn(rt, {
+      before,
+      result: res(),
+      turn: 2,
+      kind: 'summarize',
+      rowsRequested: ROWS,
+      dataSheetId: rt.f.book.sheets[0].id,
+      nouns: ['orders'],
+    });
+    expectRecord('errors: an IFERROR hiding a missing tab is an error, not a live 0', m, {
+      formula_cells: 2,
+      live_cells: 1,
+      error_cells: 1,
+      live_zero_cells: 0,
+    });
+    check(
+      /Old data/.test(m.error_sample.join(' ')),
+      `the masked formula names the tab it misses: ${m.error_sample.join(' | ')}`
+    );
+  }
+
+  // ---------- claims_mismatch ----------
+  {
+    const tabs = [
+      { sheet: { name: 'Shipments' }, stats: { dataRows: 1000, lastRow: 1001, headerRow: 1 } },
+    ];
+    const run = (text) =>
+      checkClaims(text, { nouns: ['shipments'], tabs, dataRows: 1000, evidence: [500] }).mismatch;
+    check(
+      run('I generated 500 shipments.') === true,
+      'claims: a table size is not supported by a cell that happens to show it'
+    );
+    check(
+      run('FastFreight has 500 shipments.') === false,
+      'claims: a count a cell shows is supported'
+    );
+    check(
+      run('I created a dataset of 1,000 shipments.') === false,
+      'claims: the true table size is supported'
+    );
+  }
+
+  // ---------- answer_accuracy: reading numbers ----------
+  {
+    const facts = {
+      money: [12345.6, 55406.53, 1.4e6],
+      percent: [-12.3, 4.1],
+      count: [1127],
+      multiple: [],
+      ranges: [],
+    };
+    const cases = [
+      ['Total revenue was 12,345.60.', 1, 1],
+      ['Revenue: 12.345,60 €', 1, 1],
+      ['Revenue was 12.3k USD.', 1, 1],
+      ['We spent $12 more than planned.', 1, 0], // 12, not 12 million
+      ['Spend was $0.1M.', 1, 0], // one digit of a million is no rounding of $55k
+      ['Spend was $1M.', 1, 0], // nor of $1.4M
+      ['Spend was $1.4M.', 1, 1],
+      ['Conversions are up 12.3%.', 1, 0], // the change is a fall
+      ['Conversions are down 12.3%.', 1, 1],
+      ['Conversions changed 12.3% vs the previous period.', 1, 1],
+      ['CTR rose by 4.1%.', 1, 1],
+      ['| Search - Example | 1,234.56 | 0 |', 1, 0], // a figure in a table row
+      ['Order ORD-100001 on 2026-10-05 at 12:30, row 1,001, 2,446 rows, in Data!A1:C1001.', 0, 0],
+    ];
+    for (const [text, n, ok] of cases) {
+      const r = checkNumbers(text, facts);
+      check(
+        r.numbers_checked === n && r.numbers_matched === ok,
+        `accuracy reads "${text}": ${r.numbers_matched}/${r.numbers_checked} (want ${ok}/${n}) ${JSON.stringify(statedNumbers(text).map((x) => [x.kind, x.value, x.direction]))}`
+      );
+    }
+  }
+
+  // ---------- waste recall: naming every campaign is no answer ----------
+  {
+    const data = createGoogleAdsData({ variant: 'normal', today: '2026-10-05' });
+    const truth = groundTruth(data);
+    const p = truth.periods.last30;
+    const zero = p.campaigns.filter((c) => p.zeroConversion.includes(c.name));
+    check(
+      zero.length >= 3 && zero.every((c) => c.spend > 0),
+      `the fictional account has campaigns that spend without converting (${zero.length})`
+    );
+    const all = wasteRecall(
+      `All of these waste money: ${p.campaigns.map((c) => c.name).join(', ')}.`,
+      truth
+    );
+    check(
+      all.recall === 1 && all.precision < 0.5,
+      `waste: naming every campaign reaches recall 1 but precision ${all.precision}`
+    );
+    const list = wasteRecall(
+      `These campaigns are wasting money:\n${zero.map((c) => `- ${c.name} ($${grouped(c.spend)})`).join('\n')}`,
+      truth
+    );
+    check(
+      list.recall === 1 && list.precision === 1,
+      `waste: a list under a flagging line names exactly them (recall ${list.recall}, precision ${list.precision})`
+    );
+    const rows = p.campaigns
+      .filter((c) => c.spend > 0)
+      .map((c) => `| ${c.name} | ${grouped(c.spend)} | ${Math.round(c.conversions * 10) / 10} |`);
+    const tableAll = wasteRecall(
+      `| Campaign | Spend | Conversions |\n|---|---|---|\n${rows.join('\n')}`,
+      truth
+    );
+    check(
+      tableAll.recall === 1 && tableAll.precision >= 0.5,
+      `waste: a table of every campaign flags only its 0 rows (precision ${tableAll.precision})`
+    );
+  }
+
+  // ---------- scoped facts: a window ("the last 30 days") is no day or week ----------
+  // A sentence that states a period's figure is not compared with every day's totals: they
+  // would match some other figure by chance. A sentence about a day still is.
+  {
+    const data = createGoogleAdsData({ variant: 'normal', today: '2026-10-06' });
+    const truth = groundTruth(data);
+    const facts = adsFacts(truth, data);
+    const size = (s) => facts.forSentence(s).money.length;
+    const plainSize = size('Spend was $1.');
+    for (const s of [
+      'Spend was $1 in the last 30 days.',
+      'Spend was $1 over the past 7 days.',
+      'Spend was $1 across 90 days.',
+      'Spend was $1 in the 30-day window.',
+      'Spend was $1 (last 14 days).',
+      'Spend was $1 over the last 4 weeks.',
+      'Spend was $1 in the 12-week window.',
+    ])
+      check(
+        size(s) === plainSize,
+        `a window adds no daily or weekly facts: "${s}" (${size(s)} vs ${plainSize})`
+      );
+    for (const s of [
+      'Spend was $1 on its peak day.',
+      'Daily spend was $1.',
+      'Spend was $1 on 2026-09-01.',
+      'Spend was $1 on Sep 3.',
+      'Spend was $1 per day in the last 30 days.',
+      'Weekly spend was $1.',
+      'Spend was $1 per week over the last 12 weeks.',
+    ])
+      check(
+        size(s) > plainSize,
+        `a day or a week adds its facts: "${s}" (${size(s)} vs ${plainSize})`
+      );
+    // A campaign's name is no mention of its channel: the word in the name opens no channel
+    // facts; the word said outside the name does.
+    const inChannel = truth.periods.last30.campaigns.find(
+      (c) => c.channel === 'SEARCH' && /search/i.test(c.name)
+    );
+    const own = size(`${inChannel.name} spent $1.`);
+    const withChannel = size(`${inChannel.name} spent $1, like the other search campaigns.`);
+    check(
+      own < withChannel,
+      `a name's channel word is no channel mention: "${inChannel.name}" (${own} vs ${withChannel} when the channel is said)`
+    );
+    // Every campaign's sentence against another campaign's true spend: hardly any passes.
+    const list = truth.periods.last30.campaigns.filter((c) => c.spend > 0);
+    let crossed = 0,
+      pairs = 0;
+    for (const a of list)
+      for (const b of list) {
+        if (a === b || Math.abs(a.spend - b.spend) <= 0.01 * Math.max(a.spend, b.spend)) continue;
+        pairs++;
+        const s = `${a.name} spent $${grouped(b.spend)} in the last 30 days.`;
+        if (checkNumbers(s, facts).numbers_matched) crossed++;
+      }
+    check(
+      pairs > 0 && crossed <= Math.floor(0.05 * pairs),
+      `another campaign's 30-day spend rarely passes for a campaign's own (${crossed}/${pairs})`
+    );
+    // The same over four weeks of run dates: a sentence that names a campaign and says nothing
+    // of waste is not compared with the account's spend without conversions.
+    const failed = [];
+    for (let d = 0; d < 28; d++) {
+      const today = new Date(Date.UTC(2026, 9, 1) + d * 86400000).toISOString().slice(0, 10);
+      const dayData = createGoogleAdsData({ variant: 'normal', today });
+      const dayTruth = groundTruth(dayData);
+      const dayFacts = adsFacts(dayTruth, dayData);
+      const [x, y] = dayTruth.periods.last30.campaigns;
+      const said = (c) =>
+        checkNumbers(`${x.name} spent $${grouped(c.spend)} in the last 30 days.`, dayFacts)
+          .numbers_matched;
+      if (said(x) !== 1 || said(y) !== 0) failed.push(today);
+    }
+    check(
+      !failed.length,
+      `a campaign's own spend passes and the next campaign's does not, on every run date (failed on ${failed.join(', ') || 'none'})`
+    );
+  }
+
+  // ---------- Google Ads fake: exercised, and an empty fetch does not pass ----------
+  const adsPlan = (connectionId) => {
+    const MAP = [
+      ['segments.date', 'date'],
+      ['campaign.name', 'campaign_name'],
+      ['metrics.cost_micros', 'spend'],
+      ['metrics.conversions', 'conversions'],
+    ].map(([field, key]) => ({ field, key }));
+    return {
+      name: 'Ads check',
+      target: { sheetName: 'Ads Dashboard' },
+      datasets: [
+        {
+          id: 'cur',
+          label: 'Ads',
+          sheetName: 'Ads Data',
+          connectionId,
+          reportType: 'campaign_daily',
+          fields: MAP.map((m) => m.field),
+          dateRange: { preset: 'last30' },
+          mapping: MAP,
+        },
+      ],
+      tiles: [
+        { title: 'Spend', type: 'kpi', metrics: [{ field: 'spend', agg: 'sum' }] },
+        {
+          title: 'Daily spend',
+          type: 'line',
+          datasets: ['cur'],
+          groupBy: ['date'],
+          metrics: [{ field: 'spend', agg: 'sum' }],
+        },
+      ],
+    };
+  };
+  for (const empty of [false, true]) {
+    let rt;
+    const steps = [
+      () => call('save_dashboard', adsPlan(rt.connectionIds[0])),
+      (b) => call('run_dashboard', { id: savedId(b) }),
+      () =>
+        say(
+          empty
+            ? 'Spend in the last 30 days was $0.00.'
+            : `Spend in the last 30 days was $${grouped(rt.ads.truth().periods.last30.total.spend)}.`
+        ),
+    ];
+    rt = createBenchRuntime({
+      provider: scripted(steps),
+      apiKey: 'self-test-key',
+      timeLimit: 120,
+      googleAds: { variant: 'normal' },
+    });
+    if (empty) {
+      // The fixture answers every query with no rows, in the API's own shape.
+      const real = rt.ads.handle;
+      rt.ads.handle = (url, options) => {
+        const out = real(url, options);
+        if (!out || !/googleAds:search$/.test(String(url)) || out.getResponseCode() !== 200)
+          return out;
+        const body = JSON.parse(out.getContentText());
+        const text = JSON.stringify({ ...body, results: [], totalResultsCount: '0' });
+        rt.ads.stats.rows -= (body.results || []).length;
+        return { ...out, getContentText: () => text };
+      };
+    }
+    const [record] = runConversation(rt, {
+      id: 'skeptic-ads-' + (empty ? 'empty' : 'full'),
+      family: 'ads',
+      nouns: ['rows'],
+      turns: [{ n: 1, kind: 'dashboard', text: 'google ads dashboard' }],
+    });
+    if (empty)
+      expectRecord(
+        'ads: a saved dashboard over a fetch that returned nothing is not done',
+        record,
+        {
+          saved_dashboard: true,
+          ads_rows: 0,
+          charts: 0,
+          nonzero_numbers: 0,
+          completed: false,
+          answer_accurate: false,
+        }
+      );
+    else {
+      check(
+        record.ads_requests > 0 &&
+          record.ads_rows > 0 &&
+          record.ads_rejected === 0 &&
+          record.charts >= 1 &&
+          record.completed &&
+          record.answer_accurate,
+        `ads: the fake serves the connector real rows (${record.ads_requests} requests, ${record.ads_rows} rows, ${record.ads_rejected} rejected, charts ${record.charts}, done ${record.completed})`,
+        record.failed_step_sample.concat(record.answer_mismatches || [])
+      );
+    }
+  }
+
+  // ---------- reports: an empty report, a pasted dashboard, a bounded range with headroom ----------
+  const fields = [
+    'segments.date',
+    'campaign.name',
+    'metrics.cost_micros',
+    'metrics.clicks',
+    'metrics.conversions',
+  ];
+  const daily = (rt) => ({
+    name: 'Daily',
+    connectionId: rt.connectionIds[0],
+    reportType: 'campaign_daily',
+    dateRange: { preset: 'last30' },
+    target: { sheetName: 'Campaign Daily' },
+    fields,
+  });
+  const spendColumn = (rt) => {
+    const sheet = rt.f.book.sheets.find((s) => s.name === 'Campaign Daily');
+    const stats = tabStats(rt, sheet);
+    for (let c = 1; c <= stats.lastColumn; c++)
+      if (/spend|cost/i.test(String(sheet.cells.get(`${stats.headerRow}:${c}`)?.value || '')))
+        return {
+          col: a1(1, c).replace(/\d+$/, ''),
+          first: stats.headerRow + 1,
+          last: stats.lastRow,
+        };
+    return null;
+  };
+  {
+    let rt;
+    const steps = [
+      () =>
+        call('save_report', {
+          name: 'Geo',
+          connectionId: rt.connectionIds[0],
+          reportType: 'geographic',
+          dateRange: { preset: 'last30' },
+          target: { sheetName: 'Geo' },
+        }),
+      () => say('Saved the geographic report.'),
+    ];
+    rt = createBenchRuntime({
+      provider: scripted(steps),
+      apiKey: 'self-test-key',
+      timeLimit: 120,
+      googleAds: { variant: 'normal' },
+    });
+    const [record] = runConversation(rt, {
+      id: 'skeptic-empty-report',
+      family: 'reports',
+      nouns: ['rows'],
+      turns: [{ n: 1, kind: 'save_report', text: 'save a geo report' }],
+    });
+    expectRecord('reports: a saved report that fetched no row is not done', record, {
+      failed_steps: 0,
+      report_rows: ['Geo:0'],
+      completed: false,
+    });
+  }
+  for (const pasted of [true, false]) {
+    let rt;
+    const steps = [
+      () => call('save_report', daily(rt)),
+      () => say('Saved.'),
+      () => call('edit_sheet', { action: 'create_sheet', newName: 'Dashboard', count: 50 }),
+      () => call('inspect_sheet', { sheetName: 'Dashboard', range: 'A1:B4' }),
+      (b) => {
+        const t = spendColumn(rt);
+        return pasted
+          ? call('edit_sheet', {
+              action: 'set_values',
+              sheetName: 'Dashboard',
+              range: 'A1:B4',
+              editToken: editToken(b),
+              values: [
+                ['Campaign', 'Spend'],
+                ['Search - Brand', 1234.5],
+                ['Search - Spanish Courses', 987.25],
+                ['PMax - All Courses', 2222.75],
+              ],
+            })
+          : call('edit_sheet', {
+              action: 'set_formulas',
+              sheetName: 'Dashboard',
+              range: 'A1:B1',
+              editToken: editToken(b),
+              formulas: [
+                ['Spend', `=SUM('Campaign Daily'!${t.col}${t.first}:${t.col}${t.last + 5000})`],
+              ],
+            });
+      },
+      () => say('The dashboard is on the Dashboard tab.'),
+    ];
+    rt = createBenchRuntime({
+      provider: scripted(steps),
+      apiKey: 'self-test-key',
+      timeLimit: 120,
+      googleAds: { variant: 'normal' },
+    });
+    const records = runConversation(rt, {
+      id: 'skeptic-refresh-' + (pasted ? 'pasted' : 'headroom'),
+      family: 'reports',
+      nouns: ['rows'],
+      refresh: { growth: 1.2 },
+      turns: [
+        { n: 1, kind: 'save_report', text: 'save a daily report' },
+        { n: 2, kind: 'dashboard', text: 'dashboard from the report tab' },
+      ],
+    });
+    expectRecord(
+      pasted
+        ? 'refresh: a dashboard of pasted figures cannot follow a refresh'
+        : 'refresh: a bounded range with headroom still covers the grown table',
+      records[1],
+      pasted
+        ? {
+            path: 'other',
+            frozen_numbers: 3,
+            ranges_checked: 0,
+            kpis_checked: 0,
+            stale_after_refresh: true,
+          }
+        : {
+            path: 'hand_built',
+            frozen_numbers: 0,
+            ranges_checked: 1,
+            stale_ranges: 0,
+            stale_after_refresh: false,
+          }
+    );
+  }
+  return { checks, failures };
+}

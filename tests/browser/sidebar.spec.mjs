@@ -128,6 +128,9 @@ test('saving with missing fields names them beside Save and the message clears o
   await page.locator('#report-name').fill('');
   await page.locator('#target-sheet').fill('');
   await page.locator('#save-report').click();
+  // Typing already fills the hidden line's text, so the text alone proves nothing: the line must
+  // show. Chrome's own validation stops a submit before the handler that shows it can run.
+  await expect(page.locator('#report-missing')).toBeVisible();
   await expect(page.locator('#report-missing')).toHaveText(
     'Fill in or fix: Report name, Output tab.'
   );
@@ -217,6 +220,36 @@ test('a saved paused report without previous output stays not run until continua
   await expect(page.locator('#notice')).toContainText('8 rows updated');
   await expect(card.locator('.status')).toHaveText('Up to date');
   await expect(card).not.toContainText('Not run yet');
+});
+
+test('a report run notice belongs to Reports, also when the run ends while another tab is open', async ({
+  page,
+}) => {
+  const card = page.locator('.report-card').first();
+  await card.getByRole('button', { name: /Run/ }).click();
+  await expect(page.locator('#notice')).toContainText('8 rows updated');
+  await expect(page.locator('#notice')).toBeVisible();
+  await page.locator('#tab-chat').click();
+  await expect(page.locator('#notice')).toBeHidden();
+  await page.locator('#tab-settings').click();
+  await expect(page.locator('#notice')).toBeHidden();
+  await page.locator('#tab-reports').click();
+  await expect(page.locator('#notice')).toBeVisible();
+  await expect(page.locator('#notice')).toContainText('8 rows updated');
+
+  await page.evaluate(() => {
+    window.DATAMOOV_PREVIEW_DELAY_MS = 1200;
+    window.DATAMOOV_PREVIEW_RUN_ROWS = 5;
+  });
+  await card.getByRole('button', { name: /Run/ }).click();
+  await page.locator('#tab-chat').click();
+  await expect.poll(() => page.locator('#notice').textContent(), { timeout: 10_000 }).toContain(
+    '5 rows updated'
+  );
+  await expect(page.locator('#notice')).toBeHidden();
+  await page.locator('#tab-reports').click();
+  await expect(page.locator('#notice')).toBeVisible();
+  await expect(page.locator('#notice')).toContainText('5 rows updated');
 });
 
 test('chat needs an AI provider set up under Settings, then answers with activity lines, option chips and a new-chat reset', async ({ page }) => {

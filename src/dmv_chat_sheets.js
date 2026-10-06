@@ -19,7 +19,11 @@ function dmvChatSheetObject_(value, keys, listFields) {
               })
               .join(', ') +
             '. Allowed: ' +
-            keys.join(', ') +
+            keys
+              .filter(function (key, index) {
+                return keys.indexOf(key) === index;
+              })
+              .join(', ') +
             '.'
           : '')
     );
@@ -480,7 +484,27 @@ function dmvChatSheetFormat_(input) {
 // The tab, range and current cells of an edit, after checking its inspection token: same user,
 // spreadsheet and tab, the inspected range or a part of it, not expired, and the cells of the
 // whole inspected range and the sheet settings unchanged. whole is the inspected range's area.
+// On a tab this request made, a missing or failing token is no refusal: the edit reads its own
+// range, and no token follows it.
 function dmvChatSheetInspected_(session, input) {
+  var sheet = dmvChatSheetTarget_(session, input.sheetName);
+  if (!dmvChatSheetIsMade_(session, sheet)) return dmvChatSheetChecked_(session, input, sheet);
+  try {
+    if (input.editToken !== undefined) return dmvChatSheetChecked_(session, input, sheet);
+  } catch (ignored) {
+    /* Read the range here instead. */
+  }
+  var area = dmvChatSheetArea_(sheet, input.range);
+  return {
+    sheet: sheet,
+    area: area,
+    snapshot: dmvChatSheetRead_(session, sheet, area),
+    tokenKey: null,
+    whole: area,
+  };
+}
+
+function dmvChatSheetChecked_(session, input, sheet) {
   if (typeof input.editToken !== 'string' || !/^e[a-f0-9]{32}$/.test(input.editToken))
     throw new Error('Inspect the target range before editing it.');
   var tokenKey = 'dmv:sheet-edit:' + input.editToken;
@@ -490,7 +514,6 @@ function dmvChatSheetInspected_(session, input) {
   } catch (ignored) {
     saved = null;
   }
-  var sheet = dmvChatSheetTarget_(session, input.sheetName);
   var area = dmvChatSheetArea_(sheet, input.range),
     whole = null;
   if (
@@ -595,7 +618,12 @@ function dmvChatSheetEditActions_() {
       fields: ['frozenRows', 'frozenColumns'],
       plan: dmvChatSheetFreezePlan_,
     },
-    rename_sheet: { builtIn: true, fields: ['newName'], plan: dmvChatSheetRenamePlan_ },
+    rename_sheet: {
+      builtIn: true,
+      target: 'sheet',
+      fields: ['newName'],
+      plan: dmvChatSheetRenamePlan_,
+    },
     create_sheet: {
       builtIn: true,
       target: 'none',
@@ -630,16 +658,15 @@ function dmvChatSheetSetPlan_(context) {
     touches = touches.concat(policy.touches || []);
     requests = requests.concat(policy.append || []);
   }
-  requests.push({
-    updateCells: {
-      range: area.grid,
-      rows: dmvChatSheetMatrix_(matrix, area, formulas),
-      fields: 'userEnteredValue',
-    },
-  });
+  var rows = dmvChatSheetMatrix_(matrix, area, formulas);
+  // New cells under a chart would be hidden; cells that hold data are the user's to edit.
+  if (!dmvChatSheetNonEmpty_(context.snapshot.cells))
+    dmvChatChartCovers_(session, sheet.getName(), area.grid);
+  requests.push({ updateCells: { range: area.grid, rows: rows, fields: 'userEnteredValue' } });
   return {
     requests: requests,
     touches: touches,
+    wrote: touches,
     overwrite: sheet.getName() + '!' + area.a1,
     // The count when the edit is too large for undo to count it.
     replaced: dmvChatSheetNonEmpty_(context.snapshot.cells),
@@ -667,7 +694,7 @@ function dmvChatSheetSetPlan_(context) {
 
 // Report and dashboard output may take formats, which a saved report's refresh keeps while its
 // columns stay the same (a dashboard refresh resets them): nothing is guarded.
-// autoFit sizes the range's columns to their content; undo leaves those widths.
+// autoFit sizes the range's columns to their content; undo puts their widths back.
 function dmvChatSheetFormatPlan_(context) {
   var input = context.input,
     area = context.area || dmvChatSheetWideArea_(context.sheet, input.range, 'format'),
@@ -689,11 +716,55 @@ function dmvChatSheetFormatPlan_(context) {
     requests: requests,
     touches: [],
     // Over more cells than undo keeps, the formats it replaces are lost, so it asks first.
-    undo: { snapshot: [area.grid] },
+    undo: {
+      snapshot: [area.grid],
+      reverse: input.format.autoFit
+        ? dmvChatSheetWidths_(context.session, context.sheet, area)
+        : [],
+    },
     readBack: !!context.area,
     range: area.a1,
     sheetName: input.sheetName,
   };
+}
+
+// The requests that set the columns of area back to their current widths, one per run of equal
+// widths (a column Sheets reports no size for has the default 100 pixels).
+function dmvChatSheetWidths_(session, sheet, area) {
+  var grid = area.grid,
+    // The area's first row: only its column metadata is wanted.
+    row = Object.assign({}, grid, { endRowIndex: grid.startRowIndex + 1 });
+  dmvChatSheetDeadline_(session);
+  var result = Sheets.Spreadsheets.get(session.spreadsheetId, {
+    ranges: [dmvChatActionTab_(sheet.getName()) + dmvChatGridA1_(row)],
+    fields: 'sheets(properties.sheetId,data(startColumn,columnMetadata(pixelSize)))',
+  });
+  var read = ((result && result.sheets) || []).filter(function (entry) {
+      return entry.properties && entry.properties.sheetId === grid.sheetId;
+    })[0],
+    meta = (read && read.data && read.data[0] && read.data[0].columnMetadata) || [],
+    requests = [];
+  for (var index = grid.startColumnIndex; index < grid.endColumnIndex; index++) {
+    var entry = meta[index - grid.startColumnIndex],
+      size = entry && entry.pixelSize !== undefined ? entry.pixelSize : 100,
+      last = requests[requests.length - 1];
+    if (last && last.updateDimensionProperties.properties.pixelSize === size)
+      last.updateDimensionProperties.range.endIndex = index + 1;
+    else
+      requests.push({
+        updateDimensionProperties: {
+          range: {
+            sheetId: grid.sheetId,
+            dimension: 'COLUMNS',
+            startIndex: index,
+            endIndex: index + 1,
+          },
+          properties: { pixelSize: size },
+          fields: 'pixelSize',
+        },
+      });
+  }
+  return requests;
 }
 
 // A sort that leaves out rows of the tab's data (from A1 to its last row and column) below one
@@ -854,7 +925,7 @@ function dmvChatSheetFreezePlan_(context) {
   };
 }
 
-// rename_sheet takes an inspected range of the tab, and no fresh token follows.
+// rename_sheet, a tab action: sheetName and newName only.
 function dmvChatSheetRenamePlan_(context) {
   var session = context.session,
     input = context.input,
@@ -876,12 +947,14 @@ function dmvChatSheetRenamePlan_(context) {
   // Sheets keeps tab names unique without regard to case, so the tab itself may take other
   // capitals.
   if (
-    session.spreadsheet.getSheets().some(function (other) {
-      return (
-        other.getSheetId() !== sheet.getSheetId() &&
-        other.getName().toLowerCase() === newName.toLowerCase()
-      );
-    })
+    dmvChatSeeNewTabs_(session)
+      .getSheets()
+      .some(function (other) {
+        return (
+          other.getSheetId() !== sheet.getSheetId() &&
+          other.getName().toLowerCase() === newName.toLowerCase()
+        );
+      })
   )
     throw new Error('A tab with that name already exists.');
   return {
@@ -895,8 +968,7 @@ function dmvChatSheetRenamePlan_(context) {
     ],
     touches: [],
     sheetName: input.newName,
-    text: 'Updated ' + input.sheetName + '!' + context.area.a1,
-    retoken: false,
+    text: 'Renamed tab ' + oldName + ' to ' + newName,
     after: function () {
       dmvChatUndoNone_(
         session,
@@ -912,15 +984,49 @@ function dmvChatSheetRenamePlan_(context) {
   };
 }
 
+// Refuses a new tab name another tab has in any case (Sheets keeps them unique that way, and its
+// own error names neither tab), naming that tab and a free name, read fresh, since a tab another
+// tool added through the Sheets API is not on the cached spreadsheet object.
+function dmvChatSheetNameFree_(session, name) {
+  var names = dmvChatSeeNewTabs_(session)
+    .getSheets()
+    .map(function (sheet) {
+      return sheet.getName();
+    });
+  var lower = names.map(function (item) {
+    return item.toLowerCase();
+  });
+  var at = lower.indexOf(name.toLowerCase());
+  if (at < 0) return;
+  var base = name.slice(0, 94),
+    suffix = 2;
+  while (lower.indexOf((base + ' ' + suffix).toLowerCase()) >= 0) suffix++;
+  var free = base + ' ' + suffix,
+    taken = dmvChatSheetTarget_(session, names[at]),
+    // Its size, for a call that wanted a tab of more rows.
+    tab = '"' + names[at] + '" (' + taken.getMaxRows().toLocaleString() + ' rows)';
+  throw new Error(
+    (dmvChatSheetIsMade_(session, taken)
+      ? 'This request already made the tab ' +
+        tab +
+        ': edit it (no inspection needed), or create_sheet'
+      : 'A tab named ' + tab + ' already exists: inspect it to edit it, or create_sheet') +
+      ' a free name such as "' +
+      free +
+      '".'
+  );
+}
+
 function dmvChatSheetCreatePlan_(context) {
   var session = context.session,
     input = context.input,
     name = dmvSheetName_(input.newName);
-  if (session.spreadsheet.getSheetByName(name))
-    throw new Error('A tab with that name already exists. Choose another name.');
+  dmvChatSheetNameFree_(session, name);
   // A helper tab of formulas over a large source needs rows for its whole result.
   var rowCount =
-    input.count === undefined ? 1000 : dmvChatSheetInteger_(input.count, 1, 200000, 'count');
+    input.count === undefined
+      ? 1000
+      : dmvChatSheetInteger_(input.count, 1, DMV_FORMULA.maxTabRows, 'count');
   return {
     requests: [
       {
@@ -934,6 +1040,7 @@ function dmvChatSheetCreatePlan_(context) {
     // The new tab is the one the output links to.
     after: function () {
       var tab = (context.sheet = dmvChatSheetTarget_(session, name));
+      dmvChatSheetMade_(session, tab.getSheetId());
       dmvChatUndoNone_(
         session,
         {
@@ -945,9 +1052,13 @@ function dmvChatSheetCreatePlan_(context) {
         dmvChatUndoNewTab_(name)
       );
       // A new tab is empty, so a token for its first block spares an inspection before the
-      // edits that fill it.
+      // edits that fill it; this request's edits there need none at all (dmvChatSheetInspected_).
       var block = dmvChatSheetArea_(tab, 'A1:Z' + Math.min(38, rowCount));
-      return { editToken: dmvChatSheetRetoken_(session, tab, block), range: block.a1 };
+      return {
+        editToken: dmvChatSheetRetoken_(session, tab, block),
+        range: block.a1,
+        note: 'This request may edit any range of this tab without inspect_sheet or editToken.',
+      };
     },
   };
 }
@@ -977,7 +1088,7 @@ function dmvChatSheetTools_() {
     {
       name: 'edit_sheet',
       description:
-        'Make a requested sheet edit in one atomic batch. Existing edits take the inspected sheetName/editToken and its range or a part, and return a fresh editToken for that whole range; tab and row/column actions (freeze, filter without a range, insert/delete/group/ungroup rows or columns, duplicate/delete/hide/show_sheet) take sheetName only, no inspection. Without editToken, format, data_validation, sort and filter take any range (D2:D: to the last row) or none (the tab data). Supports the analyst actions listed in action too. The result lists the formula errors to fix. On report and dashboard output only format, filter and freeze are allowed (conditional_format too; a dashboard refresh resets formats); change the report for anything else. A needsConfirmation answer changed nothing: ask with ask_user (Yes/No); on yes repeat the call with its confirmToken. undo_sheet_edit reverts cell edits.',
+        'Make a requested sheet edit in one atomic batch. Existing edits take the inspected sheetName/editToken and its range or a part, and return a fresh editToken for that whole range; tab and row/column actions (freeze, filter without a range, insert/delete/group/ungroup rows or columns, rename/duplicate/delete/hide/show_sheet) take sheetName only, no inspection. Without editToken, format, data_validation, sort and filter take any range (D2:D: to the last row) or none (the tab data). Supports the analyst actions listed in action too. The result lists the formula errors to fix. On report and dashboard output only format, filter and freeze are allowed (conditional_format too; a dashboard refresh resets formats); change the report for anything else. A needsConfirmation answer changed nothing: ask with ask_user (Yes/No); on yes repeat the call with its confirmToken. undo_sheet_edit reverts cell edits.',
       input_schema: {
         type: 'object',
         properties: Object.assign({}, target, {

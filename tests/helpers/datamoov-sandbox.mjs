@@ -596,7 +596,10 @@ export function createDatamoovSandbox(settings = {}) {
         target.cells.set(key, { ...entry, value: '#REF!', error: { type: 'REF', message: 'Array result was not expanded because it would overwrite data.' } });
         return;
       }
-      target.cells.set(key, { ...entry, value: lines[0][0] });
+      // Sheets shows "" in a result as an empty text, which a paste of values keeps (pasteCell).
+      const blanks = new Set();
+      lines.forEach((line, r) => line.forEach((value, c) => { if ((r || c) && value === '') blanks.add(r + ':' + c); }));
+      target.cells.set(key, { ...entry, value: lines[0][0], ...(blanks.size ? { blanks } : {}) });
       lines.forEach((line, r) => line.forEach((value, c) => {
         if ((r || c) && value !== '') target.cells.set(address(row + r + 1, column + c + 1), { value, formula: '', spilledFrom: key });
       }));
@@ -909,7 +912,11 @@ export function createDatamoovSandbox(settings = {}) {
       const key = address(row + 1, column + 1), all = type === 'PASTE_NORMAL' || type === 'PASTE_NO_BORDERS';
       if (all || type === 'PASTE_FORMULA')
         keyed(sheet.cells, key, data.entry?.formula ? formulaEntry(data.entry, formulaFor(data.entry.formula)) : data.entry);
-      if (type === 'PASTE_VALUES') keyed(sheet.cells, key, data.entry && data.entry.value !== '' ? { value: data.entry.value, formula: '' } : undefined);
+      // A formula's "" (its own, or inside its array result) is pasted as a stored empty text,
+      // which is not blank: it holds a value and blocks array results, as in Sheets.
+      if (type === 'PASTE_VALUES')
+        keyed(sheet.cells, key, data.emptyText ? { value: '', formula: '', emptyText: true }
+          : data.entry && data.entry.value !== '' ? { value: data.entry.value, formula: '' } : undefined);
       if (type === 'PASTE_VALUES' || type === 'PASTE_FORMULA') eraseChips(sheet, row, column);
       if (all || type === 'PASTE_FORMAT')
         keyed(sheet.formats, key, type === 'PASTE_NO_BORDERS' ? setPath(data.format || {}, ['borders'], sheet.formats.get(key)?.borders) : data.format);
@@ -968,7 +975,16 @@ export function createDatamoovSandbox(settings = {}) {
         if (to.startRow + pasteRows * tilesDown > to.sheet.maxRows || to.startColumn + pasteColumns * tilesAcross > to.sheet.maxColumns)
           fail('The paste would exceed the grid limits.');
         const cells = [];
-        for (let r = from.startRow; r < from.endRow; r++) for (let c = from.startColumn; c < from.endColumn; c++) cells.push({ row: r, column: c, data: cellAt(from.sheet, r, c) });
+        // The formulas whose results show "" somewhere, for the empty texts a paste of values keeps.
+        const blanking = [...from.sheet.cells].filter(([, entry]) => entry.blanks)
+          .map(([key, entry]) => ({ at: key.split(':').map((part) => Number(part) - 1), blanks: entry.blanks }));
+        const emptyText = (r, c, entry) => entry ? Boolean(entry.formula) && entry.value === ''
+          : blanking.some(({ at, blanks }) => blanks.has((r - at[0]) + ':' + (c - at[1])));
+        for (let r = from.startRow; r < from.endRow; r++) for (let c = from.startColumn; c < from.endColumn; c++) {
+          const data = cellAt(from.sheet, r, c);
+          if (type === 'PASTE_VALUES' && emptyText(r, c, data.entry)) data.emptyText = true;
+          cells.push({ row: r, column: c, data });
+        }
         const merges = from.sheet.merges.filter((merge) => contains(origin, merge)).map(plain);
         const rules = plain(from.sheet.conditionalFormats);
         const all = type === 'PASTE_NORMAL' || type === 'PASTE_NO_BORDERS';
@@ -1528,11 +1544,11 @@ export function createDatamoovSandbox(settings = {}) {
   };
   function cellData(sheet, row, column, timezone) {
     const key = address(row + 1, column + 1), entry = sheet.cells.get(key), format = sheet.formats.get(key), data = {};
-    if (entry && (entry.formula || entry.error || (entry.value !== '' && entry.value !== null && entry.value !== undefined))) {
+    if (entry && (entry.formula || entry.error || entry.emptyText || (entry.value !== '' && entry.value !== null && entry.value !== undefined))) {
       const error = entry.error ? { errorValue: { type: entry.error.type, message: entry.error.message } } : null;
       // A cell an array result filled has a value but nothing entered.
       if (!entry.spilledFrom) data.userEnteredValue = entry.formula ? { formulaValue: entry.formula } : error || typedValue(entry.value, timezone);
-      if (error || entry.value !== '') {
+      if (error || entry.value !== '' || entry.emptyText) {
         data.effectiveValue = error || typedValue(entry.value, timezone);
         data.formattedValue = error ? ERROR_TEXT[entry.error.type] : typeof entry.value === 'boolean' ? (entry.value ? 'TRUE' : 'FALSE')
           : isDate(entry.value) ? dateText(entry.value, timezone) : String(entry.value);
@@ -1711,7 +1727,7 @@ export function createDatamoovSandbox(settings = {}) {
   // The memo shared by the cells read inside reading(); each other read has its own.
   let sharedMemo = null;
   const context = vm.createContext(fakeServices, { codeGeneration: { strings: false, wasm: false } });
-  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_welcome.js', 'dmv_credentials.js', 'dmv_connections.js', 'dmv_credential_import.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js', 'dmv_continuation.js', 'dmv_ai.js', 'dmv_formulas.js', 'dmv_chat_tools.js', 'dmv_chat_sheets.js', 'dmv_chat_pivots.js', 'dmv_chat_sheet_actions.js', 'dmv_chat_sheet_conditions.js', 'dmv_chat_sheet_formulas.js', 'dmv_chat_sheet_safety.js', 'dmv_dashboards.js', 'dmv_dashboard_run.js', 'dmv_dashboard_page.js', 'dmv_dashboard_charts.js', 'dmv_dashboard_cells.js', 'dmv_chat_dashboards.js', 'dmv_chat_reports.js', 'dmv_chat.js']) {
+  for (const filename of ['dmv_core.js', 'dmv_sql.js', 'dmv_http.js', 'dmv_connector_helpers.js', 'dmv_store.js', 'dmv_welcome.js', 'dmv_credentials.js', 'dmv_connections.js', 'dmv_credential_import.js', 'dmv_reports.js', 'dmv_writer.js', 'dmv_schedule.js', 'dmv_continuation.js', 'dmv_ai.js', 'dmv_formulas.js', 'dmv_chat_tools.js', 'dmv_chat_sheets.js', 'dmv_chat_pivots.js', 'dmv_chat_sheet_actions.js', 'dmv_chat_sheet_conditions.js', 'dmv_chat_sheet_formulas.js', 'dmv_chat_sheet_safety.js', 'dmv_dashboards.js', 'dmv_dashboard_run.js', 'dmv_dashboard_page.js', 'dmv_dashboard_charts.js', 'dmv_dashboard_cells.js', 'dmv_dashboard_tabs.js', 'dmv_chat_dashboards.js', 'dmv_chat_reports.js', 'dmv_chat.js']) {
     new vm.Script(readFileSync(new URL(`../../src/${filename}`, import.meta.url), 'utf8'), { filename }).runInContext(context, { timeout: 1000 });
   }
   const book = addSpreadsheet();

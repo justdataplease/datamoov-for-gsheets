@@ -67,6 +67,38 @@ function sourceGrid(f) {
 
 /* create_pivot */
 
+test('the tabs a request makes are remembered for it, and no tab it found', () => {
+  const f = fixture();
+  assert.equal(f.tabAction('create_sheet', { newName: 'Made' }).ok, true);
+  assert.equal(f.tabAction('duplicate_sheet', { sheetName: 'Source', newName: 'Copy' }).ok, true);
+  assert.equal(f.pivot({}).ok, true);
+  assert.deepEqual(plain(f.session.newTabs), [f.tab('Made').id, f.tab('Copy').id, f.tab('Pivot').id]);
+  assert.equal(f.session.newTabs.includes(f.source.id), false);
+  // A later request starts with none.
+  assert.deepEqual(plain(f.answer('Yes').newTabs), []);
+});
+
+test('COUNT over a column of text is refused on both paths: it would show 0 for every group', () => {
+  const f = fixture();
+  const count = (column, patch = {}) => ({ values: [{ column, summarize: 'COUNT' }], ...patch });
+  for (const patch of [{}, { totals: false }]) {
+    const before = f.state.batches.length;
+    assert.throws(
+      () => f.pivot(count(2, patch)),
+      /COUNT counts numbers only; "Campaign" holds text: use COUNTA\./,
+      JSON.stringify(patch)
+    );
+    assert.equal(f.state.batches.length, before);
+  }
+  // Numbers and dates are what COUNT counts; COUNTA counts text.
+  assert.equal(f.pivot(count(4, { targetSheet: 'Counted' })).ok, true);
+  assert.equal(f.pivot(count(1, { targetSheet: 'Dated', totals: false })).ok, true);
+  assert.equal(
+    f.pivot({ targetSheet: 'Named', values: [{ column: 2, summarize: 'COUNTA' }] }).ok,
+    true
+  );
+});
+
 test('the original create_pivot options keep the original path; any analyst option takes the new one', () => {
   const f = fixture();
   assert.equal(f.api.dmvChatPivotExtended_(f.input), false);

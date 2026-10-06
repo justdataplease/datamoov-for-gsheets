@@ -233,6 +233,14 @@ test('a LET name has the size of its value, so a generator sharing a random colu
   // A LAMBDA's own names stand for values known only when it runs.
   assert.equal(f.check('=LET(x,A1:A3,MAP(x,LAMBDA(v,v)))').shape, null);
   assert.equal(f.check('=LET(rows,FILTER(A1:A9,A1:A9>0),rows)').shape, null);
+  // A name bound to a number sizes SEQUENCE and MAKEARRAY as the number does; a computed value
+  // does not.
+  assert.deepEqual(
+    f.check('=LET(n,30000,{"ID","Qty";MAKEARRAY(n,2,LAMBDA(r,c,r))})').shape,
+    { rows: 30001, columns: 2 }
+  );
+  assert.deepEqual(f.check('=LET(n,4,w,2,SEQUENCE(n,w))').shape, { rows: 4, columns: 2 });
+  assert.equal(f.check('=LET(n,2*2,SEQUENCE(n))').shape, null);
 });
 
 test('every denied function is refused in every disguise, by name, and nothing is written', () => {
@@ -392,14 +400,20 @@ test('an array result is checked for room before writing and its cells are kept 
   assert.deepEqual(f.meta(f.work, 12, 7), { note: 'kept note' });
   // A result of unknown size is left to Sheets, which never spills over data.
   assert.equal(f.edit([['=FILTER(A1:A10,A1:A10>0)']], 'B3').ok, true);
-  // A result too big to guard is left to Sheets too, and never grows the tab.
-  const batches = f.state.batches.length;
+  // A result too big to keep for undo is left to Sheets, which never spills over data, but the
+  // tab still grows to hold it, up to the 200,000 rows create_sheet allows.
   assert.equal(f.edit([['=SEQUENCE(60000)']], 'A1').ok, true);
+  assert.deepEqual(f.state.batches.at(-1).body.requests[0], {
+    appendDimension: { sheetId: f.work.id, dimension: 'ROWS', length: 59000 },
+  });
+  assert.equal(f.work.maxRows, 60000);
+  const batches = f.state.batches.length;
+  assert.equal(f.edit([['=SEQUENCE(250000)']], 'H1').ok, true);
   assert.equal(
     f.state.batches.slice(batches).some((batch) => batch.body.requests.some((request) => request.appendDimension)),
     false
   );
-  assert.equal(f.work.maxRows, 1000);
+  assert.equal(f.work.maxRows, 60000);
 });
 
 test('an array result may not spill onto report output', () => {
@@ -539,6 +553,58 @@ test('errors inside an array result and where a result of unknown size spilled a
   );
 });
 
+// A #REF! whose result found no room is no wrong formula: the read-back says what is short and
+// how to make room, so the model does not give the formula up and leave the error behind.
+test('a #REF! with no room for its result says how to make room instead of only showing the error', () => {
+  const f = fixture();
+  f.compute = () =>
+    f.setError(
+      f.work,
+      1,
+      1,
+      { type: 'REF', message: 'Result was not automatically expanded, please insert more rows.' },
+      '=SEQUENCE(COUNTA(B:B))'
+    );
+  let result = f.edit([['=SEQUENCE(COUNTA(B:B))']], 'A1');
+  // The error is reported as before, with Sheets' own message.
+  assert.deepEqual(result.formulaErrors, [
+    { cell: 'Work!A1', error: '#REF!', message: 'Result was not automatically expanded, please insert more rows.' },
+  ]);
+  assert.match(result.next, /Work!A1 shows #REF! because its result needs more rows than the tab has/);
+  assert.match(result.next, /Work has 1000 rows/);
+  assert.match(result.next, /insert_rows/);
+  assert.match(result.next, /create_sheet with a count/);
+  assert.match(result.next, /Nothing was rolled back/);
+  // Columns short.
+  f.compute = () =>
+    f.setError(
+      f.work,
+      3,
+      1,
+      { type: 'REF', message: 'Result was not automatically expanded, please insert more columns.' },
+      '=TRANSPOSE(B1:B100)'
+    );
+  result = f.edit([['=TRANSPOSE(B1:B100)']], 'A3');
+  assert.match(result.next, /Work!A3 shows #REF! because its result needs more columns than the tab has/);
+  assert.match(result.next, /insert_columns/);
+  // Data in the way of the result.
+  f.compute = () =>
+    f.setError(
+      f.work,
+      20,
+      8,
+      { type: 'REF', message: 'Array result was not expanded because it would overwrite data in H22.' },
+      '=UNIQUE(A1:A5)'
+    );
+  result = f.edit([['=UNIQUE(A1:A5)']], 'H20');
+  assert.match(result.next, /Work!H20 shows #REF! because cells in the way of its result hold data/);
+  // Any other error keeps the plain note.
+  f.compute = () =>
+    f.setError(f.work, 30, 2, { type: 'DIVIDE_BY_ZERO', message: 'Function DIVIDE parameter 2 cannot be zero.' }, '=1/0');
+  result = f.edit([['=1/0']], 'B30');
+  assert.doesNotMatch(result.next, /#REF!/);
+});
+
 test('search_sheets finds values and formulas across tabs, read-only, with caps and totals', () => {
   const f = fixture();
   f.fill = (sheet, rows) => rows.forEach((row, r) => row.forEach((value, c) => value !== null && f.setCell(sheet, r + 1, c + 1, value)));
@@ -627,6 +693,35 @@ test('search_sheets finds values and formulas across tabs, read-only, with caps 
   ])
     assert.throws(() => f.search(input), message, JSON.stringify(input));
   assert.equal(f.state.batches.length, batches);
+});
+
+test('search_sheets without a query lists the cells of the range it names, as a model peeking at it expects', () => {
+  // A benchmark run sent { sheetName, range: 'A1:C5' } with no query to look at a tab's top.
+  const f = fixture();
+  const data = f.book.insertSheet('Data');
+  [
+    ['Date', 'Group', 'Amount'],
+    ['2026-09-01', 'North', 12],
+    ['2026-09-02', '', 5],
+  ].forEach((row, r) => row.forEach((value, c) => f.setCell(data, r + 1, c + 1, value)));
+  const batches = f.state.batches.length;
+  const result = f.search({ sheetName: 'Data', range: 'A1:C5' });
+  assert.equal(result.total, 8);
+  assert.deepEqual(
+    result.matches.map((match) => match.cell),
+    ['Data!A1', 'Data!B1', 'Data!C1', 'Data!A2', 'Data!B2', 'Data!C2', 'Data!A3', 'Data!C3']
+  );
+  assert.deepEqual(result.matches[5], { cell: 'Data!C2', value: '12' });
+  assert.match(result.note, /No query: every non-empty cell of Data!A1:C5 is listed\./);
+  assert.match(f.session.events.at(-1).text, /^Listed the non-empty cells of Data!A1:C5: 8$/);
+  assert.equal(f.state.batches.length, batches);
+  // Without a range there is nothing bounded to list, so the refusal says how to look.
+  for (const input of [{}, { sheetName: 'Data' }, { query: '', regex: true, sheetName: 'Data', range: 'A1:C5' }])
+    assert.throws(
+      () => f.search(input),
+      /^Error: query must be text of 1 to 200 characters: what to find\. To list the cells of a range, pass sheetName and range without query\.$/,
+      JSON.stringify(input)
+    );
 });
 
 test('search_sheets reports duplicate rows by key columns without changing anything', () => {

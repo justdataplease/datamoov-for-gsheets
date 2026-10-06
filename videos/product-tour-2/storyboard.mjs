@@ -127,7 +127,7 @@ export default async function (d) {
   /* ---- Open: the card first; the sheet is set up under it ---- */
   await d.stage('card', {
     kicker: 'A tour of DataMoov for Google Sheets',
-    title: 'From any source to a live dashboard. In one sheet.',
+    title: "Don't leave your beloved spreadsheet to get an answer.",
   });
   const opened = Date.now();
   await d.stage('title', 'Demo Store');

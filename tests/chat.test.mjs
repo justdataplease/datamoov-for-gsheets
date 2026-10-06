@@ -234,7 +234,8 @@ test('the round budget ends with a tools-disabled final answer and tool errors t
   const second = payload(f.state.http[1]);
   const expired = second.messages[2].content[0];
   assert.equal(expired.is_error, true);
-  assert.match(JSON.parse(expired.content).error, /has expired\. Run the report again/);
+  // An id no tool of this chat returned is not called expired, which sent models back to it.
+  assert.match(JSON.parse(expired.content).error, /^r00000000 is not a result of this chat\. No result exists yet in this chat: get the data first with run_report/);
   const third = payload(f.state.http[2]);
   assert.equal(third.tools, undefined, 'the final answer call disables tools');
   assert.match(third.messages[third.messages.length - 1].content[0].text, /Answer now/);
@@ -309,7 +310,9 @@ test('read_sheet types columns from the user tab, discover_fields filters by sea
   const another = f.api.dmvChatCreateChart_(session, { resultId: read.resultId, chartType: 'line', xColumn: 'Month', seriesColumns: ['orders'], title: 'Orders trend' });
   assert.equal(another.anchorCell, 'I39', 'a new chart goes below the charts at I1 and I20 instead of on top of them');
   assert.equal(f.state.charts.length, count + 1, 'earlier charts stay');
-  assert.equal(f.api.dmvChatCreateChart_(session, { resultId: read.resultId, chartType: 'line', xColumn: 'Month', seriesColumns: ['orders'], anchorCell: 'I1' }).anchorCell, 'I1', 'an explicit anchor is honored');
+  assert.equal(f.api.dmvChatCreateChart_(session, { resultId: read.resultId, chartType: 'line', xColumn: 'Month', seriesColumns: ['orders'], anchorCell: 'Q1' }).anchorCell, 'Q1', 'an explicit anchor is honored');
+  // ...unless it lies over another chart (chat-sheet-placement): it goes below them.
+  assert.equal(f.api.dmvChatCreateChart_(session, { resultId: read.resultId, chartType: 'line', xColumn: 'Month', seriesColumns: ['orders'], anchorCell: 'I1' }).anchorCell, 'I58', 'an explicit anchor over a chart moves below it');
 });
 
 test('OpenAI and Gemini adapters translate tools, tool calls and tool results into their own shapes', () => {

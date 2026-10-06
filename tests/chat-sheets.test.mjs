@@ -389,7 +389,7 @@ test('freeze and new-tab creation are bounded, while rename protects saved repor
   assert.ok(f.tab('New output'));
   assert.throws(
     () => f.api.dmvChatEditSheet_(f.session, { action: 'create_sheet', newName: 'New output' }),
-    /already exists/
+    /already made the tab "New output"/
   );
   f.api.dmvList_ = (kind) =>
     kind === 'report' ? [{ spreadsheetId: f.book.id, target: { sheetName: 'Output' } }] : [];
