@@ -23,7 +23,8 @@
 var DMV_FORMULA = {
   maxLength: 8000,
   maxDepth: 100,
-  // Exact spills larger than this are left to Sheets rather than read for undo.
+  // Exact spills larger than this, alone or together in one edit, are left to Sheets rather than
+  // read for undo.
   maxSpillCells: 50000,
   // A tab grows for an exact result up to the rows create_sheet allows, never past them.
   maxTabRows: 200000,
@@ -675,7 +676,11 @@ function dmvChatSheetFormulaPolicy_(session, sheet, area, formulas) {
     unknown = [],
     maxRows = sheet.getMaxRows(),
     maxColumns = sheet.getMaxColumns(),
-    grow = { rows: 0, columns: 0 };
+    grow = { rows: 0, columns: 0 },
+    // Every exact result, checked against the others; spills holds those read before writing,
+    // at most maxSpillCells cells together (guarded).
+    exacts = [],
+    guarded = 0;
   formulas.forEach(function (line, r) {
     line.forEach(function (formula, c) {
       if ((r * area.columns + c) % 50 === 0) dmvChatSheetDeadline_(session);
@@ -716,16 +721,11 @@ function dmvChatSheetFormulaPolicy_(session, sheet, area, formulas) {
         grow.rows = Math.max(grow.rows, spill.endRowIndex - maxRows);
         grow.columns = Math.max(grow.columns, spill.endColumnIndex - maxColumns);
       }
-      // Too large to read for undo: left to Sheets, and read back by its exact size.
-      if (shape.rows * shape.columns > DMV_FORMULA.maxSpillCells) {
-        unknown.push([row, column, shape.rows, shape.columns]);
-        return;
-      }
       // Results start at their own cell and grow right and down, so two of them can only meet
       // over a cell this edit writes: a value there, or a blank another result already fills.
       if (
         dmvChatFormulaOverlap_(spill, grid, formulas) ||
-        spills.some(function (other) {
+        exacts.some(function (other) {
           return dmvChatSheetRuleOverlap_(spill, other);
         })
       )
@@ -735,7 +735,15 @@ function dmvChatSheetFormulaPolicy_(session, sheet, area, formulas) {
             dmvChatGridA1_(spill) +
             ', which overlaps other cells this edit writes. Sheets would show #REF!. Leave room for the result or write fewer formulas.'
         );
+      exacts.push(spill);
+      // Too large to read for undo, alone or with the results before it in this edit: left to
+      // Sheets, which shows #REF! rather than spill over data, and read back near its formula.
+      if (guarded + shape.rows * shape.columns > DMV_FORMULA.maxSpillCells) {
+        unknown.push([row, column, shape.rows, shape.columns]);
+        return;
+      }
       spills.push(spill);
+      guarded += shape.rows * shape.columns;
     });
   });
   // The cells each result fills besides its own, within the tab as it is (the rows and columns
@@ -765,7 +773,7 @@ function dmvChatSheetFormulaPolicy_(session, sheet, area, formulas) {
     touches = touches.concat(spill.grids);
   });
   if (touches.length) {
-    var read = dmvChatSheetCells_(session, touches),
+    var read = dmvChatSheetCells_(session, touches, 'userEnteredValue'),
       at = 0;
     spills.forEach(function (spill) {
       var taken = [];
@@ -1022,6 +1030,13 @@ function dmvChatSheetFormulaReadBack_(session, written) {
           column + right + 1 >= policy.probe.endColumnIndex)
       )
         item.note = 'Continues past the cells read back.';
+      // A result too large to read whole is checked near its formula, which shows any #REF!.
+      else if (
+        exact &&
+        (row + down + 1 > policy.probe.endRowIndex ||
+          column + right + 1 > policy.probe.endColumnIndex)
+      )
+        item.note = 'Too large to read back whole: only the cells near its formula were checked.';
       spills.push(item);
     });
   }

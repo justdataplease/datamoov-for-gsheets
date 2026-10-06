@@ -322,6 +322,8 @@ export function createDatamoovSandbox(settings = {}) {
     flushes: 0, lockAcquires: 0, lockReleases: 0, lockAvailable: true, triggers: [],
     // Cells the app read: getValues, getDisplayValues and getFormulas, and grid data of spreadsheets.get.
     cellsRead: 0,
+    // The most cells one of those calls read, as the app holds its answer at once.
+    largestRead: 0,
     scriptLockAcquires: 0, scriptLockReleases: 0, scriptLockAvailable: true, scriptLockWaits: [],
     createdTriggers: [], deletedTriggers: [], http: [], responses: [], sleeps: [], charts: [], gets: [], reads: [],
     failBatch: false, failTrigger: false, failProperty: null,
@@ -349,7 +351,12 @@ export function createDatamoovSandbox(settings = {}) {
   function range(sheet, row, column, rows = 1, columns = 1) {
     if (row < 1 || column < 1 || rows < 1 || columns < 1 || row + rows - 1 > sheet.maxRows || column + columns - 1 > sheet.maxColumns) throw new Error('Range exceeds sheet grid');
     // Every read of cells is recorded, so a test can tell which tabs a run read back, and counted.
-    const counted = (method, read) => () => { state.reads.push({ sheet: sheet.name, method, row, column, rows, columns }); state.cellsRead += rows * columns; return read(); };
+    const counted = (method, read) => () => {
+      state.reads.push({ sheet: sheet.name, method, row, column, rows, columns });
+      state.cellsRead += rows * columns;
+      state.largestRead = Math.max(state.largestRead, rows * columns);
+      return read();
+    };
     const result = {
       // As in Apps Script, a number formatted as a date comes back as that date in the spreadsheet's timezone.
       getValues: counted('getValues', () => Array.from({ length: rows }, (_, r) => Array.from({ length: columns }, (_, c) => {
@@ -1585,6 +1592,7 @@ export function createDatamoovSandbox(settings = {}) {
       return area;
     });
     // Ranges limit the answer to their tabs, each with one data block per range.
+    let read = 0;
     const sheets = book.sheets.filter((sheet) => !areas.length || areas.some((area) => area.sheet === sheet)).map((sheet) => {
       const entry = {
         properties: sheetProperties(sheet, book.sheets.indexOf(sheet)),
@@ -1597,7 +1605,7 @@ export function createDatamoovSandbox(settings = {}) {
           .map(({ spreadsheetId: _, ...chart }) => chart),
       };
       if (wantsData) for (const area of areas.length ? areas.filter((item) => item.sheet === sheet) : [{ endRow: sheet.maxRows, endColumn: sheet.maxColumns }])
-        state.cellsRead += (area.endRow - (area.startRow || 0)) * (area.endColumn - (area.startColumn || 0));
+        read += (area.endRow - (area.startRow || 0)) * (area.endColumn - (area.startColumn || 0));
       if (wantsData) entry.data = (areas.length ? areas.filter((area) => area.sheet === sheet) : [{ sheet, startRow: 0, endRow: sheet.maxRows, startColumn: 0, endColumn: sheet.maxColumns }])
         .map((area) => ({
           startRow: area.startRow, startColumn: area.startColumn,
@@ -1608,6 +1616,8 @@ export function createDatamoovSandbox(settings = {}) {
         }));
       return entry;
     });
+    state.cellsRead += read;
+    state.largestRead = Math.max(state.largestRead, read);
     const result = projectFields(apiJson({
       spreadsheetId: book.id, properties: { title: book.title || 'Untitled spreadsheet', locale: 'en_US', timeZone: book.timezone },
       sheets, namedRanges: book.namedRanges || [],

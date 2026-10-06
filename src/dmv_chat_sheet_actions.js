@@ -77,6 +77,10 @@ var DMV_SHEET_ACTIONS = {
   // The most cells of a freeze whose shown values are read to find those blanks: a larger result
   // (100,000 rows of 10 columns) is checked for entries alone, in the time an edit has.
   blankCells: 300000,
+  // The most cells a freeze reads to size the results of several formulas from the sheet and
+  // check for other entries (dmvChatActionFreezeArea_): reads in bands keep memory bounded, this
+  // keeps the time. One result is read whatever its size: there is nothing fewer to freeze.
+  freezeReadCells: 400000,
   findCells: 50000,
   regexText: 5000,
   // Characters on which find_replace's ., $, \s and \b mean different things in JavaScript, Java
@@ -666,8 +670,8 @@ function dmvChatActionPaste_(context, move) {
           ' blank cells of the result were pasted as empty text, too scattered to clear in one edit.';
       if (!freeze.shown)
         plan.result.note =
-          'Any blank cells of the result were pasted as empty text: at more than ' +
-          DMV_SHEET_ACTIONS.blankCells +
+          'Any blank cells of the result were pasted as empty text: at ' +
+          dmvChatGridCells_(freeze.grid) +
           ' cells, the result is too large to check for them in one edit.';
     }
     if (type === 'all' || type === 'formats')
@@ -758,24 +762,37 @@ function dmvChatActionShownFormats_(context, grid) {
 // for it). The range is grown to the whole array result of each formula it starts from, which
 // can be larger than an inspection, so no result is frozen in part. An inspected range starts from a formula in its first cell; a range larger than an inspection
 // (dmvChatActionPasteTarget_) from the formulas of its first row, the first in its first cell.
-// A result's size is read from the sheet, which shows it even when the formula alone does not
-// tell (QUERY, a computed MAKEARRAY): the cells right of and below the formula that show a value
-// nobody entered, up to the first entered cell, so an empty value inside the result is kept too.
+// A result's size comes from its formula when the formula tells it exactly (SEQUENCE(100000),
+// MAKEARRAY with numbers) and the sheet shows the result ending there; otherwise it is read from
+// the sheet, which shows it even when the formula alone does not tell (QUERY, a computed
+// MAKEARRAY): the cells right of and below the formula that show a value nobody entered, up to
+// the first entered cell, so an empty value inside the result is kept too.
 // Any other entry in the grown area, outside the inspection or besides those formulas, is
-// refused, and so is a formula that shows an error: it has no result to keep.
+// refused, and so is a formula that shows an error: it has no result to keep. The cells an exact
+// result fills hold no entry (Sheets shows #REF! otherwise), so they are not read for one; on a
+// tab this request made, neither are those of the range given, which are all the request's own
+// and frozen as asked. Sizing and checking several results that only the sheet sizes read at
+// most freezeReadCells cells.
 function dmvChatActionFreezeArea_(context) {
   var session = context.session,
     sheet = context.sheet,
     grid = context.area.grid,
     row = grid.startRowIndex,
     column = grid.startColumnIndex,
-    first = context.snapshot ? context.snapshot.cells[0][0] : null;
+    first = context.snapshot ? context.snapshot.cells[0][0] : null,
+    made = dmvChatSheetIsMade_(session, sheet),
+    budget = DMV_SHEET_ACTIONS.freezeReadCells,
+    cache = {};
   function entered(cell) {
-    return !!(cell.userEnteredValue && Object.keys(cell.userEnteredValue).length);
+    return !!(cell && cell.userEnteredValue && Object.keys(cell.userEnteredValue).length);
   }
   // A value other than "", which Sheets would paste as a stored empty text.
   function shows(cell) {
     return !!cell.effectiveValue && cell.effectiveValue.stringValue !== '';
+  }
+  // A cell an array result fills: a value nobody entered.
+  function spilled(cell) {
+    return !!cell && !!cell.effectiveValue && !entered(cell);
   }
   function shown(cells) {
     return cells.map(function (line) {
@@ -800,8 +817,77 @@ function dmvChatActionFreezeArea_(context) {
     }
     return size;
   }
+  // How many formulas of the first row have a result sized from the sheet, not by the formula.
+  function unsized() {
+    var count = 0;
+    for (var at = 0; at < width; at++)
+      if (
+        entered(line[at]) &&
+        line[at].userEnteredValue.formulaValue &&
+        !exacts.some(function (cover) {
+          return cover.column === column + at;
+        })
+      )
+        count++;
+    return count;
+  }
+  // Reads grids in bands within what is left of the budget, or refuses with why; whole names the
+  // results' range once it is known. The budget holds for several results sized from the sheet:
+  // one is read however tall the tab, as there is nothing fewer to freeze, and the bands bound
+  // the memory and the deadline the time.
+  function read(grids, fields, visit, whole) {
+    var cells = 0;
+    grids.forEach(function (part) {
+      cells += dmvChatGridCells_(part);
+    });
+    if (unsized() > 1 && cells > budget)
+      throw new Error(
+        dmvChatA1_(row + 1, column + 1) +
+          ': finding where the results of these formulas end would read more than ' +
+          DMV_SHEET_ACTIONS.freezeReadCells +
+          ' cells, more than one edit reads. ' +
+          (made
+            ? 'Give the whole range of the results' +
+              (whole ? ', ' + whole : ', from the row of the formulas to the last row') +
+              ': on a tab this request made it is frozen as given.'
+            : 'Freeze fewer formulas at a time, or write them with an exact size (SEQUENCE or MAKEARRAY with a number of rows), which is frozen without reading it.')
+      );
+    if (unsized() > 1) budget -= cells;
+    if (grids.length) dmvChatSheetBands_(session, grids, fields, visit);
+  }
   var anchors = [],
-    last = sheet.getMaxColumns();
+    exacts = [],
+    last = sheet.getMaxColumns(),
+    width = grid.endColumnIndex - column;
+  // The size of the result of the formula at line[at] of the first row when the formula tells it
+  // exactly, as a cover { column, rows, columns }, or null. It is checked against the sheet below.
+  function exact(line, at) {
+    var cell = line[at];
+    if (!entered(cell) || !cell.userEnteredValue.formulaValue || cell.effectiveValue === undefined)
+      return null;
+    if (cell.effectiveValue && cell.effectiveValue.errorValue) return null;
+    var shape = null;
+    try {
+      shape = dmvChatSheetFormulaCheck_(session, cell.userEnteredValue.formulaValue, {
+        sheet: sheet,
+        cell: dmvChatA1_(row + 1, column + at + 1),
+        cache: cache,
+      }).shape;
+    } catch (ignored) {
+      /* A formula chat would not write is sized from the sheet. */
+    }
+    if (!shape || !(shape.rows > 0) || !(shape.columns > 0)) return null;
+    // Along its row the result ends where the formula says.
+    if (
+      shape.columns > 1 &&
+      (!spilled(line[at + shape.columns - 1]) || spilled(line[at + shape.columns]))
+    )
+      return null;
+    if (shape.columns === 1 && spilled(line[at + 1])) return null;
+    var cover = { column: column + at, rows: shape.rows, columns: shape.columns };
+    exacts.push(cover);
+    return cover;
+  }
   // The formula at line[at] of the first row and the width of its result.
   function anchor(line, at) {
     var cell = line[at],
@@ -822,8 +908,14 @@ function dmvChatActionFreezeArea_(context) {
           (error.message ? ' (' + String(error.message).slice(0, 200) + ')' : '') +
           '. Fix its formula first: a freeze would keep the error, not a result.'
       );
-    anchors.push({ column: column + at, right: extent(line.slice(at + 1)) });
+    var cover = exact(line, at);
+    anchors.push({
+      column: column + at,
+      right: cover ? cover.columns - 1 : extent(line.slice(at + 1)),
+      cover: cover,
+    });
   }
+  var line;
   if (first) {
     if (!first.userEnteredValue || !first.userEnteredValue.formulaValue)
       return { grid: grid, shown: shown(context.snapshot.cells) };
@@ -835,38 +927,96 @@ function dmvChatActionFreezeArea_(context) {
             'userEnteredValue,effectiveValue'
           )[0].cells[0]
         : [];
-    anchor([first].concat(across), 0);
+    line = [first].concat(across);
+    anchor(line, 0);
+    // The other formulas of the inspected first row are frozen as entries of the range; an exact
+    // result of theirs only spares reading its cells.
+    for (var other = 1; other < width; other++) exact(line, other);
   } else {
-    var line = dmvChatSheetCells_(
+    line = dmvChatSheetCells_(
       session,
       [strip(row, row + 1, column, last)],
       'userEnteredValue,effectiveValue'
     )[0].cells[0];
-    for (var at = 0; at < grid.endColumnIndex - column; at++)
-      if (!at || entered(line[at])) anchor(line, at);
+    for (var at = 0; at < width; at++) if (!at || entered(line[at])) anchor(line, at);
   }
-  // How far each result reaches below its formula, read in bands without keeping the cells.
-  var downs = anchors.map(function (item) {
-      return strip(row + 1, sheet.getMaxRows(), item.column, item.column + 1);
+  // An exact result ends where its formula says when the sheet shows its last cell in the
+  // formula's column and nothing it fills below; otherwise it is sized from the sheet.
+  var maxRows = sheet.getMaxRows(),
+    ends = [],
+    checks = [];
+  exacts.forEach(function (cover) {
+    var bottom = row + cover.rows - 1;
+    if (bottom >= maxRows) return;
+    var check = { cover: cover, bottom: bottom, seen: cover.rows === 1, past: false };
+    checks.push(check);
+    ends.push(
+      strip(
+        cover.rows === 1 ? bottom + 1 : bottom,
+        Math.min(bottom + 2, maxRows),
+        cover.column,
+        cover.column + 1
+      )
+    );
+  });
+  read(
+    ends.filter(function (part) {
+      return part.endRowIndex > part.startRowIndex;
     }),
-    below = anchors.map(function () {
+    'userEnteredValue,effectiveValue',
+    function (index, r, c, cell) {
+      var check = checks.filter(function (item) {
+        return item.cover.column === c;
+      })[0];
+      if (!check || !spilled(cell)) return;
+      if (r === check.bottom) check.seen = true;
+      else check.past = true;
+    }
+  );
+  exacts = checks
+    .filter(function (check) {
+      return check.seen && !check.past;
+    })
+    .map(function (check) {
+      return check.cover;
+    });
+  anchors.forEach(function (item) {
+    if (item.cover && exacts.indexOf(item.cover) < 0) {
+      item.cover = null;
+      item.right = extent(line.slice(item.column - column + 1));
+    }
+  });
+  // How far each other result reaches below its formula, read in bands without keeping the
+  // cells, up to the first entered cell. On a tab this request made, from below the range given.
+  var sized = anchors.filter(function (item) {
+      return !item.cover;
+    }),
+    from = made ? Math.max(row + 1, grid.endRowIndex) : row + 1,
+    below = sized.map(function () {
       return 0;
     }),
-    ended = [];
-  if (row + 1 < sheet.getMaxRows())
-    dmvChatSheetBands_(
-      session,
-      downs,
+    ended = [],
+    open = sized.length;
+  if (from < maxRows)
+    read(
+      sized.map(function (item) {
+        return strip(from, maxRows, item.column, item.column + 1);
+      }),
       'userEnteredValue,effectiveValue',
       function (index, r, c, cell) {
         if (ended[index]) return;
-        if (entered(cell)) ended[index] = true;
-        else if (cell.effectiveValue) below[index] = r - row;
+        if (entered(cell)) {
+          ended[index] = true;
+          // Every result has ended: nothing below can grow the range.
+          if (!--open) return false;
+        } else if (cell.effectiveValue) below[index] = r - row;
       }
     );
   var grown = Object.assign({}, grid);
-  anchors.forEach(function (item, index) {
-    grown.endRowIndex = Math.max(grown.endRowIndex, row + 1 + below[index]);
+  anchors.forEach(function (item) {
+    var index = sized.indexOf(item),
+      rows = item.cover ? item.cover.rows : 1 + below[index];
+    grown.endRowIndex = Math.max(grown.endRowIndex, row + rows);
     grown.endColumnIndex = Math.max(grown.endColumnIndex, item.column + 1 + item.right);
   });
   if (first && dmvChatGridKey_(grown) === dmvChatGridKey_(grid))
@@ -874,8 +1024,9 @@ function dmvChatActionFreezeArea_(context) {
   // Past an empty value the cells may belong to something else: an entry there, which the freeze
   // would turn into a value, means the result's end is not known. (Undo restores any other
   // formula's array result this still reaches.) One read in bands finds those entries and, up to
-  // blankCells, the cells that show a value.
-  var checked = dmvChatGridCells_(grown) <= DMV_SHEET_ACTIONS.blankCells,
+  // blankCells and within the budget, the cells that show a value; otherwise only the cells that
+  // can hold such an entry are read.
+  var checked = dmvChatGridCells_(grown) <= Math.min(DMV_SHEET_ACTIONS.blankCells, budget),
     found = checked
       ? Array.from({ length: grown.endRowIndex - row }, function () {
           return Array.from({ length: grown.endColumnIndex - column }, function () {
@@ -885,20 +1036,42 @@ function dmvChatActionFreezeArea_(context) {
       : null,
     taken = [],
     count = 0;
-  dmvChatSheetBands_(
-    session,
-    [grown],
-    checked ? 'userEnteredValue,effectiveValue' : 'userEnteredValue',
-    function (index, r, c, cell) {
-      if (found && shows(cell)) found[r - row][c - column] = true;
-      var own = first
-        ? r < grid.endRowIndex && c < grid.endColumnIndex
-        : r === row &&
+  function own(r, c) {
+    var inside =
+      r < grid.endRowIndex && c >= column && c < grid.endColumnIndex && r >= grid.startRowIndex;
+    return first || made
+      ? inside
+      : r === row &&
           anchors.some(function (item) {
             return item.column === c;
           });
-      if (!own && entered(cell) && ++count <= 3) taken.push(dmvChatA1_(r + 1, c + 1));
+  }
+  // Per column, the rows from the first row that hold no entry of another: those an exact result
+  // fills and, on a tab this request made, the range given. The rest is read, in strips of
+  // neighbouring columns that start on the same row.
+  var parts = [];
+  if (!checked)
+    for (var c = column; c < grown.endColumnIndex; c++) {
+      var top = row;
+      exacts.forEach(function (cover) {
+        if (c >= cover.column && c < cover.column + cover.columns)
+          top = Math.max(top, row + cover.rows);
+      });
+      if (made && c < grid.endColumnIndex) top = Math.max(top, grid.endRowIndex);
+      if (top >= grown.endRowIndex) continue;
+      var previous = parts[parts.length - 1];
+      if (previous && previous.endColumnIndex === c && previous.startRowIndex === top)
+        previous.endColumnIndex = c + 1;
+      else parts.push(strip(top, grown.endRowIndex, c, c + 1));
     }
+  read(
+    checked ? [grown] : parts,
+    checked ? 'userEnteredValue,effectiveValue' : 'userEnteredValue',
+    function (index, r, c, cell) {
+      if (found && shows(cell)) found[r - row][c - column] = true;
+      if (!own(r, c) && entered(cell) && ++count <= 3) taken.push(dmvChatA1_(r + 1, c + 1));
+    },
+    dmvChatGridA1_(grown)
   );
   if (taken.length)
     throw new Error(
@@ -921,6 +1094,8 @@ function dmvChatActionFreezeArea_(context) {
 // cells kept as empty text when they are too scattered to clear.
 function dmvChatActionBlanks_(grid, shown) {
   var ranges = [],
+    // Rectangles past blankRanges are counted, not kept: the edit then clears none.
+    placed = 0,
     open = Object.create(null),
     count = 0,
     empty =
@@ -930,6 +1105,7 @@ function dmvChatActionBlanks_(grid, shown) {
           })
         : [];
   function place(item, end) {
+    if (++placed > DMV_SHEET_ACTIONS.blankRanges) return;
     ranges.push(
       Object.assign({}, grid, {
         startRowIndex: grid.startRowIndex + item.top,
@@ -980,7 +1156,7 @@ function dmvChatActionBlanks_(grid, shown) {
         )
       );
   });
-  var fits = ranges.length <= DMV_SHEET_ACTIONS.blankRanges;
+  var fits = placed <= DMV_SHEET_ACTIONS.blankRanges;
   return {
     requests: fits
       ? ranges.map(function (range) {

@@ -8,6 +8,8 @@ var DMV_SHEET_UNDO = {
   maxEntries: 10,
   maxChars: 900000,
   maxCells: 50000,
+  // On tabs this request made, snapshots over this many cells (an inspection's) are not kept.
+  madeCells: 1000,
   // A cache value holds at most 100 KB, so the undo list and the offer of pending confirmations,
   // at up to three bytes a character, drop their oldest entries or calls while longer than this
   // many characters (dmvChatUndoDrop_ keeps those of the current request). Each undo entry's
@@ -223,12 +225,14 @@ function dmvChatGridCells_(grid) {
 // Reads bounded GridRanges in row bands packed into requests of at most requestCells cells, so no
 // single answer is too large for the memory of an execution, and calls visit(index, row, column,
 // cell) for each cell read, with index the grid's position in grids and 0-based tab positions.
-// fields names the cell fields to read.
+// fields names the cell fields to read. A visit that returns false ends the read: no later cell
+// is visited and no later band requested.
 function dmvChatSheetBands_(session, grids, fields, visit) {
   var limit = DMV_SHEET_SEARCH.requestCells,
     requests = [],
     size = limit,
-    count = 0;
+    count = 0,
+    stopped = false;
   grids.forEach(function (grid, index) {
     var sheet = dmvChatSheetById_(session, grid.sheetId);
     if (!sheet) throw new Error('A tab this change needs no longer exists. Use list_sheets.');
@@ -254,6 +258,7 @@ function dmvChatSheetBands_(session, grids, fields, visit) {
     }
   });
   requests.forEach(function (parts) {
+    if (stopped) return;
     dmvChatSheetDeadline_(session);
     var result = Sheets.Spreadsheets.get(session.spreadsheetId, {
       ranges: parts.map(function (item) {
@@ -274,6 +279,7 @@ function dmvChatSheetBands_(session, grids, fields, visit) {
       var block = read && (read.data || [])[position];
       ((block && block.rowData) || []).forEach(function (line, r) {
         (line.values || []).forEach(function (cell, c) {
+          if (stopped) return;
           if (++count % 5000 === 0) dmvChatSheetDeadline_(session);
           var row = (block.startRow || 0) + r,
             column = (block.startColumn || 0) + c;
@@ -281,9 +287,10 @@ function dmvChatSheetBands_(session, grids, fields, visit) {
             row >= part.startRowIndex &&
             row < part.endRowIndex &&
             column >= (part.startColumnIndex || 0) &&
-            column < part.endColumnIndex
+            column < part.endColumnIndex &&
+            visit(item.index, row, column, cell) === false
           )
-            visit(item.index, row, column, cell);
+            stopped = true;
         });
       });
     });
@@ -494,6 +501,12 @@ function dmvChatUndoPrepare_(session, spec, known) {
     return spec.none
       ? { unavailable: spec.none, none: true }
       : dmvChatUndoTooLarge_(session, snapshot);
+  // Deleting a tab this request made undoes every edit there, so a larger snapshot of such tabs
+  // is not read and kept: undo says to delete them.
+  if (!spec.none && total > DMV_SHEET_UNDO.madeCells) {
+    var made = dmvChatUndoTooLarge_(session, snapshot);
+    if (made.none) return made;
+  }
   var filled = 0,
     chipless = 0;
   var cells = dmvChatGridsRead_(session, snapshot, known).map(function (found) {
