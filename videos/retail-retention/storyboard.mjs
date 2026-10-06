@@ -293,15 +293,18 @@ export default async function (d) {
   const opened = Date.now();
   await d.stage('title', 'Fernhollow Apparel');
   // Turn 1's nine steps tick at 420 ms. Turn 2 is queued on its own just before it is asked, at a
-  // slower step: the chat checks progress every 1.2 s, so faster steps would fall between two
-  // checks and never show.
+  // slower step: the chat checks progress 1.2 s after each check returns (about 1.35 s apart), so
+  // a shorter step can fall between two checks and show only ticked. Its two inspect_sheet calls
+  // share one label, so they show as one step; the closing model call that writes the reply
+  // ('Reviewing results', as the chat labels a round after tools) keeps the refresh on screen for
+  // a full check instead of the moment before the reply lands.
   const dashboardTurn = {
     steps: [
       'Checking saved dashboards',
       'Inspecting selected cells',
-      'Inspecting selected cells',
       'Saving the dashboard plan',
       'Refreshing dashboard sources',
+      'Reviewing results',
     ],
     reply: dashboardDone(f),
   };
@@ -358,6 +361,10 @@ export default async function (d) {
   await d.say('Each step shows as it runs');
   await d.waitAnswers(1);
   await d.say('');
+  // The reply stays on screen long enough to read its top, as turn 2's does.
+  await d.wait(150);
+  await scrollChat(d, '.chat-message.assistant', 0.31, 600);
+  await d.drift(1400, 1.03);
 
   /* ---- The data tab: one formula ---- */
   await d.tab(DATA_TAB, true);
@@ -387,7 +394,7 @@ export default async function (d) {
   await d.say('Now ask for a retention and segmentation dashboard');
   // The panel scrolls the input fully into view as the camera arrives, the last reply above it.
   await Promise.all([d.look('chat', 1000, roomy), scrollChat(d, '#chat-input', 0.66, 900)]);
-  await d.chatScript([dashboardTurn], 1300);
+  await d.chatScript([dashboardTurn], 1600);
   await d.type('#chat-input', DASHBOARD_ASK, { cps: 48 });
   await d.click('#chat-send');
   await d.hidePointer();
@@ -489,10 +496,18 @@ export default async function (d) {
   await d.drift(portrait ? 1000 : 1800, 1.02);
   await d.say('');
   await d.stage('wrapFormula', 560);
-  const tableTop = await d.stage('cellBox', 'B' + (f.refs.frequentTitleRow + 3));
-  await close(740, tableTop.y + 20, 1000);
+  // From the formula bar down to the table's total row, no wider than the frame's shape needs:
+  // the caption lies below the table (on the gap and the Data sources rows), not on its rows.
+  // Measured after the wrap, which makes the bar taller and moves the sheet down. Portrait is
+  // tall enough to keep the app's top too, rather than a sliver of the toolbar above the bar.
+  const rows = await d.stage(
+    'cellBox',
+    `B${f.refs.frequentTitleRow}:Y${f.refs.frequentTitleRow + 17}`
+  );
+  const shotTop = portrait ? 0 : bar.y - 8;
+  await anchored({ x: bar.x, y: shotTop, w: 740, h: rows.y + rows.h + 10 - shotTop }, 1000);
   await d.say('Each count is a COUNTUNIQUEIFS on the data tab');
-  await d.drift(2200, 1.03);
+  await d.drift(2200, 1.02);
   // The count's column lies far right of the formula's text: the camera goes along the row to
   // the selected cell, its count beside the customer's total sales.
   await d.say('');
@@ -511,24 +526,36 @@ export default async function (d) {
   await d.drift(2000, 1.03);
 
   /* ---- The hidden helper tab ---- */
+  // The caption fades out over the table it named, then the camera pulls back before the wipe:
+  // the empty grid shows wide and only while the next tab loads, its cells wiping in at once.
+  // The selection moves to A1, scrolled out of sight above: the wipe clears the cells but not the
+  // selection box, which would otherwise stand alone on the blank sheet for a moment.
   await d.say('');
-  await d.tab(CHART_DATA_TAB, true);
-  await Promise.all([
-    d.look('app', 1100, { band: true }),
-    swap('chart-data', ['A1', 'Revenue by Product Category']),
-  ]);
-  await d.reveal(800);
+  await d.wait(400);
+  await d.stage('select', 'A1', '');
+  await lead(d.look('app', 1100, { band: true }), 450, async () => {
+    await d.tab(CHART_DATA_TAB, true);
+    await swap('chart-data', ['A1', 'Revenue by Product Category']);
+    await d.reveal(800);
+  });
   await d.say('Behind the charts, a hidden helper tab the dashboard wrote');
   await d.drift(2000, 1.03);
   await d.say('');
+  // No wrap width breaks these SUMIFS after a comma: every comma is followed by a quote, and the
+  // browser never breaks between the two, so a width-only wrap lands inside a reference
+  // ('$E$1000' / '1,'). The bar shows each formula as one typed with line breaks (Ctrl+Enter in
+  // Sheets, which ignores them): a new line before each range, so the sum range, then each
+  // criteria pair, reads on its own line. B3 takes two lines and B17 three; the 20 px more of
+  // margin below the first month keeps its row clear of the caption once the bar has grown.
+  const lined = (formula) => formula.replace(/,(?=')/g, ',\n');
   await d.stage('wrapFormula', 560);
   const firstMonth = await d.stage('cellBox', f.refs.month);
-  await close(740, firstMonth.y + firstMonth.h + 20);
-  await d.cell(f.refs.category, helper[f.refs.category].formula);
+  await close(740, firstMonth.y + firstMonth.h + 40);
+  await d.cell(f.refs.category, lined(helper[f.refs.category].formula));
   await d.hidePointer();
   await d.say('One SUMIFS per bar of the chart');
   await d.drift(2200, 1.03);
-  await d.cell(f.refs.month, helper[f.refs.month].formula);
+  await d.cell(f.refs.month, lined(helper[f.refs.month].formula));
   await d.hidePointer();
   await d.say('One per month, between two dates');
   await d.drift(2400, 1.03);
