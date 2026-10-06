@@ -482,6 +482,11 @@
           .replace(/([A-Z][A-Z.]+)(?=\()/g, '<span class="fn">$1</span>');
       document.getElementById('fbar-value').innerHTML = html;
     },
+    // Wraps the formula bar's text at `px` world pixels (null: the bar's full width), so a long
+    // formula reads in a few lines a close-up can frame whole, as an expanded bar shows it.
+    wrapFormula(px) {
+      document.getElementById('fbar-value').style.maxWidth = px ? px + 'px' : '';
+    },
     say(html) {
       var node = document.getElementById('caption');
       if (html) node.innerHTML = html;

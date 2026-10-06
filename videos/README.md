@@ -68,6 +68,6 @@ export default async function (d) {
 | `d.dashboard(name)`, `d.reveal(ms, show)`, `d.dock(open)` | Loads a rendered page into the sheet, its grid drawn to the sheet's edges as Sheets does (rows stop at a `<meta name="rows" content="1001">` the page starts with); shows its grid and wipes its cells in over it (or out, `show` false, back to the empty grid); opens or closes the sidebar |
 | `d.tab(name, active)`, `d.activate(name)` | Sheet tabs |
 | `d.cell(ref, content)` | Pointer to a cell of the rendered tab (`'B4'`, `'A3:B4'`), selects it and shows `content` (a formula or a value) in the formula bar |
-| `d.stage('formula', name, content)`, `d.stage('rect', 'fbar')` | Sets the formula bar without a click; the bar's world rectangle |
+| `d.stage('formula', name, content)`, `d.stage('rect', 'fbar')`, `d.stage('wrapFormula', px)` | Sets the formula bar without a click; the bar's world rectangle; wraps its text at `px` world pixels (`null`: full width), so a close-up can frame a long formula whole |
 | `d.section(title, { height, w, x, say, hold })` | Scrolls the dashboard to the section whose title cell reads `title` and frames it (in landscape with the caption's band free below it); the caption lands after the move |
 | `d.wait(ms)`, `d.hidePointer()`, `d.stage(method, ...args)` | Pauses, hides the ring, calls the stage directly |
