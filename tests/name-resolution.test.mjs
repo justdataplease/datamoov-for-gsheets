@@ -143,6 +143,11 @@ test('summarize orders and ranks by a key written from its display name', () => 
     () => f.api.dmvChatSummarize_(session, { resultId, groupBy: ['owner'], formulas: [{ key: 'each', expression: 'deal_value / deal_id__count' }] }),
     /unknown column "deal_id__count" at position 14; summable columns are deal_value; a formula reads summed columns only: a count, average, minimum or maximum is a metric of its own/
   );
+  // A count in a formula is a ratio's denominator: the error names the ratio that divides by it.
+  assert.throws(
+    () => f.api.dmvChatSummarize_(session, { resultId, groupBy: ['owner'], formulas: [{ key: 'each', expression: 'deal_value / deal_id__count' }] }),
+    /a metric of its own; to divide by a count, use a ratio with denominator deal_id__count\.$/
+  );
 });
 
 test('a tile over a tab resolves highlight, orderBy, secondaryAxis and polarity names written from display names', () => {
@@ -239,6 +244,11 @@ test('a metric key or a bare count in place of a column says how a tile names it
   assert.throws(
     () => f.save(metric('deal_value__sum')),
     /"Totals": unknown column "deal_value__sum"\. Columns of Deals: Deal ID, Deal Date, Owner, Stage, Deal Value\. "deal_value__sum" is Deal Value with agg sum: a metric names the column and its agg apart, and ratios and formulas sum their columns themselves\./
+  );
+  // A count named as a column says a ratio may divide by it.
+  assert.throws(
+    () => f.save(metric('deal_id__count_distinct')),
+    /"deal_id__count_distinct" is Deal ID with agg count_distinct: a metric names the column and its agg apart, a formula sums its columns itself, and a ratio may divide by deal_id__count_distinct\./
   );
   assert.throws(
     () => f.save(metric('count', 'count')),

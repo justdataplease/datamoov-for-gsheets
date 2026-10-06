@@ -990,6 +990,8 @@ function dmvChatSheetFormulaReadBack_(session, written) {
         sample_rows: block(spill.row, spill.column, spill.rows, spill.columns),
       });
   });
+  // Grouped QUERY results that hold a group with no key (dmvChatSheetBlankGroupRow_).
+  var keyless = [];
   if (probed) {
     // A result of unknown size: the run of spilled cells right of and below its formula.
     (policy.unknown || []).forEach(function (origin) {
@@ -999,6 +1001,15 @@ function dmvChatSheetFormulaReadBack_(session, written) {
         down = 0;
       while (spilled(row, column + right + 1)) right++;
       while (spilled(row + down + 1, column)) down++;
+      var blank =
+        right && dmvChatSheetBlankGroupRow_(written, origin, spilled, right, policy.probe);
+      if (blank)
+        keyless.push(
+          dmvChatA1_(row + 1, column + 1) +
+            ': its QUERY result has a group with no key in row ' +
+            blank +
+            ' (the source\'s empty rows). Add "where <grouped column> is not null" to the query so every row has a key.'
+        );
       if (!right && !down) return;
       // An exact result that spilled fills its whole size; the cells past the window are unread,
       // so only those inside it are checked.
@@ -1050,7 +1061,32 @@ function dmvChatSheetFormulaReadBack_(session, written) {
       dmvChatSheetRoomNote_(written.sheet, rooms) +
       'Some formulas returned errors. Nothing was rolled back: fix them with set_formulas and the editToken returned, or undo the edit with undo_sheet_edit.';
   }
+  if (keyless.length) result.next = (result.next ? result.next + ' ' : '') + keyless.join(' ');
   return result;
+}
+
+// The 1-based row of a group with no key in the result of a grouping QUERY written at origin
+// ([row, column], 0-based): a row of the result, inside the cells read back near the formula
+// (probe), whose first cell is empty while another of its right result columns holds a value.
+// A source with empty rows (a data tab's blank tail) gives such a group, which Sheets sorts
+// first. 0 when the formula is no grouping QUERY or every row read has a key; rows past the
+// read-back are not checked.
+function dmvChatSheetBlankGroupRow_(written, origin, spilled, right, probe) {
+  var grid = written.area.grid,
+    line = (written.formulas || [])[origin[0] - grid.startRowIndex],
+    formula = line && line[origin[1] - grid.startColumnIndex];
+  if (
+    typeof formula !== 'string' ||
+    !/\bQUERY\s*\(/i.test(formula) ||
+    !/\bgroup\s+by\b/i.test(formula)
+  )
+    return 0;
+  for (var row = origin[0] + 1; row < probe.endRowIndex; row++) {
+    if (spilled(row, origin[1])) continue;
+    for (var x = 1; x <= right; x++) if (spilled(row, origin[1] + x)) return row + 1;
+    return 0;
+  }
+  return 0;
 }
 
 // Why a #REF! shows from Sheets' message: 'rows' or 'columns' when the tab ends before the result
@@ -1335,14 +1371,24 @@ function dmvChatSearchSheets_(session, input) {
     : dmvChatSearchFind_(session, input, sheets, limit);
 }
 
-// The tabs or range to read, whole tabs in order while they fit the cell cap.
+// The tabs or range to read, whole tabs in order while they fit the cell cap. A whole tab or an
+// open range (A:F, A2:F) ends at the tab's last row with a value (dmvSheetUsedRows_; the scans
+// of all tabs share one DMV_TAB_SCAN budget), so the "" guarded array formulas show below their
+// keys neither costs cells nor pushes a tab out; a range with an end row is read as given.
 function dmvChatSearchPlan_(sheets, input) {
   var plan = [],
     skipped = [],
-    cells = 0;
+    cells = 0,
+    scan = { cells: DMV_TAB_SCAN.cells },
+    open = input.range === undefined || !/[0-9]\s*$/.test(String(input.range));
   sheets.forEach(function (sheet) {
-    var data = sheet.getDataRange();
-    var extent = { rows: data.getNumRows(), columns: data.getNumColumns() };
+    var data = sheet.getDataRange(),
+      rows = data.getNumRows(),
+      columns = data.getNumColumns();
+    var extent = {
+      rows: open && !skipped.length ? dmvSheetUsedRows_(sheet, rows, columns, scan) : rows,
+      columns: columns,
+    };
     var grid =
       input.range !== undefined
         ? dmvChatSearchArea_(sheet, input.range, extent)

@@ -228,8 +228,8 @@ function dmvDashboardSummarize_(session, resultId, spec) {
 
 // Summaries round ratios and formulas to four decimals, which leaves a small rate such as a
 // 1.46% CTR with two significant digits; changes and thresholds need more. Each ratio is divided
-// again from its summed parts, grouped the same way, and each formula evaluated again over those
-// sums, the precise ratios and the formulas before it.
+// again from its parts (sums, or counts: dmvChatRatioSide_), grouped the same way, and each
+// formula evaluated again over those sums, the precise ratios and the formulas before it.
 function dmvDashboardPrecise_(session, resultId, spec, summary) {
   var ratios = spec.ratios || [],
     formulas = spec.formulas || [];
@@ -237,24 +237,34 @@ function dmvDashboardPrecise_(session, resultId, spec, summary) {
   var base = dmvChatResult_(session, resultId),
     compiled = dmvDashboardCompile_(base, ratios, formulas),
     parts = [];
-  var part = function (key) {
-    if (parts.indexOf(key) < 0) parts.push(key);
-    return key;
+  // Each part as the summary names it: column__agg.
+  var part = function (field, agg) {
+    var name = field + '__' + agg;
+    if (
+      !parts.some(function (item) {
+        return item.name === name;
+      })
+    )
+      parts.push({ field: field, agg: agg, name: name });
+    return name;
   };
   var sides = ratios.map(function (ratio) {
     return [ratio.numerator, ratio.denominator].map(function (field) {
-      return part(dmvChatColumn_(base, field, 'ratio column').key);
+      var side = dmvChatRatioSide_(base, field, 'ratio column');
+      return part(side.column.key, side.agg);
     });
   });
   compiled.forEach(function (formula) {
-    formula.sums.forEach(part);
+    formula.sums.forEach(function (key) {
+      part(key, 'sum');
+    });
   });
   var described = dmvChatSummarize_(session, {
     resultId: resultId,
     groupBy: spec.groupBy || [],
     dateBucket: spec.dateBucket,
-    metrics: parts.map(function (field) {
-      return { field: field, agg: 'sum' };
+    metrics: parts.map(function (item) {
+      return { field: item.field, agg: item.agg };
     }),
     filters: spec.filters,
     limit: DMV_CHAT_RESULTS.maxSummaryRows,
@@ -274,8 +284,8 @@ function dmvDashboardPrecise_(session, resultId, spec, summary) {
   whole.rows.forEach(function (row) {
     lookup[key(row)] = row;
   });
-  var sumOf = function (row, field) {
-    var value = row[field + '__sum'];
+  var valueOf = function (row, name) {
+    var value = row[name];
     return dmvDashboardBlank_(value) || !isFinite(Number(value)) ? null : Number(value);
   };
   return Object.assign({}, summary, {
@@ -285,8 +295,10 @@ function dmvDashboardPrecise_(session, resultId, spec, summary) {
       var copy = Object.assign({}, row),
         sums = Object.create(null),
         values = Object.create(null);
-      parts.forEach(function (field) {
-        sums[field] = values[field] = sumOf(found, field);
+      // Formulas read the sums by column key.
+      parts.forEach(function (item) {
+        sums[item.name] = valueOf(found, item.name);
+        if (item.agg === 'sum') values[item.field] = sums[item.name];
       });
       ratios.forEach(function (ratio, index) {
         var above = sums[sides[index][0]],

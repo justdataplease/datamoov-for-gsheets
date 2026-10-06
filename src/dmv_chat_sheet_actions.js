@@ -413,14 +413,17 @@ function dmvChatActionA1_(session, text, defaultSheet, label, open) {
 }
 
 // The cells of one tab's data (from A1 to the last row and column with values) as a GridRange.
+// Rows below the last one with a value (the "" of guarded array formulas) are no data
+// (dmvSheetUsedRows_).
 function dmvChatActionUsed_(sheet) {
-  var used = sheet.getDataRange();
+  var used = sheet.getDataRange(),
+    columns = Math.max(1, used.getNumColumns());
   return {
     sheetId: sheet.getSheetId(),
     startRowIndex: 0,
-    endRowIndex: Math.max(1, used.getNumRows()),
+    endRowIndex: Math.max(1, dmvSheetUsedRows_(sheet, used.getNumRows(), columns)),
     startColumnIndex: 0,
-    endColumnIndex: Math.max(1, used.getNumColumns()),
+    endColumnIndex: columns,
   };
 }
 
@@ -673,6 +676,9 @@ function dmvChatActionPaste_(context, move) {
           'Any blank cells of the result were pasted as empty text: at ' +
           dmvChatGridCells_(freeze.grid) +
           ' cells, the result is too large to check for them in one edit.';
+      if (dmvChatActionDrawnApart_(context, freeze.grid))
+        plan.result.next =
+          'MAKEARRAY drew each cell on its own: a column that depends on others (a product, sum, difference or ratio, a category tied to another) does not match them. Add each such column now as one ARRAYFORMULA over the frozen columns, then freeze it too.';
     }
     if (type === 'all' || type === 'formats')
       plan.undo = dmvChatActionCopyUndo_(context.session, area.grid, destination, type === 'all');
@@ -726,6 +732,21 @@ function dmvChatActionPaste_(context, move) {
   plan.confirm = reasons.join(' ');
   plan.undo = { none: DMV_SHEET_UNDO.noUndo, snapshot: plan.touches };
   return plan;
+}
+
+// Whether the formula a freeze turns into values drew its table cell by cell at random (MAKEARRAY
+// with RAND, RANDBETWEEN or RANDARRAY outside quoted text): each cell was drawn apart, so a column
+// computed from others inside it does not match them.
+function dmvChatActionDrawnApart_(context, grid) {
+  var corner = Object.assign({}, grid, {
+    endRowIndex: grid.startRowIndex + 1,
+    endColumnIndex: grid.startColumnIndex + 1,
+  });
+  var cell = dmvChatSheetCells_(context.session, [corner], 'userEnteredValue')[0].cells[0][0];
+  var formula = String(
+    (cell && cell.userEnteredValue && cell.userEnteredValue.formulaValue) || ''
+  ).replace(/"(?:[^"]|"")*"/g, '""');
+  return /\bMAKEARRAY\s*\(/i.test(formula) && /\bRAND(?:BETWEEN|ARRAY)?\s*\(/i.test(formula);
 }
 
 // Pasted values keep no number format a formula's result only showed, so a date would read as

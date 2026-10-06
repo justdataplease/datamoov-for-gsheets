@@ -5,7 +5,7 @@ Only src/ is uploaded to Apps Script. The app has no backend and no runtime depe
 | Location | Responsibility |
 | --- | --- |
 | src/dmv_app.js | Google Sheets menu, sidebar entry point and template includes |
-| src/dmv_core.js | Connector registry, catalog, validation, canonical JSON, relative dates including adjacent completed weeks and the period before each rolling window or month, and typed result normalization |
+| src/dmv_core.js | Connector registry, catalog, validation, canonical JSON, relative dates including adjacent completed weeks and the period before each rolling window or month, typed result normalization, and a tab's last row with a value (rows that show only the empty text of guarded array formulas end the data), found by bounded reads up from the bottom, which share one budget across tabs when given one; `dmvSheetUsedRows_` sizes a used range by it for the prompt's open tab, search_sheets and whole-tab sheet actions |
 | src/dmv_store.js | Private per-user records, runtime locks, active spreadsheet, validated output-tab links and showing a linked tab in place |
 | src/dmv_credentials.js | Saved credentials: connector-derived types, Google token and available consumer checks on edits, delete refused while in use, and credential merging into connections at run time |
 | src/dmv_credential_import.js | Settings bundles: export of credentials, connections, reports and dashboards to a local file, and validated import of the same through the existing private save APIs, exact-match reuse and per-item results |

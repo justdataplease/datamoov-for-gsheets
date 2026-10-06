@@ -116,16 +116,23 @@ function dmvDashboardKeyHint_(name, columns) {
     dmvNameMatches_(parts[1], columns, function (column) {
       return [column.key, column.label];
     });
-  if (stem && stem.length === 1)
+  if (stem && stem.length === 1) {
+    var agg = parts[2].toLowerCase();
+    // A ratio may divide by a count (dmvChatRatioSide_); a formula sums its columns.
     return (
       '. "' +
       text.slice(0, 80) +
       '" is ' +
       shown(stem[0]) +
       ' with agg ' +
-      parts[2].toLowerCase() +
-      ': a metric names the column and its agg apart, and ratios and formulas sum their columns themselves.'
+      agg +
+      (agg === 'count' || agg === 'count_distinct'
+        ? ': a metric names the column and its agg apart, a formula sums its columns itself, and a ratio may divide by ' +
+          text.slice(0, 80) +
+          '.'
+        : ': a metric names the column and its agg apart, and ratios and formulas sum their columns themselves.')
     );
+  }
   if (dmvLooseName_(text) === 'count' && columns.length)
     return (
       '. No column is named count: count rows with a metric such as {field: "' +
@@ -547,6 +554,27 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
         );
       return name;
     }
+    // A ratio side: a column, or <column>__count or <column>__count_distinct (dmvChatRatioSide_),
+    // saved as the known column and its count. distinctSides counts the distinct counts: a name
+    // known as a column of its own is that column, summed; columns of an unmapped dataset are
+    // only checked at refresh, so there a distinct-count name counts as the distinct count it
+    // will read as when the column is missing.
+    var distinctSides = 0;
+    function side(name) {
+      var parts = /^(.+?)__(count_distinct|count)$/i.exec(name);
+      if (!parts) return known(name);
+      var agg = parts[2].toLowerCase();
+      var saved, counted;
+      try {
+        saved = known(name);
+        counted = !allowed && !tab;
+      } catch (ignored) {
+        saved = known(parts[1]) + '__' + agg;
+        counted = true;
+      }
+      if (counted && agg === 'count_distinct') distinctSides++;
+      return saved;
+    }
     // Checked again once mapped: two spellings of one column are the same column.
     var groupBy = dmvDashboardNames_(
       dmvDashboardNames_(tile.groupBy || [], 6, 'groupBy columns').map(known),
@@ -594,8 +622,8 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
       metricKeys[ratio.key] = true;
       var entry = {
         key: ratio.key,
-        numerator: known(ratio.numerator),
-        denominator: known(ratio.denominator),
+        numerator: side(ratio.numerator),
+        denominator: side(ratio.denominator),
       };
       if (typeof ratio.label === 'string' && ratio.label) entry.label = ratio.label.slice(0, 80);
       if (ratio.percent === true) entry.percent = true;
@@ -790,9 +818,10 @@ function dmvValidateDashboard_(input, spreadsheet, stored) {
         );
       if (
         dated &&
-        metrics.some(function (metric) {
-          return metric.agg === 'count_distinct';
-        })
+        (distinctSides ||
+          metrics.some(function (metric) {
+            return metric.agg === 'count_distinct';
+          }))
       )
         throw new Error(
           '"' +
@@ -1169,16 +1198,16 @@ function dmvDashboardCompile_(base, ratios, formulas) {
     base.columns,
     (ratios || []).map(function (ratio) {
       var sides = [ratio.numerator, ratio.denominator].map(function (field) {
-        return dmvChatColumn_(base, field, 'ratio column');
+        return dmvChatRatioSide_(base, field, 'ratio column');
       });
-      var money = sides.filter(function (column) {
-        return column.type === 'currency';
+      var money = sides.filter(function (side) {
+        return side.agg === 'sum' && side.column.type === 'currency';
       }).length;
       return {
         key: ratio.key,
         type: money === 1 ? 'currency' : ratio.percent ? 'percent' : 'number',
-        numerator: sides[0].key,
-        denominator: sides[1].key,
+        numerator: dmvChatRatioSideName_(sides[0]),
+        denominator: dmvChatRatioSideName_(sides[1]),
       };
     })
   );

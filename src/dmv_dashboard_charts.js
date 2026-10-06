@@ -522,16 +522,27 @@ function dmvDashboardCompareChart_(context, resultId, tile) {
     })
     .concat(
       (tile.ratios || []).map(function (ratio) {
-        var money = [ratio.numerator, ratio.denominator].filter(function (field) {
-          return dmvChatColumn_(base, field, 'ratio column').type === 'currency';
+        // A side is a sum or a count (dmvChatRatioSide_); counts add up over days, distinct
+        // counts do not.
+        var sides = [ratio.numerator, ratio.denominator].map(function (field) {
+          var side = dmvChatRatioSide_(base, field, 'ratio column');
+          if (side.agg === 'count_distinct')
+            throw new Error(
+              name +
+                ': a compared chart adds days up into buckets, so its metrics use sum, avg, min, max or count.'
+            );
+          return side;
+        });
+        var money = sides.filter(function (side) {
+          return side.agg === 'sum' && side.column.type === 'currency';
         }).length;
         return {
           name: ratio.key,
           agg: 'ratio',
           label: ratio.label || ratio.key,
           type: money === 1 ? 'currency' : ratio.percent ? 'percent' : 'number',
-          numerator: part(ratio.numerator, 'sum'),
-          denominator: part(ratio.denominator, 'sum'),
+          numerator: part(sides[0].column.key, sides[0].agg),
+          denominator: part(sides[1].column.key, sides[1].agg),
         };
       })
     );

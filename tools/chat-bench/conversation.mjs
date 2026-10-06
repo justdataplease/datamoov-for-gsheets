@@ -13,6 +13,7 @@ import {
   savedPlans,
 } from './metrics.mjs';
 import { signature, tabStats } from './cells.mjs';
+import { derivedConsistency, entityMeasures } from './entity.mjs';
 import { TAB_TURN_KINDS } from './scenarios.mjs';
 import { checkNumbers, adsFacts, bookFacts, wasteRecall } from './accuracy.mjs';
 import {
@@ -67,6 +68,15 @@ export function runConversation(
       nouns: scenario.nouns,
     });
     const record = { scenario: scenario.id, family, run, prompt: turn.text, ...measured };
+    // Generated data: columns that should be the product of others (entity.mjs). Per-entity
+    // turns: the entity tab, its live share and checked columns, a segment and retention.
+    const dataSheet = rt.f.book.sheets.find((s) => s.id === dataSheetId) || null;
+    if (family === 'tab' && turn.kind === 'generate' && dataSheet)
+      Object.assign(record, derivedConsistency(rt, dataSheet));
+    if (turn.kind === 'entity') {
+      Object.assign(record, entityMeasures(rt, dataSheet, { entity: scenario.entity || null }));
+      record.wants_dashboard = Boolean(turn.dashboard);
+    }
     // What this turn asked of the fake Google Ads API: a dashboard over an empty fetch shows up
     // here (and as a page of zeros: not delivered, metrics.mjs).
     if (adsBefore) {

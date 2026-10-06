@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chatSheetFixture } from './helpers/chat-sheet-fixture.mjs';
-import { DOMAINS } from '../tools/chat-bench/scenarios.mjs';
+import { DOMAINS, ENTITY_DOMAINS } from '../tools/chat-bench/scenarios.mjs';
 
 // The sheet tool calls of a dashboard built over a tab and of generated sample data, as a live
 // Gemini replay made them: labels beside KPI formulas, edit after edit of one range, a chart over
@@ -437,7 +437,7 @@ test('the prompt and tools say each edit returns the next editToken and large da
   const n = Number(/^=LET\(n,(\d+),/.exec(example[1])[1]);
   // A model that copies the example's size must not land on a benchmark scenario's row count, or
   // the benchmark could not see the example anchoring the size it generates.
-  for (const domain of DOMAINS) assert.notEqual(n, domain.rows, domain.id + ' asks for ' + domain.rows + ' rows');
+  for (const domain of DOMAINS.concat(ENTITY_DOMAINS)) assert.notEqual(n, domain.rows, domain.id + ' asks for ' + domain.rows + ' rows');
   assert.deepEqual(
     { ...f.api.dmvChatSheetFormulaCheck_(f.session, example[1], { sheet: f.sheet }).shape },
     { rows: n + 1, columns: 2 }

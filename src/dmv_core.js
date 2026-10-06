@@ -19,6 +19,55 @@ var DMV_LIMITS = {
   maxCells: 3000000,
 };
 
+// Finding a tab's last row with a value (dmvSheetLastFilledRow_): the cells one read takes at
+// most, and the cells a scan reads in all unless its caller gives fewer.
+var DMV_TAB_SCAN = {
+  chunkCells: 50000,
+  cells: 1000000,
+};
+
+// The last row from top to last whose cells in columns left to left + columns - 1 hold a value
+// other than "", or top - 1 when none does. Sheets counts the "" an array result shows as
+// content (a guarded =ARRAYFORMULA(IF(A2:A="","",…)) shows it in every row below its last key),
+// so getLastRow() and getDataRange() reach the bottom of the result; a reader drops those rows
+// before sizing a range or counting rows. The scan reads upward from last, one row first and
+// then twice as many each time up to chunkCells, at most budget cells in all
+// (DMV_TAB_SCAN.cells by default); rows it could not reach within the budget are kept. budget
+// may be a number or { cells }, which the scan lowers by the cells it reads, so the scans of
+// several tabs can share one.
+function dmvSheetLastFilledRow_(sheet, top, last, left, columns, budget) {
+  var meter =
+      budget !== null && typeof budget === 'object'
+        ? budget
+        : { cells: budget === undefined ? DMV_TAB_SCAN.cells : budget },
+    most = Math.max(1, Math.floor(DMV_TAB_SCAN.chunkCells / columns)),
+    size = 1,
+    row = last;
+  while (row >= top) {
+    var rows = Math.min(row - top + 1, size, most);
+    if (rows * columns > meter.cells) return row;
+    var values = sheet.getRange(row - rows + 1, left, rows, columns).getValues();
+    meter.cells -= rows * columns;
+    for (var at = rows - 1; at >= 0; at--)
+      if (values[at].some(dmvCellFilled_)) return row - rows + 1 + at;
+    row -= rows;
+    size *= 2;
+  }
+  return top - 1;
+}
+
+// The rows of a tab's used range (rows from row 1 and columns from column A, as getDataRange()
+// gives them) up to its last row with a value, at least 1: what a reader that describes, searches
+// or acts on "the tab's data" covers. budget as for dmvSheetLastFilledRow_; a tab whose last row
+// has a value costs one row read.
+function dmvSheetUsedRows_(sheet, rows, columns, budget) {
+  return rows > 1 ? Math.max(1, dmvSheetLastFilledRow_(sheet, 1, rows, 1, columns, budget)) : rows;
+}
+
+function dmvCellFilled_(value) {
+  return value !== '' && value !== null && value !== undefined;
+}
+
 function dmvRegisterConnector_(definition) {
   if (!DMV_CONNECTORS) DMV_CONNECTORS = Object.create(null);
   if (!definition || !/^[a-z][a-z0-9_]+$/.test(definition.id) || !Array.isArray(definition.reports))

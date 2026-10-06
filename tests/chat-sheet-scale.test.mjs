@@ -220,13 +220,15 @@ test('a dashboard over 100,000 rows reads only the cells each call needs', () =>
   assert.equal(scale.result.ok, true);
   within('conditional_format', scale.read, 0);
 
-  // search_sheets refuses the whole tab before reading it, and a column stays within its cap.
+  // search_sheets refuses the whole tab before reading its cells, and a column stays within its
+  // cap. It reads one row first: the tab's last, to know the tab ends there and not above a tail
+  // of the "" guarded array formulas show, which Sheets counts in the data range.
   const before = f.state.cellsRead;
   assert.throws(
     () => f.api.dmvChatSearchSheets_(f.session, { query: 'TXN-100', sheetName: 'Sales' }),
     /one search reads at most 200000/
   );
-  within('search_sheets over the tab', f.state.cellsRead - before, 0);
+  within('search_sheets over the tab', f.state.cellsRead - before, HEADER.length);
   const column = f.measure(() =>
     f.api.dmvChatSearchSheets_(f.session, {
       query: 'TXN-100001',

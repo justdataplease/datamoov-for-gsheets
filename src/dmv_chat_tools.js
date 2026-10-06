@@ -396,6 +396,34 @@ function dmvChatColumn_(result, name, label) {
   return found[0];
 }
 
+// A ratio side: a summable column, summed per group, or <column>__count or
+// <column>__count_distinct, its filled or its distinct values per group, so an amount per entity
+// is a ratio (amount per entity = amount / key__count_distinct). A column that is itself
+// named so is that column, summed. Returns { column, agg }.
+function dmvChatRatioSide_(result, name, label) {
+  var parts = /^(.+?)__(count_distinct|count)$/i.exec(String(name));
+  var whole =
+    parts &&
+    dmvNameMatches_(name, result.columns, function (item) {
+      return [item.key, item.label];
+    }).length;
+  if (!parts || whole) return { column: dmvChatColumn_(result, name, label), agg: 'sum' };
+  return { column: dmvChatColumn_(result, parts[1], label), agg: parts[2].toLowerCase() };
+}
+
+// The name a ratio side goes by in a summary and a saved plan: its column key, and its count.
+function dmvChatRatioSideName_(side) {
+  return side.column.key + (side.agg === 'sum' ? '' : '__' + side.agg);
+}
+
+// A ratio side's value in one group's slot (see dmvChatSummarize_): its sum, blank without
+// values; its count of values; its count of distinct values.
+function dmvChatRatioPart_(agg, slot) {
+  if (agg === 'count') return slot.n;
+  if (agg === 'count_distinct') return slot.distinctCount;
+  return slot.n ? slot.sum : null;
+}
+
 /* run_report: the existing connector runtime, validated like a saved report. */
 function dmvChatRunReport_(session, input) {
   input = Object.assign({}, input || {});
@@ -946,8 +974,8 @@ function dmvChatSummarize_(session, input) {
     return { column: column, agg: agg };
   });
   // A ratio divides two per-group sums (CPC = spend / clicks) after aggregation, which is the
-  // only correct way to get a rate for a group. Sums it needs but the caller did not ask for
-  // are computed hidden.
+  // only correct way to get a rate for a group, or a sum by a count (an amount per entity). Sums
+  // and counts it needs but the caller did not ask for are computed hidden.
   var ratios = (Array.isArray(input.ratios) ? input.ratios : []).map(function (ratio) {
     if (
       !ratio ||
@@ -957,19 +985,31 @@ function dmvChatSummarize_(session, input) {
     )
       throw new Error('Each ratio needs a short key, a numerator column and a denominator column.');
     var sides = ['numerator', 'denominator'].map(function (side) {
-      var column = dmvChatColumn_(result, ratio[side], 'ratio ' + side);
-      if (!dmvChatNumeric_(column) || !dmvChatAdditive_(column))
+      var part = dmvChatRatioSide_(result, ratio[side], 'ratio ' + side),
+        column = part.column;
+      if (part.agg === 'sum' && (!dmvChatNumeric_(column) || !dmvChatAdditive_(column)))
         throw new Error(
-          'Ratio "' + ratio.key + '": ' + side + ' "' + column.key + '" must be a summable column.'
+          'Ratio "' +
+            ratio.key +
+            '": ' +
+            side +
+            ' "' +
+            column.key +
+            '" must be a summable column; to divide by its number of distinct values, name it ' +
+            column.key +
+            '__count_distinct (' +
+            column.key +
+            '__count counts its filled rows).'
         );
       var index = metrics.findIndex(function (metric) {
-        return metric.column === column && metric.agg === 'sum';
+        return metric.column === column && metric.agg === part.agg;
       });
-      if (index < 0) index = metrics.push({ column: column, agg: 'sum', hidden: true }) - 1;
+      if (index < 0) index = metrics.push({ column: column, agg: part.agg, hidden: true }) - 1;
       return index;
     });
+    // A count is a plain number: an amount per entity keeps the amount's currency.
     var currency = [metrics[sides[0]], metrics[sides[1]]].filter(function (metric) {
-      return metric.column.type === 'currency';
+      return metric.agg === 'sum' && metric.column.type === 'currency';
     }).length;
     return {
       key: ratio.key,
@@ -988,8 +1028,8 @@ function dmvChatSummarize_(session, input) {
       return {
         key: ratio.key,
         type: ratio.type,
-        numerator: metrics[ratio.numerator].column.key,
-        denominator: metrics[ratio.denominator].column.key,
+        numerator: dmvChatRatioSideName_(metrics[ratio.numerator]),
+        denominator: dmvChatRatioSideName_(metrics[ratio.denominator]),
       };
     })
   );
@@ -1174,11 +1214,14 @@ function dmvChatSummarize_(session, input) {
       else value = slot.distinctCount;
       row[metric.column.key + '__' + metric.agg] = value;
     });
+    var divided = function (ratio) {
+      var above = dmvChatRatioPart_(metrics[ratio.numerator].agg, group.values[ratio.numerator]),
+        below = dmvChatRatioPart_(metrics[ratio.denominator].agg, group.values[ratio.denominator]);
+      return above !== null && below ? above / below : null;
+    };
     ratios.forEach(function (ratio) {
-      var above = group.values[ratio.numerator],
-        below = group.values[ratio.denominator];
-      row[ratio.key] =
-        above.n && below.sum ? Math.round((above.sum / below.sum) * 10000) / 10000 : null;
+      var value = divided(ratio);
+      row[ratio.key] = value === null ? null : Math.round(value * 10000) / 10000;
     });
     if (formulas.length) {
       // Formulas read unrounded sums and ratios; only their own results are rounded.
@@ -1188,9 +1231,7 @@ function dmvChatSummarize_(session, input) {
         values[key] = slot.n ? slot.sum : null;
       });
       ratios.forEach(function (ratio) {
-        var above = group.values[ratio.numerator],
-          below = group.values[ratio.denominator];
-        values[ratio.key] = above.n && below.sum ? above.sum / below.sum : null;
+        values[ratio.key] = divided(ratio);
       });
       var computed = dmvFormulaEvaluateAll_(formulas, values);
       formulas.forEach(function (formula) {
@@ -1361,9 +1402,9 @@ function dmvChatSummarize_(session, input) {
           return (
             ratio.key +
             ' = ' +
-            metrics[ratio.numerator].column.key +
+            dmvChatRatioSideName_(metrics[ratio.numerator]) +
             ' / ' +
-            metrics[ratio.denominator].column.key
+            dmvChatRatioSideName_(metrics[ratio.denominator])
           );
         }),
       ],
@@ -1564,6 +1605,21 @@ function dmvChatReadSheet_(session, input) {
     count = Math.min(available, Math.floor(DMV_CHAT_RESULTS.readMaxCells / columns));
   if (count < 2) throw new Error('The range needs a header row and at least one data row.');
   var values = sheet.getRange(top, left, count, columns).getValues();
+  // Rows at the end of the read that show only "" (a guarded array formula fills every row below
+  // its last key, and Sheets counts that as content) end the table when no row below them has a
+  // value in these columns: the read reached the tab's last row, or a scan up from it finds none.
+  var kept = count;
+  while (kept > 1 && !values[kept - 1].some(dmvCellFilled_)) kept--;
+  var bottom = top + count - 1;
+  if (
+    kept < count &&
+    (bottom >= last || dmvSheetLastFilledRow_(sheet, bottom + 1, last, left, columns) <= bottom)
+  ) {
+    values = values.slice(0, kept);
+    available = count = kept;
+    last = top + kept - 1;
+    if (count < 2) throw new Error('The range needs a header row and at least one data row.');
+  }
   var seen = Object.create(null);
   var descriptors = values[0].map(function (header, index) {
     var label = String(header === '' ? 'Column ' + (index + 1) : header)

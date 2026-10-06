@@ -187,7 +187,7 @@ function dmvChatDashboardTools_(session, baseTools) {
     {
       name: 'save_dashboard',
       description:
-        'Save a refreshable dashboard: 1 to 8 datasets (each a report query written to its own tab) and up to 12 tiles laid out on the dashboard tab (target): kpi scorecards on top, then native charts, then the tables behind them. At least one tile must be a chart. The runtime fetches, aggregates, writes and charts; it appears under Reports > Dashboards as a draft (or saved outright with a schedule the user asked for), where Refresh dashboard rebuilds every tab and chart without AI. Saving does not fetch; call run_dashboard next. Updates need id and revision from list_dashboards. Plans stay private to this account.',
+        'Save a refreshable dashboard: 1 to 8 datasets (each a report query written to its own tab) and up to 12 tiles laid out on the dashboard tab (target): kpi scorecards on top, then native charts, then the tables behind them. At least one tile must be a chart. The runtime fetches, aggregates, writes and charts; it appears under Reports > Dashboards as a draft (or saved outright with a schedule the user asked for), where Refresh dashboard rebuilds every tab and chart without AI. Saving does not fetch; call run_dashboard next. Updates need id and revision from list_dashboards. Plans stay private to this account. A tab of one row per entity is a dataset like any tab: scorecards over it are ratios over counts (amount / key__count; repeat share = repeat flag / key__count, percent) and its charts group by its segment.',
       input_schema: {
         type: 'object',
         properties: {

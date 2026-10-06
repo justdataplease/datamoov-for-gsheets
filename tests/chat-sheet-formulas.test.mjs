@@ -553,6 +553,40 @@ test('errors inside an array result and where a result of unknown size spilled a
   );
 });
 
+// A QUERY that groups a source with empty rows (a data tab's blank tail) returns a group with no
+// key, which Sheets sorts first: a per-key table would carry a blank key row. The read-back of
+// the cells near the formula shows it, so the result says to skip rows with no key. A grouped
+// result whose keys are all filled, and a blank cell in another column, get no such note.
+test('a grouped QUERY whose result has a group with no key says to skip rows with no key', () => {
+  const f = fixture();
+  const QUERY = '=QUERY(\'Campaign Data\'!A:C,"select A, count(A), sum(C) group by A")';
+  const grouped = (blankKey) => () => {
+    f.setCell(f.work, 10, 4, 'Campaign', QUERY);
+    f.spill(f.work, 10, 5, 'count Campaign');
+    f.spill(f.work, 10, 6, 'sum Spend');
+    if (!blankKey) f.spill(f.work, 11, 4, 'Brand');
+    f.spill(f.work, 11, 5, blankKey ? 0 : 4);
+    f.spill(f.work, 11, 6, blankKey ? 0 : 12.5);
+    f.spill(f.work, 12, 4, 'Generic');
+    f.spill(f.work, 12, 5, 3);
+    if (blankKey) f.spill(f.work, 12, 6, 9);
+    f.spill(f.work, 13, 4, 'Video');
+    f.spill(f.work, 13, 5, 2);
+    f.spill(f.work, 13, 6, 4);
+  };
+  f.compute = grouped(true);
+  let result = f.edit([[QUERY]], 'D10');
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(
+    result.next,
+    'D10: its QUERY result has a group with no key in row 11 (the source\'s empty rows). Add "where <grouped column> is not null" to the query so every row has a key.'
+  );
+  f.compute = grouped(false);
+  result = f.edit([[QUERY]], 'D10');
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.next, undefined);
+});
+
 // A #REF! whose result found no room is no wrong formula: the read-back says what is short and
 // how to make room, so the model does not give the formula up and leave the error behind.
 test('a #REF! with no room for its result says how to make room instead of only showing the error', () => {

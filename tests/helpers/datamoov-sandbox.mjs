@@ -404,11 +404,14 @@ export function createDatamoovSandbox(settings = {}) {
       getName: () => sheet.name, getSheetId: () => sheet.id,
       isSheetHidden: () => sheet.hidden,
       showSheet() { sheet.hidden = false; return sheet; },
+      // As in Sheets, a "" an array result shows counts as content: a guarded
+      // =ARRAYFORMULA(IF(A2:A="","",…)) makes the last row the bottom of its result.
       getLastRow() {
         let lastRow = 0;
         for (const [key, entry] of sheet.cells) {
           if (entry.formula || (entry.value !== '' && entry.value !== null && entry.value !== undefined))
             lastRow = Math.max(lastRow, Number(key.split(':')[0]));
+          if (entry.blanks) for (const at of entry.blanks) lastRow = Math.max(lastRow, Number(key.split(':')[0]) + Number(at.split(':')[0]));
         }
         return lastRow;
       },
@@ -421,6 +424,11 @@ export function createDatamoovSandbox(settings = {}) {
         for (const key of [...sheet.cells.keys(), ...anchors]) {
           const [r, c] = key.split(':').map(Number);
           lastRow = Math.max(lastRow, r); lastColumn = Math.max(lastColumn, c);
+          // The "" an array result shows counts as content, as for getLastRow.
+          for (const at of sheet.cells.get(key)?.blanks || []) {
+            const [dr, dc] = at.split(':').map(Number);
+            lastRow = Math.max(lastRow, r + dr); lastColumn = Math.max(lastColumn, c + dc);
+          }
         }
         return range(sheet, 1, 1, Math.max(1, lastRow), Math.max(1, lastColumn));
       },

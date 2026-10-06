@@ -583,8 +583,16 @@ function dmvDashboardLive_(context, tile, side, base, item, keys, sibling, blank
   (tile.ratios || []).forEach(function (ratio) {
     ratios[ratio.key] = ratio;
   });
+  // A ratio side is a sum, or a count of the column's filled or distinct values
+  // (dmvChatRatioSide_): blank or 0 for a group without them, so the division reads blank.
+  var side = function (field) {
+    var part = dmvChatRatioSide_(base, field, 'metric');
+    if (part.agg === 'sum') return term(field);
+    var key = part.column.key;
+    return dmvDashboardAggregate_(members, conditions, key, part.agg, blank, facts(key).mixed);
+  };
   var divide = function (ratio) {
-    return '(' + term(ratio.numerator) + ')/(' + term(ratio.denominator) + ')';
+    return '(' + side(ratio.numerator) + ')/(' + side(ratio.denominator) + ')';
   };
   if (item.agg === 'ratio') return 'IFERROR(' + divide(ratios[item.name]) + ',"")';
   if (item.agg === 'formula') {

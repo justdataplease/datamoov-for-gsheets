@@ -65,6 +65,36 @@ source fetches; multi-account and period comparisons can require several fetches
 - **Work in your sheets like an analyst**: "Clean this export: trim, dedupe on email, split name
   and add a status dropdown", lookups across tabs, pivots and conditional formats. Destructive
   changes ask first and recent edits can be undone; see [Editing existing sheets](#editing-existing-sheets).
+- **Analyse each entity of a table**: "segment these accounts", "who are the top and bottom
+  performers?", "which ones stopped coming back?" are analysis per distinct key of a dated table
+  (a person, an account, an agent, a product). Chat first builds a live tab with one row per key:
+  a QUERY in A1 that groups the data by the key (count, sums, first and last date), then from
+  row 2, under row-1 headers, ARRAYFORMULA columns for the days since the last date (counted from
+  the latest date in the data), a 0/1 repeat flag and a segment from a rule it states, never an
+  existing column standing in for one. A QUERY over a data tab with empty rows returns a group
+  with no key, which Sheets sorts first; the `set_formulas` read-back points that row out and
+  says to add `where <grouped column> is not null` (it checks the rows read back near the
+  formula, so a blank group sorted past them is not seen). ARRAYFORMULA columns over open ranges
+  guarded by the key (`=ARRAYFORMULA(IF(A2:A="","",…))`) show empty text on every row below the
+  keys; Sheets counts that empty text as content, so such a tab's used range reaches its last
+  row. Chat sizes a tab by its last row with a value wherever it would otherwise take the
+  used range: the open tab in the prompt, `read_sheet`, `search_sheets` over whole tabs or open
+  ranges, the actions on a tab's whole data (sort or format without a range, `find_replace` and
+  `remove_duplicates` over the whole tab, the question before deleting a tab) and a dashboard
+  over the tab, so those rows add no blank segment, no rows to a count and no cells to a scan,
+  and a refresh sizes the dashboard's ranges to the keys again. Each finds that row by bounded
+  reads up from the bottom: one row when the last row holds a value, more only below a blank
+  tail, up to 1,000,000 cells (100,000 for the open tab), past which the tail is kept.
+  A dashboard over that tab and the data tab follows when asked; its scorecards divide by
+  counts (see [Calculated metrics](#calculated-metrics)), so they stay formulas that follow the
+  data.
+- **Generate sample data**: "make 10,000 rows of …" writes one generator formula and freezes it
+  to values. Columns that depend on others (a product, sum, difference or ratio, or a category
+  tied to another column) are added after the freeze as one ARRAYFORMULA over the generated
+  columns and frozen too, because MAKEARRAY draws every cell on its own: a total drawn inside
+  the generator would not match its own row. When `copy_range` freezes a table that MAKEARRAY
+  drew at random (RAND, RANDBETWEEN or RANDARRAY), its result says this, at the moment those
+  columns can still be added.
 - **Facebook Ads below the campaign**: the **Insights** report answers ad set and ad questions,
   weekly or monthly reach, and splits by age, gender, country, platform or placement; the
   selected fields decide the level, the period and the breakdowns.
@@ -128,6 +158,14 @@ or **"margin by campaign"**. The model writes the expression; it never computes 
 - `profit = revenue - spend`, `net_roas = revenue / 1.05 / spend`,
   `cost_share = spend / (spend + other_spend)`, `margin = (revenue - cost) / revenue` (as a
   percent), or `blended_cpa = spend / conversions` after `combine_results`.
+- A ratio may also divide by a count: `<column>__count` counts the column's filled rows and
+  `<column>__count_distinct` its distinct values in each group, so an amount per entity is
+  `amount / key__count_distinct`, items per entity `item_id__count / key__count_distinct`, and
+  the share of entities with a 0/1 flag `flag / key__count` (percent). A column that is itself
+  named like that is that column, summed. A text column named alone is refused with the name to
+  use, and a count named in a formula or as a tile column says a ratio may divide by it. On a dashboard the count is a live COUNTIFS or COUNTUNIQUE formula like any other value; a
+  compared chart over dates, which adds days up into buckets, accepts `__count` but refuses
+  `__count_distinct`, as it refuses that metric.
 - A formula is evaluated per group after aggregation, like a ratio: each column it names is that
   column's sum over the group, so only summable columns qualify (not rates, averages, reach or
   text). It may also name a ratio key or an earlier formula of the same request, so
@@ -210,7 +248,9 @@ visible tabs, chosen tabs (a hidden tab only when named) or one range. It return
 matches as `Tab!cell` with value and formula, the total and counts per tab, and scans at most
 200,000 cells per call, read in requests of at most 20,000 cells so a large spreadsheet stays
 within the memory of an execution (many small tabs share one request); tabs that would go over are skipped and named, with a hint to
-narrow the search. A regular expression that repeats a group holding a repeat or alternatives, such as
+narrow the search. A whole tab or an open range (`A:F`, `A2:F`) ends at the tab's last row with a
+value, so the empty text guarded array formulas show below their keys is not scanned and does not
+push a tab over the cap; a range with an end row is scanned as given. A regular expression that repeats a group holding a repeat or alternatives, such as
 (a+)+ or (a|b)+, is refused, because it can run for minutes; cells longer than 5,000 characters
 are left out of a regular-expression search and counted. In `duplicates` mode it reports the
 duplicate rows of one range by key columns (groups, counts and up to 10 row numbers each),
@@ -357,7 +397,10 @@ array results (FILTER, QUERY, and lookups or conditional counts such as VLOOKUP,
 COUNTIF over a range of keys inside ARRAYFORMULA) are left to Sheets, which never writes over
 data and shows #REF! instead. After writing, chat reads the cells back and returns each error with its cell and Sheets' message (#REF!, #N/A, #VALUE!,
 #DIV/0!, #NAME?, #ERROR!), a sample of the results and where arrays spilled, so it can fix the
-formula in the same turn. Nothing written is rolled back automatically, but undo is available.
+formula in the same turn. A QUERY with `group by` whose result, in the cells read back near it,
+has a row with an empty first cell and values beside it (a group with no key, from empty rows of
+its source) gets a note naming that row and saying to add `where <grouped column> is not null`.
+Nothing written is rolled back automatically, but undo is available.
 A bracket closed out of order is reported with the call left open (`MAKEARRAY( from character
 14 is still open at this "}"`), and a matrix of the wrong shape with the shape its range takes.
 Literal values beginning with = stay text. Internal report settings remain excluded.
@@ -691,8 +734,10 @@ the card. Chat-created cards say "from Chat" in their subtitle.
   its other connections refer to the first), the spreadsheet's tab names and timezone, and your
   saved instructions. The tools' `config` lists only the settings of the selected sources'
   reports, each wording once with the reports that share it.
-- The tab you have open when you send a message: its name, its used range (for example A1:I50,
-  with row and column counts) and its header row, the first non-empty row of the top 10 as the
+- The tab you have open when you send a message: its name, its used range up to its last row
+  with a value (for example A1:I50, with row and column counts; empty text that guarded array
+  formulas show below their last key is left out) and its header row, row 1 or, when it is blank,
+  the first non-empty row of the top 10 as the
   sheet displays it: at most 30 cells of at most 40 characters each and 800 characters in all,
   marked as spreadsheet data rather than instructions. With
   Anthropic this section comes after the prompt's cache point, so switching tabs keeps the rest
@@ -704,7 +749,8 @@ the card. Chat-created cards say "from Chat" in their subtitle.
   Summaries follow the same sampling rule. The requested summary limit controls the complete
   aggregate stored privately and available for writing; it does not send large tables to the model.
 - Data you read with **read_sheet** is sampled the same way. It reads the whole used range (or
-  the range given, to the tab's last row at most) up to 50,000 cells and 30 columns, so summaries
+  the range given, to the tab's last row at most; rows at its end that show only empty text, with
+  no value below them in its columns, are left out) up to 50,000 cells and 30 columns, so summaries
   of an ordinary tab cover every row; a longer tab is read from the top and the result, and every
   summary of it, carries `metadata.partial` naming the rows it holds of the tab's total, which
   chat must state, or use formulas over whole columns instead. A range is partial too when the
@@ -781,7 +827,7 @@ Values that come back from providers are framed as data, not instructions.
 | `discover_fields` | Account-specific fields (GA4 custom definitions, HubSpot/Zendesk properties, SQL result columns), with a `search` filter |
 | `describe_database` | Tables and columns of the schemas/datasets a SQL connection scoped for chat, with a `search` filter on table names |
 | `combine_results` | Append complete fetched results with matching column maps and a source label; preserves currency and source caveats |
-| `summarize` | Group, filter, aggregate and sort a result server-side; ratios (CPC, CTR, CPA, ROAS) divide two per-group sums; formulas (profit, net ROAS, margin) do arithmetic over per-group sums, ratios and earlier formulas; rankWithin and limitPerGroup select top rows separately per month or other group; rates and averages cannot be summed |
+| `summarize` | Group, filter, aggregate and sort a result server-side; ratios (CPC, CTR, CPA, ROAS) divide two per-group sums, or a sum by a count (`column__count`, `column__count_distinct`); formulas (profit, net ROAS, margin) do arithmetic over per-group sums, ratios and earlier formulas; rankWithin and limitPerGroup select top rows separately per month or other group; rates and averages cannot be summed |
 | `write_to_sheet` | Write a result as a formatted table through the protected writer |
 | `read_sheet` | Read a tab into a result |
 | `create_chart` | Add a line, column, bar, area, scatter or pie chart over a written table |

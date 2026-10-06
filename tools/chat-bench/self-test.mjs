@@ -8,6 +8,7 @@ import { call, say, editToken, confirmToken, scripted } from './self-test-script
 import { runAdversarial } from './self-test-adversarial.mjs';
 import { runAdsSelfTest } from './self-test-ads.mjs';
 import { runSkeptic } from './self-test-skeptic.mjs';
+import { runEntitySelfTest } from './self-test-entity.mjs';
 
 const ROWS = 120;
 const regions = ['North', 'South', 'West'];
@@ -41,7 +42,7 @@ const conversationA = [
       editToken: editToken(b),
       formulas: [
         ['Region', 'Total', 'Units (pasted)', 'Ratio', 'Note'],
-        ['North', '=SUMIFS(Data!B:B,Data!A:A,A2)', '12', '=B2/0', '=TEXTJOIN(",",TRUE,A2:A4)'],
+        ['North', '=SUMIFS(Data!B:B,Data!A:A,A2)', '12', '=B2/0', '=JOIN(",",A2:A4)'],
         ['South', '=SUMIFS(Data!B:B,Data!A:A,A3)', '7', '=B3/C3', ''],
         ['West', '=SUMIFS(Data!B:B,Data!A:A,A4)', '5', '=IFERROR(B4/0,0)', ''],
       ],
@@ -154,8 +155,8 @@ const EXPECT = {
       completed: true,
       rows_written: ROWS,
       derived_tabs: ['Summary'],
-      // Seven formulas; the one showing #DIV/0! and the TEXTJOIN label deliver no number, so
-      // five are live numbers.
+      // Seven formulas; the one showing #DIV/0! and the JOIN label (which no calculator path
+      // evaluates) deliver no number, so five are live numbers.
       formula_cells: 7,
       live_cells: 5,
       value_cells: 3,
@@ -359,6 +360,9 @@ export function runSelfTest({ log = console.log } = {}) {
   const skeptic = runSkeptic({ log });
   checks += skeptic.checks;
   failures += skeptic.failures;
+  const entity = runEntitySelfTest({ log });
+  checks += entity.checks;
+  failures += entity.failures;
   log(`self-test: ${checks - failures}/${checks} checks passed`);
   return failures === 0;
 }

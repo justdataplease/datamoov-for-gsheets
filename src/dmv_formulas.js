@@ -14,7 +14,8 @@ function dmvFormulaHas_(map, key) {
 }
 
 // After an unknown column, what a metric's key (column__agg) in a formula should be: a formula
-// sums each column itself, so the summed column is named bare; other aggregates are metrics.
+// sums each column itself, so the summed column is named bare; other aggregates are metrics, and
+// a count is what a ratio divides by.
 function dmvFormulaKeyHint_(name, summable) {
   var parts = /^(.+?)__(sum|avg|min|max|count_distinct|count)$/i.exec(String(name));
   if (!parts) return '';
@@ -23,7 +24,13 @@ function dmvFormulaKeyHint_(name, summable) {
   });
   if (parts[2].toLowerCase() === 'sum')
     return stem.length === 1 ? '; a formula sums each column itself, so write ' + stem[0] : '';
-  return '; a formula reads summed columns only: a count, average, minimum or maximum is a metric of its own';
+  var agg = parts[2].toLowerCase();
+  return (
+    '; a formula reads summed columns only: a count, average, minimum or maximum is a metric of its own' +
+    (agg === 'count' || agg === 'count_distinct'
+      ? '; to divide by a count, use a ratio with denominator ' + parts[1] + '__' + agg
+      : '')
+  );
 }
 
 function dmvFormulaError_(problem, position, hint) {

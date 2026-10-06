@@ -83,6 +83,10 @@ function dmvDashboardTabSheet_(spreadsheet, sheetName) {
   var rows = sheet.getLastRow(),
     columns = rows ? sheet.getDataRange().getNumColumns() : 0;
   var header = rows ? sheet.getRange(1, 1, 1, columns).getValues()[0] : [];
+  // Rows below the last one with a value (the "" of guarded array formulas) are not data: the
+  // ranges of the dashboard's formulas end at the last of them, and a refresh sizes them again.
+  if (rows > 1 && columns <= DMV_LIMITS.maxColumns)
+    rows = Math.max(1, dmvSheetLastFilledRow_(sheet, 2, rows, 1, columns));
   if (
     rows < 2 ||
     !header.some(function (value) {

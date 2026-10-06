@@ -7,6 +7,8 @@
 //
 // Scenarios (tools/chat-bench/scenarios.mjs):
 //   retail, saas, hr, logistics, marketing   generate N rows, summarize, dashboard
+//   shop_customers, subscription_accounts, marketplace_sellers, freight_clients
+//                       generate N rows, then analysis per entity (segments, retention)
 //   google_ads          dashboard (30 days vs previous), "which campaigns waste money", an edit
 //   reports_dashboard   save 3 reports, dashboard over their tabs, then a refresh with more rows
 // Google Ads data is fictional and served by a local fake of the API (google-ads-fake.mjs);
@@ -177,6 +179,14 @@ for (const entry of IDS) {
               `    fake Google Ads this turn: ${record.ads_requests} requests, ${record.ads_rows} rows, ${record.ads_rejected} rejected`
             );
           if (record.edit_kind) log(`    edit ${record.edit_kind} applied=${record.edit_applied}`);
+          if (record.derived_consistency !== undefined)
+            log(
+              `    derived consistency=${record.derived_consistency} [${(record.derived_checked || []).join('; ')}]`
+            );
+          if (record.kind === 'entity')
+            log(
+              `    entity key=${record.entity_key} keys=${record.entity_keys} tab=${record.entity_tab_name} live=${record.entity_formula_share} verified=${record.entity_columns_verified} [${record.entity_columns.join('; ')}] segment=${record.segment_column} (${record.segment_detail}) retention=${record.retention_measure} [${record.retention_evidence.join('; ')}]`
+            );
           if (record.report_rows)
             log(`    reports saved=${record.reports_saved} new=[${record.report_rows.join(', ')}]`);
           if (record.path)

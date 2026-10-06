@@ -267,6 +267,310 @@ export const DOMAINS = [
 
 export const TAB_TURN_KINDS = ['generate', 'summarize', 'dashboard'];
 
+// Per-entity scenarios: "summarise each distinct key of a dated table", in seven settings whose
+// key is a different kind of thing (a shop's customers, a subscription's accounts, a
+// marketplace's sellers, a freight forwarder's clients, a help desk's agents, a course's
+// students, a website's users): generate a dated dataset (5,000 to 10,000 rows; some prompts
+// list the columns, some leave them to the model), then ask for analysis per key in varied words
+// (segments, tiers, cohorts, churn, at risk, top and bottom performers, activity per key, how
+// often they come back). Turn 2 rotates through two wordings across runs. entity is the header
+// pattern of the data column the analysis is about (measures only, entity.mjs).
+export const ENTITY_DOMAINS = [
+  {
+    id: 'shop_customers',
+    label: 'Shop orders by customer',
+    rows: 8000,
+    style: 'comma',
+    nouns: ['orders', 'order', 'transactions', 'sales', 'records', 'rows', 'lines', 'entries'],
+    entity: /customer|client|buyer|shopper/i,
+    turns: [
+      (n) =>
+        `Generate a dataset of ${n} orders for an online shop that sells coffee beans and brewing gear`,
+      [
+        { text: 'now build a customer retention and segmentation dashboard', dashboard: true },
+        {
+          text: 'Which customers keep coming back and which ones have gone quiet? Group them into segments I can target, with charts.',
+          dashboard: true,
+        },
+      ],
+    ],
+    seed: {
+      tab: 'Orders',
+      columns: [
+        'Order ID',
+        'Order Date',
+        'Customer ID',
+        'Product',
+        'Quantity',
+        'Unit Price',
+        'Order Total',
+      ],
+      row: (i, rand, pick) => {
+        const qty = 1 + Math.floor(rand() * 3);
+        const price = pick([12.5, 18, 24.9, 39, 89]);
+        return [
+          'ORD-' + (100001 + i),
+          day(rand),
+          'C-' + (1001 + Math.floor(Math.pow(rand(), 2) * 1200)),
+          pick(['Espresso Blend', 'Single Origin', 'Grinder', 'Kettle', 'Filters']),
+          qty,
+          price,
+          Math.round(qty * price * 100) / 100,
+        ];
+      },
+    },
+  },
+  {
+    id: 'subscription_accounts',
+    label: 'Subscription invoices by account',
+    rows: 6000,
+    style: 'plain',
+    nouns: ['invoices', 'invoice', 'records', 'rows', 'lines', 'entries', 'payments'],
+    entity: /account|customer|client|company/i,
+    turns: [
+      (n) =>
+        `create ${n} invoices for a B2B software subscription company: invoice id, account, plan, invoice date, seats, price per seat, invoice amount, status`,
+      [
+        {
+          text: 'I want an account-level view: invoices per account, total billed, first and last invoice, and which accounts look like they are churning. Put it on a dashboard.',
+          dashboard: true,
+        },
+        {
+          text: 'segment the accounts by how recently and how often they pay, and show the retention numbers',
+          dashboard: false,
+        },
+      ],
+    ],
+    seed: {
+      tab: 'Invoices',
+      columns: [
+        'Invoice ID',
+        'Account',
+        'Plan',
+        'Invoice Date',
+        'Seats',
+        'Price per Seat',
+        'Invoice Amount',
+        'Status',
+      ],
+      row: (i, rand, pick) => {
+        const plan = pick(['Starter', 'Team', 'Business']);
+        const price = { Starter: 15, Team: 35, Business: 60 }[plan];
+        const seats = 1 + Math.floor(rand() * 40);
+        return [
+          'INV-' + (500001 + i),
+          'Acct ' + (101 + Math.floor(rand() * 700)),
+          plan,
+          day(rand),
+          seats,
+          price,
+          seats * price,
+          pick(['Paid', 'Paid', 'Paid', 'Overdue', 'Void']),
+        ];
+      },
+    },
+  },
+  {
+    id: 'marketplace_sellers',
+    label: 'Marketplace sales by seller',
+    rows: 9000,
+    style: 'comma',
+    nouns: ['sales', 'sale', 'orders', 'records', 'rows', 'lines', 'entries', 'transactions'],
+    entity: /seller|vendor|merchant|shop|store/i,
+    turns: [
+      (n) =>
+        `I need ${n} rows of marketplace sales data - sellers, listings, sale date, units, unit price, gross sales`,
+      [
+        {
+          text: 'Give me a seller performance breakdown: how active each seller is, who stopped selling, and tier them. dashboard pls',
+          dashboard: true,
+        },
+        {
+          text: 'Build a dashboard of seller retention and tiers (top, steady, at risk, dormant).',
+          dashboard: true,
+        },
+      ],
+    ],
+    seed: {
+      tab: 'Sales',
+      columns: ['Sale ID', 'Seller', 'Listing', 'Sale Date', 'Units', 'Unit Price', 'Gross Sales'],
+      row: (i, rand, pick) => {
+        const units = 1 + Math.floor(rand() * 5);
+        const price = Math.round((3 + rand() * 120) * 100) / 100;
+        return [
+          'S-' + (900001 + i),
+          'Seller ' + (1 + Math.floor(Math.pow(rand(), 1.6) * 450)),
+          pick(['Lamp', 'Mug', 'Poster', 'Tote', 'Candle', 'Print']),
+          day(rand),
+          units,
+          price,
+          Math.round(units * price * 100) / 100,
+        ];
+      },
+    },
+  },
+  {
+    id: 'freight_clients',
+    label: 'Freight shipments by client',
+    rows: 5000,
+    style: 'plain',
+    nouns: [
+      'shipments',
+      'shipment',
+      'consignments',
+      'records',
+      'rows',
+      'lines',
+      'entries',
+      'loads',
+    ],
+    entity: /client|customer|shipper|account|consignor/i,
+    turns: [
+      (n) =>
+        `generate ${n} shipments for a freight forwarder: shipment id, client, ship date, carrier, weight kg, rate per kg, freight charge, on time (yes/no)`,
+      [
+        {
+          text: 'Which clients ship with us repeatedly and which have dropped off? I need a client segmentation with retention metrics on a dashboard.',
+          dashboard: true,
+        },
+        {
+          text: 'per-client analysis please: shipments, spend, first and last shipment, days since the last one, and a segment for each client',
+          dashboard: false,
+        },
+      ],
+    ],
+    seed: {
+      tab: 'Shipments',
+      columns: [
+        'Shipment ID',
+        'Client',
+        'Ship Date',
+        'Carrier',
+        'Weight kg',
+        'Rate per kg',
+        'Freight Charge',
+        'On Time',
+      ],
+      row: (i, rand, pick) => {
+        const kg = Math.round(50 + rand() * 950);
+        const rate = pick([0.8, 1.1, 1.45, 2.2]);
+        return [
+          'SHP-' + (700001 + i),
+          'Client ' + (1 + Math.floor(Math.pow(rand(), 1.8) * 300)),
+          day(rand),
+          pick(['FastFreight', 'BlueLine', 'Northway']),
+          kg,
+          rate,
+          Math.round(kg * rate * 100) / 100,
+          pick(['Yes', 'Yes', 'Yes', 'No']),
+        ];
+      },
+    },
+  },
+  {
+    id: 'helpdesk_agents',
+    label: 'Help desk tickets by agent',
+    rows: 7000,
+    style: 'comma',
+    nouns: ['tickets', 'ticket', 'cases', 'requests', 'records', 'rows', 'lines', 'entries'],
+    entity: /agent|assignee|rep|owner|handler/i,
+    turns: [
+      (n) =>
+        `Generate ${n} support tickets: ticket id, agent, opened date, closed date, priority, channel, handle time in minutes, satisfaction score 1-5`,
+      [
+        {
+          text: 'Who are our top and bottom performing agents? Show activity per agent and group them into tiers on a dashboard.',
+          dashboard: true,
+        },
+        {
+          text: 'how active is each agent lately, and which ones look at risk of dropping off? segment them',
+          dashboard: false,
+        },
+      ],
+    ],
+    seed: {
+      tab: 'Tickets',
+      columns: ['Ticket ID', 'Agent', 'Opened', 'Priority', 'Handle Minutes', 'CSAT'],
+      row: (i, rand, pick) => [
+        'T-' + (40001 + i),
+        'Agent ' + (1 + Math.floor(Math.pow(rand(), 1.4) * 60)),
+        day(rand),
+        pick(['Low', 'Normal', 'High', 'Urgent']),
+        5 + Math.floor(rand() * 115),
+        1 + Math.floor(rand() * 5),
+      ],
+    },
+  },
+  {
+    id: 'course_students',
+    label: 'Course submissions by student',
+    rows: 6000,
+    style: 'plain',
+    nouns: ['submissions', 'submission', 'attempts', 'records', 'rows', 'lines', 'entries'],
+    entity: /student|learner|pupil|participant|user/i,
+    turns: [
+      (n) =>
+        `create ${n} assignment submissions for an online learning platform - student, course, submitted on, score out of 100, attempts`,
+      [
+        {
+          text: 'Which students are at risk of dropping out? Build a cohort-style view per student with activity, last submission and a risk segment.',
+          dashboard: false,
+        },
+        {
+          text: 'How often do students come back to submit work? Segment them by engagement and put it on a dashboard.',
+          dashboard: true,
+        },
+      ],
+    ],
+    seed: {
+      tab: 'Submissions',
+      columns: ['Submission ID', 'Student', 'Course', 'Submitted On', 'Score', 'Attempts'],
+      row: (i, rand, pick) => [
+        'SUB-' + (10001 + i),
+        'Student ' + (1 + Math.floor(Math.pow(rand(), 1.5) * 900)),
+        pick(['Algebra', 'Biology', 'History', 'Python']),
+        day(rand),
+        Math.round(40 + rand() * 60),
+        1 + Math.floor(rand() * 3),
+      ],
+    },
+  },
+  {
+    id: 'web_users',
+    label: 'Website sessions by user',
+    rows: 9000,
+    style: 'comma',
+    nouns: ['sessions', 'session', 'visits', 'records', 'rows', 'lines', 'entries'],
+    entity: /user|visitor|member|client id/i,
+    turns: [
+      (n) =>
+        `generate ${n} website sessions with user id, session start, device, pages viewed, duration in seconds, converted yes/no`,
+      [
+        {
+          text: 'churn analysis per user please: who keeps visiting, who stopped, and user segments, on a dashboard',
+          dashboard: true,
+        },
+        {
+          text: 'Show me user activity cohorts (active, returning, dormant) with charts.',
+          dashboard: true,
+        },
+      ],
+    ],
+    seed: {
+      tab: 'Sessions',
+      columns: ['Session ID', 'User ID', 'Session Start', 'Device', 'Pages', 'Duration Sec'],
+      row: (i, rand, pick) => [
+        'S-' + (500001 + i),
+        'U-' + (1001 + Math.floor(Math.pow(rand(), 2) * 2500)),
+        day(rand),
+        pick(['Mobile', 'Desktop', 'Tablet']),
+        1 + Math.floor(rand() * 12),
+        10 + Math.floor(rand() * 900),
+      ],
+    },
+  },
+];
+
 function day(rand, fromYear = 2026, years = 1) {
   return new Date(Date.UTC(fromYear, 0, 1) + Math.floor(rand() * 365 * years) * 86400000);
 }
@@ -382,7 +686,9 @@ export const ADS_SCENARIOS = [
   },
 ];
 
-export const SCENARIO_IDS = DOMAINS.map((d) => d.id).concat(ADS_SCENARIOS.map((s) => s.id));
+export const SCENARIO_IDS = DOMAINS.map((d) => d.id)
+  .concat(ENTITY_DOMAINS.map((d) => d.id))
+  .concat(ADS_SCENARIOS.map((s) => s.id));
 
 // One scenario as the conversation runner takes it: { id, label, family, turns: [{ n, kind,
 // text, edit? }], rowsRequested, nouns, seed, refresh }.
@@ -403,6 +709,26 @@ export function buildScenario(id, { run = 1, turns = null, rows = null } = {}) {
         kind: TAB_TURN_KINDS[t - 1],
         text: promptFor(domain, t, n, run),
       })),
+    };
+  }
+  const entity = ENTITY_DOMAINS.find((d) => d.id === id);
+  if (entity) {
+    const n = rows ?? entity.rows;
+    const chosen = (turns || [1, 2]).filter((t) => t >= 1 && t <= 2);
+    return {
+      id,
+      label: entity.label,
+      family: 'tab',
+      rowsRequested: n,
+      nouns: entity.nouns,
+      entity: entity.entity,
+      seed: chosen.includes(1) ? null : seedData(entity, n),
+      turns: chosen.map((t) => {
+        if (t === 1)
+          return { n: 1, kind: 'generate', text: entity.turns[0](written(n, entity.style)) };
+        const wording = entity.turns[1][(run - 1) % entity.turns[1].length];
+        return { n: 2, kind: 'entity', text: wording.text, dashboard: wording.dashboard };
+      }),
     };
   }
   const spec = ADS_SCENARIOS.find((s) => s.id === id);

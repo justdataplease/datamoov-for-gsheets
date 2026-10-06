@@ -34,6 +34,9 @@ export const MEAN_KEYS = [
   'needs_confirmation',
   'numbers_checked',
   'waste_recall',
+  'derived_consistency',
+  'entity_formula_share',
+  'entity_columns_verified',
 ];
 
 export function aggregate(records) {
@@ -47,7 +50,14 @@ export function aggregate(records) {
   );
   // Later turns that wrote numbers on their own (non-fetched) tabs.
   const derived = records.filter((r) => r.kind !== 'generate' && r.formula_share !== null);
-  const dashboards = records.filter((r) => r.kind === 'dashboard');
+  // A per-entity turn that asks for a dashboard is judged as one too.
+  const dashboards = records.filter(
+    (r) => r.kind === 'dashboard' || (r.kind === 'entity' && r.wants_dashboard)
+  );
+  const entityTurns = records.filter((r) => r.kind === 'entity');
+  const generatedChecked = records.filter(
+    (r) => r.derived_consistency !== null && r.derived_consistency !== undefined
+  );
   const scored = records.filter(
     (r) => r.answer_accurate !== null && r.answer_accurate !== undefined
   );
@@ -78,6 +88,15 @@ export function aggregate(records) {
       claims_match: rate(records, (r) => !r.claims_mismatch),
       edit_applied: rate(edits, (r) => r.edit_applied === true),
       fresh_after_refresh: rate(refreshed, (r) => r.stale_after_refresh === false),
+      // Generated totals equal their quantity x price (within rounding) in 99% of rows.
+      derived_consistency_ge_0_99: rate(generatedChecked, (r) => r.derived_consistency >= 0.99),
+      // Per-entity turns: a tab with one row per key, mostly live, with checked columns, a live
+      // segment column and a retention figure that matches the data.
+      entity_tab: rate(entityTurns, (r) => r.entity_tab),
+      entity_formula_share_ge_0_9: rate(entityTurns, (r) => r.entity_formula_share >= 0.9),
+      entity_columns_verified_ge_2: rate(entityTurns, (r) => r.entity_columns_verified >= 2),
+      segment_column: rate(entityTurns, (r) => r.segment_column),
+      retention_measure: rate(entityTurns, (r) => r.retention_measure),
     },
     stops: bySpace(records, 'stop'),
     dashboard_paths: bySpace(
@@ -128,6 +147,12 @@ function extra(r) {
   if (r.data_summary_rows) parts.push(`totals rows in data: ${r.data_summary_rows}`);
   if (r.live_zero_cells) parts.push(`live zeros ${r.live_zero_cells}`);
   if (r.edit_kind) parts.push(`edit ${r.edit_kind}: ${fmt(r.edit_applied)}`);
+  if (r.derived_consistency !== undefined && r.derived_consistency !== null)
+    parts.push(`derived consistency ${fmt(r.derived_consistency)}`);
+  if (r.kind === 'entity')
+    parts.push(
+      `entity ${r.entity_key || '-'}: tab ${r.entity_tab_name || '-'}, live ${fmt(r.entity_formula_share)}, verified ${r.entity_columns_verified}/${r.entity_columns.length}, segment ${r.segment_detail || '-'}, retention ${fmt(r.retention_measure)}`
+    );
   if (r.report_rows && r.report_rows.length) parts.push(`report ${r.report_rows.join(', ')}`);
   if (r.path) parts.push(`path ${r.path}`);
   if (r.report_tabs_edited && r.report_tabs_edited.length)
@@ -177,7 +202,9 @@ export function markdown({ label, meta, records, totals }) {
       r.error_sample.length ||
       (r.answer_mismatches || []).length ||
       (r.stale_sample || []).length ||
-      (r.refresh_errors || []).length
+      (r.refresh_errors || []).length ||
+      (r.derived_checked || []).length ||
+      r.kind === 'entity'
   );
   if (notes.length) {
     lines.push('## Evidence', '');
@@ -189,6 +216,9 @@ export function markdown({ label, meta, records, totals }) {
       for (const e of r.error_sample) lines.push(`- error cell: ${cell(e)}`);
       for (const e of r.stale_sample || []) lines.push(`- stale after refresh: ${cell(e)}`);
       for (const e of r.refresh_errors || []) lines.push(`- refresh error: ${cell(e)}`);
+      for (const e of r.derived_checked || []) lines.push(`- derived column: ${cell(e)}`);
+      for (const e of r.entity_columns || []) lines.push(`- entity column: ${cell(e)}`);
+      for (const e of r.retention_evidence || []) lines.push(`- retention: ${cell(e)}`);
       lines.push('');
     }
   }

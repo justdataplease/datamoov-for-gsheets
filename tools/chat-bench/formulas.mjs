@@ -7,14 +7,18 @@
 //   - range reads and equality criteria are memoized per batch (reset() between batches), so a
 //     per-entity summary over 100,000 rows evaluates in seconds;
 //   - a generated table (MAKEARRAY, SEQUENCE, RANDARRAY, also with sizes bound by LET and a
-//     header in VSTACK) spills the requested number of rows, with values taken from the model's
-//     own per-column lists (CHOOSE(c, INDEX({"a","b"},...), ...)) where it has them, else
-//     domain-neutral values inferred from the header name. The model's own arithmetic is not
-//     replayed, so generated values are plausible stand-ins, not the model's exact data.
-//   - {range} and stacked references in an array literal, MAXIFS/MINIFS.
+//     header in VSTACK) that the evaluator below cannot read spills the requested number of rows
+//     as stand-ins, with values taken from the model's own per-column lists (CHOOSE(c,
+//     INDEX({"a","b"},...), ...)) where it has them, else domain-neutral values inferred from the
+//     header name;
+//   - {range} and stacked references in an array literal, MAXIFS/MINIFS;
+//   - any other formula through the parser-based evaluator of arrays.mjs (LET, LAMBDA, MAP,
+//     MAKEARRAY, UNIQUE, SORT, FILTER, ARRAYFORMULA arithmetic...), which replays the model's own
+//     arithmetic and draws; only a formula it cannot read gets the stand-in table above.
 // Anything else returns undefined: the formula text stays as its value and the benchmark counts
 // it as unevaluated.
 import { prng } from './random.mjs';
+import { evaluateFormula, UNSUPPORTED } from './arrays.mjs';
 
 const COLUMN = (letters) =>
   letters
@@ -98,10 +102,11 @@ export function createCalculator(getBook) {
         return list.filter((v) => v !== '').length;
       case 'AVERAGE':
         return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : '#DIV/0!';
+      // Folded, not spread: a list of 100,000 values overflows the call stack.
       case 'MAX':
-        return nums.length ? Math.max(...nums) : 0;
+        return nums.length ? nums.reduce((a, b) => (b > a ? b : a)) : 0;
       case 'MIN':
-        return nums.length ? Math.min(...nums) : 0;
+        return nums.length ? nums.reduce((a, b) => (b < a ? b : a)) : 0;
       case 'COUNTUNIQUE':
         return new Set(list.filter((v) => v !== '').map(String)).size;
       default:
@@ -371,10 +376,15 @@ export function createCalculator(getBook) {
         items.map((item) => {
           if (!item.fn) return list[0][item.column];
           const map = { sum: 'SUM', count: 'COUNTA', avg: 'AVERAGE', max: 'MAX', min: 'MIN' };
-          return aggregate(
-            map[item.fn],
-            list.map((row) => row[item.column])
-          );
+          const values = list.map((row) => row[item.column]);
+          const result = aggregate(map[item.fn], values);
+          // The earliest or latest of dates is a date, as QUERY returns it.
+          const filled = values.filter((v) => v !== '');
+          return (item.fn === 'max' || item.fn === 'min') &&
+            filled.length &&
+            filled.every((v) => v instanceof Date)
+            ? new Date((result - 25569) * 86400000)
+            : result;
         })
       );
     } else out = rows.map((row) => items.map((item) => row[item.column]));
@@ -412,6 +422,22 @@ export function createCalculator(getBook) {
     return [head].concat(out.length ? out : [items.map(() => '')]);
   };
   const generated = (text) => generateTable(text, split);
+  // The parser-based evaluator (arrays.mjs): the model's own formula, its arithmetic and draws
+  // included. undefined when it uses a function that evaluator does not know.
+  const evaluated = (formula, at) => {
+    try {
+      return evaluateFormula(formula, at, {
+        range,
+        grid,
+        remember,
+        seed: hash(formula),
+        query: (source, text, headers, where) => query(source, text, headers, where),
+      });
+    } catch (error) {
+      if (error === UNSUPPORTED) return undefined;
+      throw error;
+    }
+  };
   // An array literal such as {100;200;300}, {"a",1;"b",2} or {Sheet1!A1:D6}: rows split by ;
   // and columns by ,.
   const arrayLiteral = (body, at) => {
@@ -463,9 +489,9 @@ export function createCalculator(getBook) {
       if ((m = /^\{(.*)\}$/s.exec(text))) {
         const literal = arrayLiteral(m[1], at);
         if (literal !== undefined) return literal;
-        return generated(text);
+        return evaluated(formula, at) ?? generated(text);
       }
-      return scalar(text, at) ?? generated(text);
+      return scalar(text, at) ?? evaluated(formula, at) ?? generated(text);
     } catch {
       return undefined;
     }
