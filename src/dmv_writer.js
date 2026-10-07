@@ -112,8 +112,15 @@ function dmvDayColumns_(result) {
     any = false;
   result.columns.forEach(function (column, index) {
     if (column.type !== 'date' || matrix.length < 2) return;
-    for (var at = 1; at < matrix.length; at++)
-      if (matrix[at][index] !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(matrix[at][index])) return;
+    for (var at = 1; at < matrix.length; at++) {
+      if (matrix[at][index] === '') continue;
+      try {
+        dmvDate_(matrix[at][index]);
+      } catch (ignored) {
+        // A date-shaped value with an invalid calendar day stays literal, like other text.
+        return;
+      }
+    }
     dates[index] = any = true;
   });
   return {
@@ -136,17 +143,9 @@ function dmvDayColumns_(result) {
 
 // A yyyy-mm-dd day, or a yyyy-MM-dd HH:mm time, as a Sheets date serial: days since 30 Dec 1899.
 function dmvDaySerial_(day) {
-  return (
-    (Date.UTC(
-      Number(day.slice(0, 4)),
-      Number(day.slice(5, 7)) - 1,
-      Number(day.slice(8, 10)),
-      Number(day.slice(11, 13)) || 0,
-      Number(day.slice(14, 16)) || 0
-    ) -
-      Date.UTC(1899, 11, 30)) /
-    86400000
-  );
+  var date = new Date(day.slice(0, 10) + 'T00:00:00Z');
+  date.setUTCHours(Number(day.slice(11, 13)) || 0, Number(day.slice(14, 16)) || 0);
+  return (date.getTime() - Date.UTC(1899, 11, 30)) / 86400000;
 }
 
 // Grid sizes and merged ranges of every tab, keyed by sheet id, from one metadata-only Sheets
@@ -1019,12 +1018,16 @@ function dmvOutputRecordRequests_(spreadsheetId, outputs, areas, all) {
 // dashboard dataset) is removed, so collaborators may edit what was left behind.
 function dmvForgetOutputs_(spreadsheetId, ids) {
   dmvWorkbookLocked_(function () {
+    var properties = dmvStore_();
+    if (properties.getProperty('dmv:v1:write-journal:' + spreadsheetId))
+      dmvRecoverOutputJournal_(dmvReopen_(SpreadsheetApp.openById(spreadsheetId)), properties, ids);
     var requests = dmvOutputRecords_(spreadsheetId)
       .filter(function (found) {
         return ids.indexOf(found.record.id) >= 0;
       })
       .map(dmvOutputRecordDelete_);
     if (requests.length) Sheets.Spreadsheets.batchUpdate({ requests: requests }, spreadsheetId);
+    dmvPruneOutputJournal_(spreadsheetId, ids);
   });
 }
 
@@ -1219,7 +1222,7 @@ function dmvLayoutFormat_(format, area) {
 
 // A Sheets commit and private-property writes are separate services. A metadata-only journal
 // lets a later refresh recover interrupted receipts only when the actual cells still match.
-function dmvRecoverOutputJournal_(spreadsheet, properties) {
+function dmvRecoverOutputJournal_(spreadsheet, properties, ids) {
   var journalKey = 'dmv:v1:write-journal:' + spreadsheet.getId();
   var text = properties.getProperty(journalKey);
   if (!text) return;
@@ -1227,6 +1230,11 @@ function dmvRecoverOutputJournal_(spreadsheet, properties) {
     sheets = spreadsheet.getSheets();
   if (!journal || !Array.isArray(journal.receipts) || journal.receipts.length > 10)
     throw new Error('The output ownership journal is invalid. Choose a new output area.');
+  var selected =
+    ids &&
+    ids.map(function (id) {
+      return dmvOutputKey_(spreadsheet.getId(), id);
+    });
   journal.receipts.forEach(function (receipt) {
     var area = receipt.area;
     if (
@@ -1235,6 +1243,7 @@ function dmvRecoverOutputJournal_(spreadsheet, properties) {
       receipt.key.indexOf(dmvOutputKey_(spreadsheet.getId(), '')) !== 0
     )
       throw new Error('The output ownership journal is invalid.');
+    if (selected && selected.indexOf(receipt.key) < 0) return;
     var sheet = sheets.filter(function (item) {
       return item.getSheetId() === area.sheetId;
     })[0];
@@ -1258,9 +1267,34 @@ function dmvRecoverOutputJournal_(spreadsheet, properties) {
     )
       properties.setProperty(receipt.key, JSON.stringify(area));
   });
+  if (ids) {
+    dmvPruneOutputJournal_(spreadsheet.getId(), ids);
+    return;
+  }
   try {
     properties.deleteProperty(journalKey);
   } catch (ignored) {
     /* All matching receipts were committed. */
   }
+}
+
+// Removing an owner must not let a later write restore its abandoned receipt. Keep other
+// outputs in a multi-output journal untouched so they can still recover their own receipts.
+function dmvPruneOutputJournal_(spreadsheetId, ids) {
+  var properties = dmvStore_(),
+    key = 'dmv:v1:write-journal:' + spreadsheetId,
+    text = properties.getProperty(key);
+  if (!text) return;
+  var journal = JSON.parse(text);
+  if (!journal || !Array.isArray(journal.receipts) || journal.receipts.length > 10)
+    throw new Error('The output ownership journal is invalid.');
+  var removed = ids.map(function (id) {
+    return dmvOutputKey_(spreadsheetId, id);
+  });
+  var kept = journal.receipts.filter(function (receipt) {
+    return removed.indexOf(receipt.key) < 0;
+  });
+  if (kept.length === journal.receipts.length) return;
+  if (!kept.length) properties.deleteProperty(key);
+  else properties.setProperty(key, dmvCheckRecordSize_({ receipts: kept }));
 }

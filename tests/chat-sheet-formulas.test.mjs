@@ -729,6 +729,19 @@ test('search_sheets finds values and formulas across tabs, read-only, with caps 
   assert.equal(f.state.batches.length, batches);
 });
 
+test('an empty search returns its validated scan bounds without claiming matching data', () => {
+  const f = fixture();
+  f.sheet.maxRows = 10000;
+  f.setCell(f.sheet, 8001, 1, 'last data cell');
+  const batches = f.state.batches.length;
+  const result = f.search({ sheetName: f.sheet.name, range: 'A8002:J8005', query: '.+', regex: true });
+  assert.equal(result.total, 0);
+  assert.deepEqual(result.matches, []);
+  assert.deepEqual(result.ranges, [{ sheetName: f.sheet.name, range: 'A8002:J8005' }]);
+  assert.equal(result.scannedCells, 40);
+  assert.equal(f.state.batches.length, batches);
+});
+
 test('search_sheets without a query lists the cells of the range it names, as a model peeking at it expects', () => {
   // A benchmark run sent { sheetName, range: 'A1:C5' } with no query to look at a tab's top.
   const f = fixture();

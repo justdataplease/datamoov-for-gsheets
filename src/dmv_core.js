@@ -383,15 +383,22 @@ function dmvNormalizeResult_(result, maxRows) {
   };
 }
 
-function dmvSafeError_(error, credentials) {
+function dmvSafeError_(error, credentials, secretKeys) {
   var message =
     error && error.message ? String(error.message) : 'The report could not be completed.';
-  Object.keys(credentials || {}).forEach(function (key) {
+  var keys = Object.keys(credentials || {});
+  secretKeys = secretKeys || keys;
+  keys.forEach(function (key) {
     var value = credentials[key];
-    if (typeof value === 'string' && value.length >= 6)
-      message = message.split(value).join('[redacted]');
+    if (
+      typeof value === 'string' &&
+      value.length > 0 &&
+      (value.length >= 6 || secretKeys.indexOf(key) >= 0)
+    )
+      message = message.split(value).join('\u0000');
   });
   return message
+    .replace(/\u0000/g, '[redacted]')
     .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
     .replace(/(access_token|token|password|key)=([^\s&]+)/gi, '$1=[redacted]')
     .slice(0, 400);

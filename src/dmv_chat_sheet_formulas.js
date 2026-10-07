@@ -1543,6 +1543,11 @@ function dmvChatSearchFind_(session, input, sheets, limit) {
     returned: matches.length,
     matches: matches,
     byTab: byTab,
+    // Actual validated scan bounds let a closing answer cite row positions, including an
+    // empty searched range, without treating proposed tool inputs as successful evidence.
+    ranges: planned.plan.map(function (item) {
+      return { sheetName: item.sheet.getName(), range: dmvChatGridA1_(item.grid) };
+    }),
     scannedCells: planned.cells,
     searchedTabs: planned.plan.map(function (item) {
       return item.sheet.getName();

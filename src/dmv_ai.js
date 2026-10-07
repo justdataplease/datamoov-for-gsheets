@@ -557,7 +557,7 @@ function dmvTestAi(input) {
     if (displayName) result.displayName = displayName;
     return result;
   } catch (error) {
-    throw new Error(dmvSafeError_(error, { apiKey: settings.apiKey }));
+    throw new Error(dmvSafeError_(error, { apiKey: settings.apiKey }, ['apiKey']));
   }
 }
 

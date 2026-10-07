@@ -95,6 +95,10 @@ test('equivalent validated queries reuse a complete result for field-order and d
   assert.equal(repeated.resultId, first.resultId);
   assert.equal(repeated.reused, true);
   assert.deepEqual(repeated.rows, first.rows);
+  assert.deepEqual(first.dateRange, { startDate: '2026-09-07', endDate: '2026-09-13' });
+  assert.equal(first.periodDays, 7);
+  assert.deepEqual(repeated.dateRange, first.dateRange);
+  assert.equal(repeated.periodDays, first.periodDays);
   const event = f.session.events.at(-1);
   assert.equal(event.kind, 'report');
   assert.equal(event.ref, first.resultId);

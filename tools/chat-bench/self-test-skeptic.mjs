@@ -314,11 +314,12 @@ export function runSkeptic({ log = console.log } = {}) {
     ),
     () => say('North totals 9,999.00 and South 8,888.00.'),
     // Turn 7: live totals quoted back.
-    ...write('Live', 'A1:B4', [
+    ...write('Live', 'A1:B5', [
       ['Region', 'Total'],
       ['North', '=SUMIFS(Data!B:B,Data!A:A,A2)'],
       ['South', '=SUMIFS(Data!B:B,Data!A:A,A3)'],
       ['West', '=SUMIFS(Data!B:B,Data!A:A,A4)'],
+      ['All', '=SUM(Data!B:B)'],
     ]),
     () => say(`North totals ${grouped(total('North'))} and the whole table ${grouped(total())}.`),
   ];

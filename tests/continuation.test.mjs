@@ -76,6 +76,25 @@ test('continuation freezes relative dates across midnight and next full run reso
   assert.equal(f.calls[3].endDate, '2026-09-18');
 });
 
+test('continued report fetches share the caller deadline and cannot commit after it expires', () => {
+  const f = fixture();
+  f.setTotal(1);
+  const report = f.save();
+  f.api.dmvRunReport(report.id);
+  const cells = plain([...f.book.sheets[0].cells]), receipt = plain(f.readOutput(report.id));
+  const deadline = f.api.Date.now() + 15000;
+  f.setHook((ctx) => {
+    assert.equal(ctx.deadline, deadline, 'continuations retain the caller budget');
+    f.advance(20000);
+  });
+  assert.throws(() => f.api.dmvExecuteReport_(report, deadline), /refresh reached its time limit/);
+  assert.equal(f.state.batches.length, 1, 'the expired refresh never writes');
+  assert.deepEqual(plain([...f.book.sheets[0].cells]), cells);
+  assert.deepEqual(plain(f.readOutput(report.id)), receipt);
+  assert.equal(f.readReport(report.id).status, 'error');
+  assert.equal(f.readReport(report.id).runToken, null);
+});
+
 test('manual pending reports resume on the owning hourly scheduler and leave foreign reports alone', () => {
   const f = fixture(), report = f.save();
   f.api.dmvRunReport(report.id);

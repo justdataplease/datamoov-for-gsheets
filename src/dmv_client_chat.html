@@ -40,6 +40,8 @@
       active: null,
       selectedSourceIds: null,
       availableSourceIds: [],
+      pendingSources: false,
+      resetForSources: false,
       // The latest Test run and the provider and model its inline outcome describes.
       modelTest: { run: 0, tested: null },
     };
@@ -49,6 +51,12 @@
         .map((item) => item.id);
     }
     function renderSources() {
+      if (chat.busy) {
+        chat.pendingSources = true;
+        return;
+      }
+      const deferred = chat.pendingSources;
+      chat.pendingSources = false;
       const available = state.connections;
       const previous = chat.selectedSourceIds ? [...chat.selectedSourceIds].join('|') : null;
       if (chat.selectedSourceIds === null)
@@ -65,7 +73,8 @@
       }
       chat.availableSourceIds = available.map((item) => item.id);
       if (previous !== null && [...chat.selectedSourceIds].join('|') !== previous)
-        resetConversation();
+        if (deferred) chat.resetForSources = true;
+        else resetConversation();
       const options = $('chat-source-options');
       options.replaceChildren();
       for (const source of available) {
@@ -707,10 +716,14 @@
       chat.messages.push({ role, text, extra });
       return addMessage(role, text, extra);
     }
+    let conversationWrite = Promise.resolve();
     function remember(conversation) {
-      api('dmvChatSaveConversation', conversation).catch(() => {
-        // Only a reopened sidebar misses the conversation.
-      });
+      const snapshot = conversation ? JSON.parse(JSON.stringify(conversation)) : null;
+      conversationWrite = conversationWrite
+        .then(() => api('dmvChatSaveConversation', snapshot))
+        .catch(() => {
+          // Only a reopened sidebar misses this update; later saves and clears still run.
+        });
     }
     function restore(conversation) {
       chat.conversationId = conversation.id;
@@ -805,6 +818,7 @@
     async function send(text, answer = {}) {
       text = String(text || '').trim();
       if (!text || chat.busy || !chat.ai?.configured) return;
+      if (chat.resetForSources) resetConversation();
       const generation = chat.generation;
       let turn;
       // Only the next message answers a confirmation, so older Yes and No chips stop working.
@@ -869,11 +883,15 @@
           setBusy(false);
           $('chat-input').focus();
           if (chat.conversationId)
-            remember({
-              id: chat.conversationId,
-              transcript: chat.transcript,
-              messages: chat.messages,
-            });
+            remember(
+              chat.resetForSources
+                ? null
+                : {
+                    id: chat.conversationId,
+                    transcript: chat.transcript,
+                    messages: chat.messages,
+                  }
+            );
         }
       }
     }
@@ -895,8 +913,10 @@
       $('ai-remove').disabled = busy;
       $('ai-save').disabled = busy;
       $('chat-new').hidden = !$('chat-messages').childElementCount && !busy;
+      if (!busy && chat.pendingSources) renderSources();
     }
     function resetConversation() {
+      chat.resetForSources = false;
       stopProgress();
       chat.generation++;
       if (chat.conversationId) remember(null);

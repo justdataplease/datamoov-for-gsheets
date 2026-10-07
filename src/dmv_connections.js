@@ -140,6 +140,24 @@ function dmvDiscoverAccounts(input) {
     }),
     credentials
   );
+  if (previous && !input.credentialId && stored) {
+    var comparedFields = (connector.authFields || []).filter(function (field) {
+      return keys.indexOf(field.key) < 0;
+    });
+    var retained = dmvFieldsInput_(comparedFields, stored);
+    if (
+      comparedFields.every(function (field) {
+        return credentials[field.key] === retained[field.key];
+      })
+    ) {
+      // Only reused authentication may rotate the saved record; unsaved edits remain private
+      // to this discovery call until the user saves the connection.
+      discoveryConnection.id = previous.id;
+      discoveryConnection.revision = previous.revision;
+      discoveryConnection.credentialId = previous.credentialId;
+      discoveryConnection.credentialRevision = previous.credentialRevision;
+    }
+  }
   if (!dmvVisible_(connector.accountDiscovery, credentials))
     throw new Error('Choose the supported authorization method to find accounts.');
   discoveryConnection.credentials = credentials;
@@ -172,7 +190,7 @@ function dmvDiscoverAccounts(input) {
       }),
     };
   } catch (error) {
-    throw new Error(dmvSafeError_(error, credentials));
+    throw new Error(dmvSafeError_(error, credentials, dmvSecretKeys_(connector.authFields || [])));
   }
 }
 
@@ -248,7 +266,9 @@ function dmvSaveConnection(input, deadline) {
         if (typeof connector.test === 'function') connector.test(context);
         else context.accessToken();
       } catch (error) {
-        throw new Error(dmvSafeError_(error, credentials));
+        throw new Error(
+          dmvSafeError_(error, credentials, dmvSecretKeys_(connector.authFields || []))
+        );
       }
     }
     var connection = {
@@ -268,7 +288,16 @@ function dmvSaveConnection(input, deadline) {
 
 // Persist a provider-issued replacement secret (a rotated refresh token) into the saved
 // connection. Skipped when the user edited the connection meanwhile; only secret fields change.
-function dmvRotateCredentials_(connection, patch) {
+function dmvCredentialRotationPatch_(fields, patch) {
+  var secrets = dmvSecretKeys_(fields);
+  var replacement = Object.create(null);
+  Object.keys(patch || {}).forEach(function (key) {
+    if (secrets.indexOf(key) >= 0 && typeof patch[key] === 'string') replacement[key] = patch[key];
+  });
+  return replacement;
+}
+
+function dmvRotateCredentials_(connection, patch, expectedValues) {
   var kind = connection.credentialId ? 'credential' : 'connection';
   var id = connection.credentialId || connection.id;
   if (!id) return;
@@ -281,15 +310,25 @@ function dmvRotateCredentials_(connection, patch) {
     var fields = connection.credentialId
       ? dmvCredentialFamily_(saved.family).fields
       : dmvConnector_(saved.connectorId).authFields || [];
-    var secrets = dmvSecretKeys_(fields);
+    var replacement = dmvCredentialRotationPatch_(fields, patch);
+    var keys = Object.keys(replacement);
     var target = connection.credentialId ? saved.values : saved.credentials;
-    var changed = false;
-    Object.keys(patch).forEach(function (key) {
-      if (secrets.indexOf(key) < 0 || typeof patch[key] !== 'string') return;
-      target[key] = patch[key];
-      changed = true;
+    var expectedCredentials = expectedValues || connection.credentials || {};
+    var compared = dmvSecretKeys_(fields);
+    // Logical revisions stay stable during rotation. Compare the old secret bundle as well,
+    // so a slower response cannot overwrite a newer rotation or mix parts of two bundles.
+    if (
+      !keys.length ||
+      compared.some(function (key) {
+        return target[key] !== expectedCredentials[key];
+      })
+    )
+      return false;
+    keys.forEach(function (key) {
+      target[key] = replacement[key];
     });
-    if (changed) dmvSave_(kind, saved);
+    dmvSave_(kind, saved);
+    return true;
   });
 }
 
@@ -315,6 +354,8 @@ function dmvTestConnection(id) {
     connector.test(dmvContext_(connector, connection, { config: {}, fields: [], maxRows: 1 }, {}));
     return { ok: true, message: 'Source verified.' };
   } catch (error) {
-    throw new Error(dmvSafeError_(error, connection.credentials));
+    throw new Error(
+      dmvSafeError_(error, connection.credentials, dmvSecretKeys_(connector.authFields || []))
+    );
   }
 }

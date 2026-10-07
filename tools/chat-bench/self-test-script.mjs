@@ -25,10 +25,9 @@ export const confirmToken = (body) => latest(body, 'confirmToken', 'c[0-9a-f]{32
 // The newest saved item's id (a dashboard or report the scripted model saved).
 export const savedId = (body) => latest(body, 'id', '[0-9a-f]{8}-[0-9a-f-]{27}');
 
-// The note the app sends an answer back with, once, when it describes a change no tool made or
-// leaves formula errors in cells the request wrote (dmvChatProblems_ in src/dmv_chat.js).
+// Review notes get the last scripted answer again without consuming another scenario step.
 const CHECK =
-  /^(?:No tool changed the spreadsheet in this request|These cells this request wrote show formula errors)/;
+  /^(?:No tool changed the spreadsheet in this request|These cells this request wrote show formula errors|These numbers in the answer are unsupported|Review the derived classifier labels)/;
 const lastUserText = (body) => {
   try {
     const parts = JSON.parse(body).contents.at(-1).parts || [];

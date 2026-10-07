@@ -126,7 +126,7 @@ function dmvFinishContinuation_(reportId) {
   }
 }
 
-function dmvFetchContinued_(report, spreadsheet, token, connectionRevision) {
+function dmvFetchContinued_(report, spreadsheet, token, connectionRevision, deadline) {
   var connection = dmvReadConnection_(report.connectionId);
   if (dmvConnectionRevision_(connection) !== connectionRevision)
     throw new Error('The source changed during the refresh. Run it again.');
@@ -157,7 +157,7 @@ function dmvFetchContinued_(report, spreadsheet, token, connectionRevision) {
       dates: dmvReportDates_(definition, report, spreadsheet),
       result: null,
     };
-  var ctx = dmvContext_(connector, connection, report, snapshot.dates);
+  var ctx = dmvContext_(connector, connection, report, snapshot.dates, deadline);
   var started = Date.now(),
     chunks = 0;
   try {
@@ -185,6 +185,8 @@ function dmvFetchContinued_(report, spreadsheet, token, connectionRevision) {
     );
     return { pending: true, rowCount: snapshot.result.rows.length };
   } catch (error) {
-    throw new Error(dmvSafeError_(error, connection.credentials));
+    throw new Error(
+      dmvSafeError_(error, connection.credentials, dmvSecretKeys_(connector.authFields))
+    );
   }
 }

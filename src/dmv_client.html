@@ -12,6 +12,7 @@
       dashboards: [],
       limits: { reportRows: 30000, defaultRows: 10000 },
       reportId: null,
+      reportEpoch: 0,
       connectionId: null,
       connectionReturnTo: 'connections',
       accountEpoch: 0,
@@ -325,7 +326,8 @@
         )
       );
       const failed = Boolean(report.lastError) || ['failed', 'error'].includes(report.status);
-      const running = ['running', 'started'].includes(report.status);
+      const running =
+        reportView.runs.has(report.id) || ['running', 'started'].includes(report.status);
       const paused = report.status === 'paused';
       const status = failed
         ? ['Needs attention', 'error']
@@ -383,11 +385,16 @@
             reportsNotice('Report removed. Existing sheet data was kept.');
           })
         ),
-        button(paused ? '▶ Resume' : '▶ Run', 'run-button', (event) =>
-          busy(event.currentTarget, paused ? 'Resuming…' : 'Running…', async () => {
+        button(paused ? '▶ Resume' : '▶ Run', 'run-button', (event) => {
+          if (reportView.runs.has(report.id) || reportView.disposed) return;
+          return busy(event.currentTarget, paused ? 'Resuming…' : 'Running…', async () => {
+            const token = {};
+            reportView.runs.set(report.id, token);
             reportsNotice((paused ? 'Resuming ' : 'Refreshing ') + report.name + '…', 'info');
             try {
               const result = await api('dmvRunReport', report.id);
+              if (reportView.disposed || reportView.runs.get(report.id) !== token) return;
+              report = state.reports.find((item) => item.id === report.id) || report;
               if (result.pending) {
                 report.fetchedRowCount = result.rowCount;
                 report.lastError = null;
@@ -411,19 +418,27 @@
                 result.warning ? 'info' : 'success'
               );
             } catch (error) {
+              if (reportView.disposed || reportView.runs.get(report.id) !== token) return;
+              report = state.reports.find((item) => item.id === report.id) || report;
               report.status = 'failed';
               report.lastError = error.message;
               renderReports();
               throw error;
+            } finally {
+              if (reportView.runs.get(report.id) === token) {
+                reportView.runs.delete(report.id);
+                renderReports();
+              }
             }
-          })
-        )
+          });
+        })
       );
       const run = actions.querySelector('.run-button');
       run.disabled = running;
       card.append(content, actions);
       return card;
     }
+    const reportView = { runs: new Map(), disposed: false };
     const dashboardView = {
       epoch: 0,
       fetch: null,
@@ -1594,6 +1609,7 @@
       $('connection-label').focus();
     }
     function resetReport(connectorId) {
+      state.reportEpoch++;
       state.reportId = null;
       $('report-form').reset();
       $('data-preview').hidden = true;
@@ -1622,6 +1638,7 @@
       renderReportFields();
     }
     function renderReportFields(config = {}, selectedFields) {
+      state.reportEpoch++;
       const report = currentReport();
       $('data-preview').hidden = true;
       $('report-description').textContent = report?.description || '';
@@ -1815,6 +1832,7 @@
       };
     }
     function editReport(report) {
+      state.reportEpoch++;
       state.reportId = report.id || null;
       $('data-preview').hidden = true;
       $('report-missing').hidden = true;
@@ -2315,10 +2333,15 @@
         return;
       }
       if (!report) return;
+      const epoch = state.reportEpoch;
       formBusy('report-fields', 'save-report', 'Saving…', async () => {
         const saved = await api('dmvSaveReport', report);
         upsertReport(saved);
         renderReports();
+        if (epoch !== state.reportEpoch) {
+          reportsNotice('Report saved. It stays private to your Google account.');
+          return;
+        }
         resetReport();
         tab('reports');
         notice('Report saved. It stays private to your Google account.');
@@ -2327,11 +2350,23 @@
     $('discover-fields').addEventListener('click', (event) =>
       busy(event.currentTarget, 'Loading…', async () => {
         if (!$('report-connection').value) throw new Error('Add a source before loading columns.');
-        const fields = await api('dmvDiscoverFields', {
+        const epoch = state.reportEpoch;
+        const query = () => ({
           connectionId: $('report-connection').value,
           reportType: $('report-type').value,
           config: readFields($('report-config'), currentReport()?.configFields || [], false),
         });
+        const input = query();
+        let fields;
+        try {
+          fields = await api('dmvDiscoverFields', input);
+        } catch (error) {
+          if (epoch !== state.reportEpoch || JSON.stringify(input) !== JSON.stringify(query()))
+            return;
+          throw error;
+        }
+        if (epoch !== state.reportEpoch || JSON.stringify(input) !== JSON.stringify(query()))
+          return;
         // Once columns were picked by hand, those already listed keep their choice and new
         // ones start from their default. An untouched list takes the loaded defaults.
         const listed = new Set(state.columns.map((field) => field.key));
@@ -2356,8 +2391,17 @@
         return;
       }
       if (!report) return;
+      const epoch = state.reportEpoch;
       formBusy('report-fields', 'preview-report', 'Loading…', async () => {
-        renderPreview(await api('dmvPreviewReport', report));
+        let preview;
+        try {
+          preview = await api('dmvPreviewReport', report);
+        } catch (error) {
+          if (epoch !== state.reportEpoch) return;
+          throw error;
+        }
+        if (epoch !== state.reportEpoch) return;
+        renderPreview(preview);
         notice('Preview ready. No sheet data was changed.');
       });
     });
@@ -2366,6 +2410,8 @@
     if (window.innerWidth >= 440) $('open-window').hidden = true;
     // The chat partial builds on these helpers; nothing else is exposed.
     window.addEventListener('pagehide', () => {
+      reportView.disposed = true;
+      reportView.runs.clear();
       dashboardView.disposed = true;
       resetDashboards();
     });

@@ -69,6 +69,7 @@ function dmvChatStoreResult_(session, result) {
   // A dashboard refresh keeps its working results in memory only.
   if (session.transient) return id;
   var text = JSON.stringify({
+    spreadsheetId: session.spreadsheetId,
     columns: result.columns,
     rows: result.rows,
     source: result.source,
@@ -127,13 +128,9 @@ function dmvChatResult_(session, id) {
         dmvChatResultChoices_(session)
     );
   if (session.results[id]) return session.results[id];
-  var text = dmvChatCacheGet_('dmv:chat:' + id);
-  if (
-    text === null &&
-    Array.isArray(session.priorResults) &&
-    dmvChatKnownResults_(session).indexOf(id) < 0
-  )
+  if (Array.isArray(session.priorResults) && dmvChatKnownResults_(session).indexOf(id) < 0)
     throw new Error(id + ' is not a result of this chat.' + dmvChatResultChoices_(session));
+  var text = dmvChatCacheGet_('dmv:chat:' + id);
   if (text === null) throw new Error('Result ' + id + ' has expired. Run the report again.');
   var parsed;
   try {
@@ -141,6 +138,8 @@ function dmvChatResult_(session, id) {
   } catch (error) {
     throw new Error('Result ' + id + ' has expired. Run the report again.');
   }
+  if (parsed.spreadsheetId !== session.spreadsheetId)
+    throw new Error('This result belongs to a different spreadsheet. Run the report again.');
   if (
     !Array.isArray(parsed.connectionIds) ||
     parsed.connectionIds.some(function (sourceId) {
@@ -489,7 +488,7 @@ function dmvChatRunReport_(session, input) {
       });
       var description = dmvChatDescribe_(session, reused, reusedId);
       description.reused = true;
-      return description;
+      return dmvChatReportPeriod_(description, dates);
     }
     // Freeze this fetch to the resolved window used in the identity, including at midnight.
     var fetchQuery = Object.assign({}, query);
@@ -538,7 +537,18 @@ function dmvChatRunReport_(session, input) {
     ref: id,
     details: dmvChatReportDetails_(connection, definition, query, dates, result.rows.length),
   });
-  return dmvChatDescribe_(session, stored, id);
+  return dmvChatReportPeriod_(dmvChatDescribe_(session, stored, id), dates);
+}
+
+// The resolved period is a successful report fact, including its inclusive length. A final
+// answer can name the period without relying on a proposed query or inferring it from samples.
+function dmvChatReportPeriod_(description, dates) {
+  if (dates.startDate && dates.endDate) {
+    description.dateRange = { startDate: dates.startDate, endDate: dates.endDate };
+    description.periodDays =
+      (Date.parse(dates.endDate) - Date.parse(dates.startDate)) / 86400000 + 1;
+  }
+  return description;
 }
 
 // The metadata kept of a source result, each value cut to 200 characters; a partial label, which
@@ -633,7 +643,9 @@ function dmvChatDescribeDatabase_(session, input) {
       { search: search }
     );
   } catch (error) {
-    throw new Error(dmvSafeError_(error, connection.credentials));
+    throw new Error(
+      dmvSafeError_(error, connection.credentials, dmvSecretKeys_(connector.authFields || []))
+    );
   }
   var matched = described.tables.filter(function (table) {
     return !search || table.name.toLowerCase().indexOf(search) >= 0;

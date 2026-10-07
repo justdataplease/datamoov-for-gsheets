@@ -219,7 +219,9 @@ function dmvDiscoverFields(input) {
       )
     );
   } catch (error) {
-    throw new Error(dmvSafeError_(error, connection.credentials));
+    throw new Error(
+      dmvSafeError_(error, connection.credentials, dmvSecretKeys_(connector.authFields))
+    );
   }
 }
 
@@ -243,7 +245,9 @@ function dmvFetchReport_(report, spreadsheet, deadline) {
       report.maxRows
     );
   } catch (error) {
-    throw new Error(dmvSafeError_(error, connection.credentials));
+    throw new Error(
+      dmvSafeError_(error, connection.credentials, dmvSecretKeys_(connector.authFields))
+    );
   }
 }
 
@@ -288,7 +292,7 @@ function dmvExecuteReport_(requested, deadline) {
     // Arm recovery before the first chunk, including for manual reports and abrupt termination.
     if (dmvPendingReport_(report)) dmvLocked_(dmvEnsureSchedule_);
     var result = dmvPendingReport_(report)
-      ? dmvFetchContinued_(report, spreadsheet, token, connectionRevision)
+      ? dmvFetchContinued_(report, spreadsheet, token, connectionRevision, deadline)
       : dmvFetchReport_(report, spreadsheet, deadline);
     return dmvLocked_(function () {
       var current = dmvRead_('report', report.id);
@@ -309,6 +313,8 @@ function dmvExecuteReport_(requested, deadline) {
             'Rows fetched so far. Existing output is unchanged. Resume now or wait for the hourly scheduler.',
         };
       }
+      if (deadline !== undefined && Date.now() > deadline - 10000)
+        throw new Error('The refresh reached its time limit. Use a smaller report.');
       var warning = dmvWriteReport_(spreadsheet, current, result);
       current.status = 'success';
       current.lastRun = new Date().toISOString();

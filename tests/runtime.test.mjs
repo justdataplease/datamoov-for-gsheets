@@ -532,3 +532,28 @@ test('the shared output size budget rejects oversized previews and refreshes bef
   assert.deepEqual(f.readOutput(report.id), receipt);
   assert.equal(f.state.batches.length, 1);
 });
+
+test('deleting a report prunes only its pending receipt and preserves another owner recovery', () => {
+  const f = fixture(), first = f.save();
+  const second = f.save({ name: 'Other report', target: { sheetName: 'Other', startCell: 'A1' } });
+  const result = f.api.dmvNormalizeResult_({ columns: [{ key: 'count', label: 'Count', type: 'number' }], rows: [{ count: 1 }], metadata: { complete: true } }, 100);
+  const set = f.state.user.setProperty;
+  let fail = true;
+  f.state.user.setProperty = function (key, value) {
+    if (fail && key === f.api.dmvOutputKey_(f.book.id, first.id)) throw new Error('Receipt outage');
+    return set.call(this, key, value);
+  };
+  assert.throws(() => f.api.dmvWriteReports_(f.book, [{ report: first, result }, { report: second, result }]), /receipts could not be saved/);
+  fail = false;
+  const journalKey = 'dmv:v1:write-journal:' + f.book.id;
+  const otherPending = plain(JSON.parse(f.state.user.getProperty(journalKey)).receipts[1]);
+  assert.equal(f.api.dmvDeleteReport(first.id).ok, true);
+  assert.equal(f.readOutput(first.id), null);
+  assert.equal(f.readOutput(second.id), null, 'removing one report does not adopt another report output');
+  assert.deepEqual(plain(JSON.parse(f.state.user.getProperty(journalKey)).receipts), [otherPending]);
+  assert.equal(f.value(f.tab('Output'), 2, 1), 1, 'removing a report keeps its written cells');
+  f.api.dmvRecoverOutputJournal_(f.reopen(), f.state.user);
+  assert.equal(f.readOutput(first.id), null, 'the deleted report receipt cannot resurrect');
+  assert.deepEqual(plain(f.readOutput(second.id)), otherPending.area);
+  assert.equal(f.state.user.getProperty(journalKey), null);
+});

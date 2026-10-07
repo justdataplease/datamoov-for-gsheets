@@ -8,7 +8,18 @@ function dmvPostgresSql_(sql) {
   return dmvReadOnlySql_(sql, { hashComments: false });
 }
 
-function dmvPostgresConnection_(credentials) {
+function dmvPostgresTimeout_(ctx, maximum) {
+  if (!ctx) return maximum;
+  ctx.checkDeadline();
+  if (!Number.isFinite(ctx.deadline)) return maximum;
+  var seconds = Math.floor((ctx.deadline - Date.now() - 10000) / 1000);
+  if (seconds < 1) throw new Error('The refresh reached its time limit. Use a smaller report.');
+  return Math.min(maximum, seconds);
+}
+
+function dmvPostgresConnection_(credentials, ctx) {
+  var connectTimeout = dmvPostgresTimeout_(ctx, 15);
+  var socketTimeout = dmvPostgresTimeout_(ctx, 40);
   var host = String(credentials.host || '').trim();
   if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(host))
     throw new Error('Enter a PostgreSQL hostname without a URL or port.');
@@ -25,7 +36,10 @@ function dmvPostgresConnection_(credentials) {
     port +
     '/' +
     encodeURIComponent(database) +
-    '?sslmode=verify-full&connectTimeout=15&socketTimeout=40';
+    '?sslmode=verify-full&connectTimeout=' +
+    connectTimeout +
+    '&socketTimeout=' +
+    socketTimeout;
   try {
     var connection = Jdbc.getConnection(
       url,
@@ -36,7 +50,7 @@ function dmvPostgresConnection_(credentials) {
     connection.setAutoCommit(false);
     var statement = connection.createStatement();
     try {
-      statement.setQueryTimeout(30);
+      statement.setQueryTimeout(dmvPostgresTimeout_(ctx, 30));
       statement.execute('SET TRANSACTION READ ONLY');
     } finally {
       statement.close();
@@ -48,6 +62,8 @@ function dmvPostgresConnection_(credentials) {
         connection.close();
       } catch (ignored) {}
     }
+    if (/^The refresh reached its time limit/.test(String((error && error.message) || '')))
+      throw error;
     throw new Error(
       'Could not open a read-only PostgreSQL connection. Check credentials, TLS certificate, and Apps Script IP access.'
     );
@@ -185,13 +201,14 @@ function dmvPostgresQuery_(ctx, discoverOnly) {
   var rank = discoverOnly ? null : dmvSqlTop_(ctx, dmvPostgresName_);
   var connection, statement, result, rankKey;
   try {
-    connection = dmvPostgresConnection_(ctx.credentials);
+    connection = dmvPostgresConnection_(ctx.credentials, ctx);
     if (rank) {
       // The plain query's columns come first, as BigQuery's dry run: the rank column is matched
       // to the result's own name (case aside) or refused with the columns, before it ranks.
       statement = connection.prepareStatement(sql + ' LIMIT 0');
-      statement.setQueryTimeout(30);
+      statement.setQueryTimeout(dmvPostgresTimeout_(ctx, 30));
       result = statement.executeQuery();
+      ctx.checkDeadline();
       rankKey = dmvSqlTopColumn_(
         rank,
         dmvPostgresTopColumns_(dmvPostgresFields_(result.getMetaData()))
@@ -203,9 +220,10 @@ function dmvPostgresQuery_(ctx, discoverOnly) {
       sql +
         (rank ? dmvSqlTopOrder_(rank, rankKey) : ' LIMIT ' + (discoverOnly ? 0 : ctx.maxRows + 1))
     );
-    statement.setQueryTimeout(30);
+    statement.setQueryTimeout(dmvPostgresTimeout_(ctx, 30));
     statement.setMaxRows(discoverOnly ? 1 : ctx.maxRows + 1);
     result = statement.executeQuery();
+    ctx.checkDeadline();
     var available = dmvPostgresFields_(result.getMetaData());
     if (discoverOnly) return available;
     var columns = dmvSelectFields_(ctx.fields, available);
@@ -234,7 +252,7 @@ function dmvPostgresQuery_(ctx, discoverOnly) {
   } catch (error) {
     var message = String((error && error.message) || '');
     if (
-      /^(The SQL result|Unknown or unavailable|Field selections|Choose between|Give each SQL|Select at most|Could not open|Keep the top rows|Rank by column)/.test(
+      /^(The refresh reached its time limit|The SQL result|Unknown or unavailable|Field selections|Choose between|Give each SQL|Select at most|Could not open|Keep the top rows|Rank by column)/.test(
         message
       )
     )
@@ -318,9 +336,10 @@ dmvRegisterConnector_({
   ],
   describeTables: dmvPostgresTables_,
   test: function (ctx) {
-    var connection = dmvPostgresConnection_(ctx.credentials);
+    var connection = dmvPostgresConnection_(ctx.credentials, ctx);
     try {
-      if (!connection.isValid(5)) throw new Error('Database connection failed.');
+      if (!connection.isValid(dmvPostgresTimeout_(ctx, 5)))
+        throw new Error('Database connection failed.');
     } finally {
       connection.close();
     }

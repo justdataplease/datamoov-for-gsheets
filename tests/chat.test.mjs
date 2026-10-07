@@ -272,6 +272,26 @@ test('summarize refuses to sum rates, lists columns on typos, filters, buckets d
   assert.throws(() => f.api.dmvChatSummarize_(f.api.dmvChatSession_(f.book), { resultId: described.resultId, metrics: [] }), /has expired/);
 });
 
+test('cached results remain scoped to the workbook and the conversation that received them', () => {
+  const f = fixture();
+  const first = f.api.dmvChatSession_(f.book);
+  const result = f.api.dmvChatRunReport_(first, { connectionId: f.connection.id, reportType: 'daily' });
+  const later = f.api.dmvChatSession_(f.book);
+  later.priorResults = [];
+  assert.throws(() => f.api.dmvChatResult_(later, result.resultId), /is not a result of this chat/);
+  later.priorResults = [result.resultId];
+  assert.equal(f.api.dmvChatResult_(later, result.resultId).rows.length, 3);
+  const resumed = f.api.dmvChatSession_(f.book);
+  resumed.priorResults = [];
+  resumed.events.push({ ref: result.resultId });
+  assert.equal(f.api.dmvChatResult_(resumed, result.resultId).rows.length, 3);
+  const otherBook = f.api.dmvChatSession_(f.book);
+  otherBook.spreadsheetId = 'another-workbook';
+  otherBook.priorResults = [result.resultId];
+  assert.throws(() => f.api.dmvChatResult_(otherBook, result.resultId), /different spreadsheet/);
+  assert.deepEqual(plain(otherBook.results), {});
+});
+
 test('read_sheet types columns from the user tab, discover_fields filters by search and write refuses occupied cells', () => {
   const f = fixture();
   const sheet = f.book.sheets[0];

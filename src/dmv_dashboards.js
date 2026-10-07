@@ -1471,6 +1471,12 @@ function dmvDeleteDashboard(id, keepTabs) {
     var deleted = 0;
     if (keepTabs !== true)
       deleted = dmvWorkbookLocked_(function () {
+        if (store.getProperty('dmv:v1:write-journal:' + dashboard.spreadsheetId))
+          dmvRecoverOutputJournal_(
+            dmvReopen_(SpreadsheetApp.openById(dashboard.spreadsheetId)),
+            store,
+            ids
+          );
         var owned = Object.create(null);
         keys.forEach(function (key) {
           var receipt = JSON.parse(store.getProperty(key) || 'null');

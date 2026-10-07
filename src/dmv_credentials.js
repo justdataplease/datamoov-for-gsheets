@@ -165,6 +165,7 @@ function dmvVerifyCredentialConnections_(family, values, previous, connections, 
     );
     var rotate = context.rotateCredentials;
     context.rotateCredentials = function (patch) {
+      var expected = Object.assign({}, previous ? previous.values : credentials);
       var sameIdentity =
         previous &&
         ['authMode', 'clientId', 'clientSecret', 'refreshToken'].every(function (key) {
@@ -180,11 +181,12 @@ function dmvVerifyCredentialConnections_(family, values, previous, connections, 
         values[key] = replacement[key];
       });
       if (sameIdentity && replacement.refreshToken) {
-        dmvRotateCredentials_(
+        var retained = dmvRotateCredentials_(
           { credentialId: previous.id, credentialRevision: previous.revision || 0 },
-          { refreshToken: replacement.refreshToken }
+          { refreshToken: replacement.refreshToken },
+          expected
         );
-        previous.values.refreshToken = replacement.refreshToken;
+        if (retained) previous.values.refreshToken = replacement.refreshToken;
       }
     };
     try {
@@ -193,7 +195,10 @@ function dmvVerifyCredentialConnections_(family, values, previous, connections, 
       verified = true;
     } catch (error) {
       throw new Error(
-        'Could not verify source "' + connection.label + '": ' + dmvSafeError_(error, credentials)
+        'Could not verify source "' +
+          connection.label +
+          '": ' +
+          dmvSafeError_(error, credentials, dmvSecretKeys_(connector.authFields || []))
       );
     }
   });
@@ -250,7 +255,7 @@ function dmvSaveCredential(input, deadline) {
           dmvGoogleToken_(values, family.scopes, deadline);
           verified = true;
         } catch (error) {
-          throw new Error(dmvSafeError_(error, values));
+          throw new Error(dmvSafeError_(error, values, dmvSecretKeys_(family.fields)));
         }
       }
       verified =

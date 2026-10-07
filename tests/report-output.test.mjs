@@ -149,6 +149,25 @@ test('timestamps and date columns that are not all plain days stay text', () => 
   assert.deepEqual(f.format(sheet, 2, 1).numberFormat, { type: 'TEXT', pattern: '@' });
 });
 
+test('impossible calendar days in date columns stay literal instead of rolling into another day', () => {
+  const f = fixture();
+  f.setRows([{ date: '2026-02-30', campaign: 'Brand', cost: 1 }, { date: '2026-13-01', campaign: 'Generic', cost: 2 }]);
+  f.run();
+  const sheet = f.sheet();
+  assert.equal(f.value(sheet, 2, 1), '2026-02-30');
+  assert.equal(f.shown(sheet, 2, 1), '2026-02-30');
+  assert.equal(f.value(sheet, 3, 1), '2026-13-01');
+  assert.deepEqual(f.format(sheet, 2, 1).numberFormat, { type: 'TEXT', pattern: '@' });
+  assert.equal(f.run().ok, true, 'literal invalid dates still verify their ownership receipt');
+});
+
+test('valid early years retain their year when plain dates become serials', () => {
+  const f = fixture();
+  f.setRows([{ date: '0099-01-01', campaign: 'Brand', cost: 1 }]);
+  f.run();
+  assert.equal(f.shown(f.sheet(), 2, 1), '0099-01-01');
+});
+
 test('the prompt says report dates are dates, for month helpers and QUERY comparisons', () => {
   const f = fixture();
   const prompt = f.api.dmvChatSystemPrompt_(f.api.dmvChatSession_(f.book));

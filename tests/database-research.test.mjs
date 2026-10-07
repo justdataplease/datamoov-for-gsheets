@@ -180,6 +180,26 @@ test('PostgreSQL field discovery requests zero data rows and closes the read-onl
   assert.equal(events.at(-1)[0],'connection.close');
 });
 
+test('PostgreSQL refuses expired work before JDBC access and checks even empty query results', () => {
+  const expired = jdbcFixture({ rows: [] });
+  const fail = () => { throw new Error('The refresh reached its time limit. Use a smaller report.'); };
+  assert.throws(() => load({ Jdbc: expired.Jdbc }).connectors.postgres.reports[0].fetch(pgContext({ checkDeadline: fail })), /time limit/);
+  assert.deepEqual(expired.events, []);
+  const slow = jdbcFixture({ rows: [] });
+  assert.throws(() => load({ Jdbc: slow.Jdbc }).connectors.postgres.reports[0].fetch(pgContext({ checkDeadline() {
+    if (slow.events.some(([name]) => name === 'query.execute')) fail();
+  } })), /time limit/);
+  assert.deepEqual(slow.events.slice(-4).map(([name]) => name), ['result.close', 'statement.close', 'rollback', 'connection.close']);
+});
+
+test('PostgreSQL query and socket timeouts fit the remaining caller budget', () => {
+  const f = jdbcFixture({ rows: [] });
+  load({ Jdbc: f.Jdbc }).connectors.postgres.reports[0].fetch(pgContext({ deadline: Date.now() + 18000 }));
+  assert.match(f.events.find(([name]) => name === 'connect')[1], /connectTimeout=[1-8]&socketTimeout=[1-8]$/);
+  for (const [name, seconds] of f.events)
+    if (name.endsWith('.timeout')) assert.ok(seconds > 0 && seconds <= 8);
+});
+
 test('PostgreSQL overflow and server errors close all resources without partial reports',()=> {
   const overflow=jdbcFixture({rows:[['1','1','t','1',null],['2','2','f','2',null]]});
   assert.throws(()=>load({Jdbc:overflow.Jdbc}).connectors.postgres.reports[0].fetch(pgContext({maxRows:1})),/exceeds the row limit/);

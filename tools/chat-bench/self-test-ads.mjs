@@ -147,6 +147,25 @@ export function runAdsSelfTest({ log = console.log } = {}) {
         `Spend in the last 30 days was ${money(last30().total.spend)} with ${last30().total.conversions.toLocaleString('en-US')} conversions.`
       ),
     // Turn 2: analysis naming every zero-conversion campaign with its true spend
+    () => call('run_report', {
+      connectionId: rt.connectionIds[0],
+      reportType: 'campaign_daily',
+      fields: ['campaign.name', 'metrics.cost_micros', 'metrics.conversions'],
+      dateRange: { preset: 'last30' },
+    }),
+    (body) => {
+      const response = JSON.parse(body).contents
+        .flatMap((content) => content.parts || [])
+        .findLast((part) => part.functionResponse?.name === 'run_report')
+        .functionResponse.response.result;
+      const result = typeof response === 'string' ? JSON.parse(response) : response;
+      return call('summarize', {
+        resultId: result.resultId,
+        groupBy: ['campaign.name'],
+        metrics: sum('metrics.cost_micros', 'metrics.conversions'),
+        filters: [{ field: 'campaign.name', op: 'in', value: last30().zeroConversion }],
+      });
+    },
     () => {
       const p = last30();
       const lines = p.campaigns
@@ -232,7 +251,8 @@ export function runAdsSelfTest({ log = console.log } = {}) {
       stop: 'answer',
       completed: true,
       waste_recall: Math.ceil(zero.length / 2) / zero.length,
-      numbers_checked: 1,
+      // The answer and the runtime's unverified-number mark both name the false amount.
+      numbers_checked: 2,
       numbers_matched: 0,
       answer_accurate: false,
     },

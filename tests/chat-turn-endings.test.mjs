@@ -99,7 +99,7 @@ test('the last five tool rounds carry a line that says how many are left', () =>
   assert.doesNotMatch(notes(g.requests[1]), /rounds? left/);
 });
 
-test('a reply that describes changes no tool made is sent back once, then marked', () => {
+test('a reply that describes changes no tool made is sent back up to twice, then marked', () => {
   const f = fixture();
   f.replies.push(
     reply('I created the tab "Totals" with a KPI row and a chart.'),
@@ -115,17 +115,18 @@ test('a reply that describes changes no tool made is sent back once, then marked
   const g = fixture();
   g.replies.push(
     reply('I created the tab "Totals" with a KPI row.'),
+    reply('The tab "Totals" was created with a KPI row.'),
     reply('The tab "Totals" was created with a KPI row.')
   );
   const marked = g.chat('Build a totals tab');
-  assert.equal(g.requests.length, 2);
+  assert.equal(g.requests.length, 3);
   assert.match(marked.text, /^The tab "Totals" was created with a KPI row\./);
   assert.match(marked.text, /No tool changed the spreadsheet in this request\.$/);
 
   // An answer that claims nothing, and a claim a tool backs, go out as they are.
   const h = fixture();
-  h.replies.push(reply('The total is 1,200.'));
-  assert.equal(h.chat('What is the total?').text, 'The total is 1,200.');
+  h.replies.push(reply('No total is available yet.'));
+  assert.equal(h.chat('What is the total?').text, 'No total is available yet.');
   assert.equal(h.requests.length, 1);
   const k = fixture();
   k.replies.push(
@@ -134,6 +135,75 @@ test('a reply that describes changes no tool made is sent back once, then marked
   );
   assert.equal(k.chat('Make a Totals tab').text, 'I created the tab "Totals".');
   assert.equal(k.requests.length, 2);
+});
+
+test('a second correction can finish the requested change without replaying earlier actions', () => {
+  const f = fixture();
+  f.replies.push(
+    reply('I created the tab "Totals".'),
+    reply('I created the tab "Totals".'),
+    reply('', [call('edit_sheet', { action: 'create_sheet', newName: 'Totals' })], 'tool'),
+    reply('I created the tab "Totals".')
+  );
+  const result = f.chat('Create a Totals tab');
+  assert.equal(result.text, 'I created the tab "Totals".');
+  assert.equal(f.requests.length, 4);
+  assert.equal(f.book.sheets.filter((sheet) => sheet.name === 'Totals').length, 1);
+});
+
+test('correction attempts persist across executions without restarting their allowance', () => {
+  const f = fixture({ timeLimit: 600 });
+  let steps = 0;
+  f.api.dmvChatTools_ = () => [{
+    name: 'wait_for_result',
+    run() { steps++; f.advance(90000); return { ok: true }; },
+  }];
+  f.replies.push(
+    reply('I created the tab "Totals".'),
+    reply('', [call('wait_for_result', {})], 'tool'),
+    reply('I created the tab "Totals".'),
+    reply('I created the tab "Totals".')
+  );
+  assert.deepEqual(f.chat('Create a Totals tab', { requestId: REQUEST }), { pending: true });
+  const result = plain(f.api.dmvChat({ requestId: REQUEST, resume: true }));
+  assert.equal(f.requests.length, 4, 'the resumed request gets only its remaining correction');
+  assert.equal(steps, 1, 'the previous execution does not replay a tool');
+  assert.match(result.text, /No tool changed the spreadsheet in this request/);
+});
+
+test('unsupported numbers get two corrections and remain marked if neither supplies evidence', () => {
+  const f = fixture();
+  f.replies.push(reply('The total is 1,234.56.'), reply('The total is 1,234.56.'), reply('The total is 1,234.56.'));
+  const result = f.chat('What is the total?');
+  assert.equal(f.requests.length, 3);
+  assert.match(notes(f.requests[1]), /unsupported/i);
+  assert.match(notes(f.requests[2]), /unsupported/i);
+  assert.match(result.text, /unverified|unsupported/i);
+});
+
+test('a correction may read the missing evidence and keep a supported number without a warning', () => {
+  const f = fixture();
+  f.setCell(f.sheet, 2, 2, 1234.56);
+  f.replies.push(
+    reply('The total is 1,234.56.'),
+    reply('', [call('inspect_sheet', { sheetName: f.sheet.name, range: 'B2' })], 'tool'),
+    reply('The total is 1,234.56.')
+  );
+  const result = f.chat('What is the total in B2?');
+  assert.equal(f.requests.length, 3);
+  assert.equal(result.text, 'The total is 1,234.56.');
+  assert.equal(f.value(f.sheet, 2, 2), 1234.56);
+  assert.equal(result.events.some((event) => event.kind === 'write'), false);
+});
+
+test('a budget closing answer is marked without reopening tools or extending the step limit', () => {
+  const f = fixture();
+  f.api.DMV_CHAT.maxRounds = 1;
+  f.replies.push(listSheets(), reply('The total is 1,234.56.'));
+  const result = f.chat('What is the total?');
+  assert.equal(f.requests.length, 2);
+  assert.deepEqual(f.requests.at(-1).tools, []);
+  assert.match(result.text, /unverified|unsupported/i);
 });
 
 test('analysis wording is not a claim; a sentence whose subject made something is', () => {
@@ -168,7 +238,7 @@ test('analysis wording is not a claim; a sentence whose subject made something i
   assert.equal(f.api.dmvChatClaims_('I added a chart to the Summary tab.', true), true);
 
   // An analysis answer with no tool call goes out as it is, in one model request.
-  f.replies.push(reply('Here are the totals: 120 rows sorted by spend. The Sales tab was updated with Q3 figures.'));
+  f.replies.push(reply('Here are the totals: rows sorted by spend. The Sales tab was updated with the latest figures.'));
   const answer = f.chat('What are the totals?');
   assert.equal(f.requests.length, 1);
   assert.doesNotMatch(answer.text, /No tool changed/);
@@ -482,13 +552,13 @@ test('the closing names formula errors left in cells the request wrote', () => {
   assert.match(notes(closing), new RegExp(f.sheet.name + '!C1 \\(#DIV/0!\\)'));
 });
 
-test('an answer that leaves formula errors gets one round to fix them, then names them', () => {
+test('an answer that leaves formula errors gets two attempts to fix them, then names them', () => {
   const f = fixture();
   ratio(f);
-  f.replies.push(reply('The ratio is in C1.'), reply('The ratio is in C1.'));
+  f.replies.push(reply('The ratio is in C1.'), reply('The ratio is in C1.'), reply('The ratio is in C1.'));
   const result = f.chat('Put the ratio of A1 to B1 in C1');
-  assert.equal(f.requests.length, 5);
-  assert.ok(f.requests[4].tools.length > 0, 'the model may fix them');
+  assert.equal(f.requests.length, 6);
+  assert.ok(f.requests[5].tools.length > 0, 'the model may fix them on the second attempt');
   assert.match(notes(f.requests[4]), new RegExp(f.sheet.name + '!C1 \\(#DIV/0!\\)'));
   assert.match(result.text, /^The ratio is in C1\./);
   assert.match(result.text, new RegExp('show errors: ' + f.sheet.name + '!C1 \\(#DIV/0!\\)'));
@@ -499,7 +569,7 @@ test('an answer that leaves formula errors gets one round to fix them, then name
 test('the round to fix formula errors says a cell the request gave up on may be cleared', () => {
   const f = fixture();
   ratio(f);
-  f.replies.push(reply('The ratio is in C1.'), reply('The ratio is in C1.'));
+  f.replies.push(reply('The ratio is in C1.'), reply('The ratio is in C1.'), reply('The ratio is in C1.'));
   f.chat('Put the ratio of A1 to B1 in C1');
   const note = notes(f.requests[4]);
   assert.match(note, /gave up on/);
@@ -520,9 +590,9 @@ test('cells written before a question are read again when the request with the a
   const asked = f.chat('Put the ratio of A1 to B1 in C1', { conversationId: CONVERSATION });
   assert.equal(asked.text, 'Which tab should hold the table?');
   const before = f.requests.length;
-  f.replies.push(reply('The table is on a new tab.'), reply('The table is on a new tab.'));
+  f.replies.push(reply('The table is on a new tab.'), reply('The table is on a new tab.'), reply('The table is on a new tab.'));
   const result = f.chat('A new tab', { conversationId: CONVERSATION, transcript: asked.transcriptAppend });
-  assert.equal(f.requests.length, before + 2, 'one round to fix the cell the question left behind');
+  assert.equal(f.requests.length, before + 3, 'two attempts to fix the cell the question left behind');
   assert.ok(f.requests.at(-1).tools.length > 0, 'the model may fix or clear it');
   assert.match(notes(f.requests.at(-1)), new RegExp(f.sheet.name + '!C1 \\(#DIV/0!\\)'));
   assert.match(result.text, new RegExp('show errors: ' + f.sheet.name + '!C1 \\(#DIV/0!\\)'));
@@ -542,7 +612,7 @@ test('cells written before a question are read again when the request with the a
   ratio(g);
   g.replies.push(reply('', [call('ask_user', { question: 'Which tab?', options: ['This tab'] })], 'tool'));
   const plainAsked = g.chat('Put the ratio of A1 to B1 in C1');
-  g.replies.push(reply('Done.'), reply('Done.'));
+  g.replies.push(reply('Done.'), reply('Done.'), reply('Done.'));
   const replied = g.chat('This tab', { transcript: plainAsked.transcriptAppend });
   assert.match(replied.text, new RegExp('show errors: ' + g.sheet.name + '!C1 \\(#DIV/0!\\)'));
 });
@@ -552,7 +622,7 @@ test('the request after a question reads those cells again whatever the answer a
   ratio(f);
   f.replies.push(reply('', [call('ask_user', { question: 'Go on?', options: ['Yes', 'No'] })], 'tool'));
   const asked = f.chat('Put the ratio of A1 to B1 in C1', { conversationId: CONVERSATION });
-  f.replies.push(reply('A1 holds 10.'), reply('A1 holds 10.'));
+  f.replies.push(reply('The formula is still in C1.'), reply('The formula is still in C1.'), reply('The formula is still in C1.'));
   const result = f.chat('Something else: what is in A1?', {
     conversationId: CONVERSATION,
     transcript: asked.transcriptAppend,
@@ -564,8 +634,8 @@ test('the request after a question reads those cells again whatever the answer a
   ratio(g);
   g.replies.push(reply('', [call('ask_user', { question: 'Go on?', options: ['Yes', 'No'] })], 'tool'));
   g.chat('Put the ratio of A1 to B1 in C1', { conversationId: CONVERSATION });
-  g.replies.push(reply('A1 holds 10.'));
-  assert.equal(g.chat('What is in A1?', { conversationId: '5c3d2e1f-0a9b-4c8d-9e7f-6a5b4c3d2e1f' }).text, 'A1 holds 10.');
+  g.replies.push(reply('I need to read the cell first.'));
+  assert.equal(g.chat('What is in A1?', { conversationId: '5c3d2e1f-0a9b-4c8d-9e7f-6a5b4c3d2e1f' }).text, 'I need to read the cell first.');
 });
 
 test('a sort over a cell that already showed an error neither sends the answer back nor marks it', () => {

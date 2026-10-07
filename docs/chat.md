@@ -48,7 +48,10 @@ In **Chat**, open the **Sources** dropdown to select one or more saved sources b
 All available sources are selected initially. The selected source names and report metadata go
 to the AI provider; only those sources can be fetched or used for a saved report or dashboard
 in that chat turn. Changing the selection starts a new chat. Use **Select all** or **Clear**
-for quick changes.
+for quick changes. Adding, importing or removing sources during an answer leaves that turn
+running with the sources it started with. The source choices update after the answer finishes;
+the completed answer stays visible, and your next question starts a fresh conversation with
+the updated selection.
 
 Usage is billed by the AI provider to your key. A question uses model calls plus any required
 source fetches; multi-account and period comparisons can require several fetches.
@@ -786,7 +789,7 @@ Values that come back from providers are framed as data, not instructions.
   never change the values, order or structure of saved report or dashboard output (formatting,
   conditional formats, filters and frozen panes there are fine), ask before destructive changes, and keep undo
   snapshots only in your private cache for six hours.
-- A turn is bounded by **Time limit per chat request** (initially 600 seconds) and by 8 tool
+- A turn is bounded by **Time limit per chat request** (initially 600 seconds) and by 16 tool
   rounds per 200 seconds of that limit. Apps Script stops any single execution at 6 minutes,
   so each execution works for about 200 seconds, and every tool in it shares that deadline (a
   report started late stops at the deadline instead of getting its own). When an execution
@@ -798,6 +801,23 @@ Values that come back from providers are framed as data, not instructions.
   large for the cache (about 900,000 characters), or whose state cannot be saved, finishes
   within its current execution instead. When the limit runs out the model answers from what
   it has and says what is missing.
+- Before accepting a final answer, chat checks for claims of changes no tool made, errors in
+  cells the request wrote, and quoted numbers unsupported by successful tool results or cells.
+  It can send problems back for correction up to twice, within the same time and step limits.
+  It rereads up to 20,000 relevant cells per review when needed. Unresolved problems are marked
+  in the answer, including when the request has already reached its limit. Derived classification
+  formulas receive one review of their group counts and thresholds, covering at most two
+  classifiers with at least 20 unique keys. Counts require complete key and label columns
+  within the read budget; a partial column is never treated as a full distribution. Boundary
+  examples share one batched Sheets read per classifier within that same budget. An uneven
+  distribution can be valid and does not by itself require changing the groups. Classifier
+  context is limited to 10,000 characters. More than 30 labels, long labels or oversized detail
+  produce an explicitly labeled aggregate summary, with label counts and examples omitted.
+  Numeric evidence checks establish that a quoted value exists, not that its interpretation is
+  correct.
+  Automatic rereads use recorded written or inspected areas. Saved reports, dashboards and
+  native pivots may need an explicit `inspect_sheet` call during correction to verify a figure
+  that their returned summaries do not contain.
 - If the AI provider fails after a tool already wrote to the sheet, the answer says so and
   lists the completed steps; nothing that happened is hidden.
 - A tool call the provider cannot use (Gemini's `MALFORMED_FUNCTION_CALL`, `MALFORMED_RESPONSE`,
@@ -813,7 +833,9 @@ Values that come back from providers are framed as data, not instructions.
   fresh sources.
 - Results are staged in your private user cache for one hour. Each answer's activity lines
   carry the result ids into the next turn, so "now chart that" reuses the cached result
-  instead of running the report again; after an hour the chat runs it again.
+  instead of running the report again; after an hour the chat runs it again. A cached result
+  must belong to the current spreadsheet and be an id returned in this conversation, with
+  its sources still selected. A live cache entry alone does not make an unrelated id usable.
 - Metrics that cannot be added across rows (user counts, reach, rates, averages) are marked
   as such; the chat offers no total for them and `summarize` refuses to sum them.
 - Text read from your own tabs is kept whole when written elsewhere; only the samples shown

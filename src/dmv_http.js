@@ -113,19 +113,60 @@ function dmvGoogleOAuthToken_(credentials, scopes, deadline) {
   );
 }
 
-// Exchange a user-supplied refresh token at a provider's fixed token endpoint. Access tokens are
-// cached per user until shortly before expiry; the refresh token itself is never cached or logged.
-// Providers that rotate refresh tokens (Microsoft, LinkedIn) hand the replacement to onRotate.
-function dmvOAuthRefreshToken_(provider, credentials, deadline, onRotate) {
-  var names = ['clientId', 'clientSecret', 'refreshToken'];
-  var values = names.map(function (name) {
-    var value = credentials[name];
-    if (typeof value !== 'string' || !value.trim() || value.length > 12000)
-      throw new Error(provider.label + ' needs a client ID, client secret, and refresh token.');
-    return value.trim();
+function dmvAccessTokenValid_(value) {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 12000 &&
+    !/[\s\u0000-\u001f\u007f]/.test(value)
+  );
+}
+
+function dmvCachedAccessToken_(key) {
+  try {
+    var value = CacheService.getUserCache().get(key);
+    return dmvAccessTokenValid_(value) ? value : '';
+  } catch (ignored) {
+    return '';
+  }
+}
+
+function dmvValidateAccessToken_(token, label) {
+  if (
+    !token ||
+    typeof token !== 'object' ||
+    Array.isArray(token) ||
+    !dmvAccessTokenValid_(token.access_token)
+  )
+    throw new Error(label + ' did not return a valid access token. Check the credentials.');
+}
+
+// Cache is optional; malformed/missing lifetimes permit immediate use only, and an explicitly
+// expired token is refused. Subtract exchange latency and a safety margin from a known lifetime.
+function dmvCacheAccessToken_(keys, token, startedAt, label) {
+  var elapsed = Math.max(0, (Date.now() - startedAt) / 1000);
+  var expiry =
+    typeof token.expires_in === 'number'
+      ? token.expires_in
+      : typeof token.expires_in === 'string' && /^-?\d+(?:\.\d+)?$/.test(token.expires_in)
+        ? Number(token.expires_in)
+        : NaN;
+  if (Number.isFinite(expiry) && (expiry <= 0 || expiry <= elapsed))
+    throw new Error(label + ' returned an expired access token. Try authorizing again.');
+  if (typeof token.expires_in !== 'number' || !Number.isInteger(expiry) || expiry <= 0) return;
+  var ttl = Math.min(3300, Math.floor(expiry - elapsed - 120));
+  if (ttl <= 0) return;
+  keys.forEach(function (key) {
+    try {
+      CacheService.getUserCache().put(key, token.access_token, ttl);
+    } catch (ignored) {
+      /* Cache is optional. */
+    }
   });
-  var host = dmvHost_(provider.endpoint);
-  var cacheKey =
+}
+
+function dmvOAuthCacheKey_(provider, values) {
+  return (
     'dmv:oauth:' +
     Utilities.base64EncodeWebSafe(
       Utilities.computeDigest(
@@ -139,23 +180,25 @@ function dmvOAuthRefreshToken_(provider, credentials, deadline, onRotate) {
           provider.scopes || [],
         ])
       )
-    ).replace(/=+$/, '');
-  var validToken = function (value) {
-    return (
-      typeof value === 'string' &&
-      value.length > 0 &&
-      value.length <= 12000 &&
-      !/[\s\u0000-\u001f\u007f]/.test(value)
-    );
-  };
-  var cache = CacheService.getUserCache();
-  var cached;
-  try {
-    cached = cache.get(cacheKey);
-  } catch (ignored) {
-    cached = null;
-  }
-  if (validToken(cached)) return cached;
+    ).replace(/=+$/, '')
+  );
+}
+
+// Exchange a user-supplied refresh token at a provider's fixed token endpoint. Access tokens are
+// cached per user until shortly before expiry; the refresh token itself is never cached or logged.
+// Providers that rotate refresh tokens (Microsoft, LinkedIn) hand the replacement to onRotate.
+function dmvOAuthRefreshToken_(provider, credentials, deadline, onRotate) {
+  var names = ['clientId', 'clientSecret', 'refreshToken'];
+  var values = names.map(function (name) {
+    var value = credentials[name];
+    if (typeof value !== 'string' || !value.trim() || value.length > 12000)
+      throw new Error(provider.label + ' needs a client ID, client secret, and refresh token.');
+    return value.trim();
+  });
+  var host = dmvHost_(provider.endpoint);
+  var cacheKey = dmvOAuthCacheKey_(provider, values);
+  var cached = dmvCachedAccessToken_(cacheKey);
+  if (cached) return cached;
   var startedAt = Date.now();
   var body =
     'client_id=' +
@@ -189,40 +232,19 @@ function dmvOAuthRefreshToken_(provider, credentials, deadline, onRotate) {
         ' credentials could not be refreshed. Check the client ID, client secret, and refresh token; reauthorize if access expired or was revoked.'
     );
   }
-  if (
-    !token ||
-    typeof token !== 'object' ||
-    Array.isArray(token) ||
-    !validToken(token.access_token)
-  )
-    throw new Error(
-      provider.label + ' did not return a valid access token. Check the OAuth credentials.'
-    );
+  dmvValidateAccessToken_(token, provider.label);
+  var cacheKeys = [cacheKey];
   if (
     typeof onRotate === 'function' &&
-    validToken(token.refresh_token) &&
+    dmvAccessTokenValid_(token.refresh_token) &&
     token.refresh_token !== values[2]
-  )
+  ) {
     onRotate({ refreshToken: token.refresh_token });
-  var elapsed = Math.max(0, (Date.now() - startedAt) / 1000);
-  var expiry =
-    typeof token.expires_in === 'number'
-      ? token.expires_in
-      : typeof token.expires_in === 'string' && /^-?\d+(?:\.\d+)?$/.test(token.expires_in)
-        ? Number(token.expires_in)
-        : NaN;
-  if (Number.isFinite(expiry) && (expiry <= 0 || expiry <= elapsed))
-    throw new Error(provider.label + ' returned an expired access token. Try authorizing again.');
-  if (typeof token.expires_in === 'number' && Number.isInteger(expiry) && expiry > 0) {
-    var ttl = Math.min(3300, Math.floor(expiry - elapsed - 120));
-    if (ttl > 0) {
-      try {
-        cache.put(cacheKey, token.access_token, ttl);
-      } catch (ignored) {
-        /* Cache is optional. */
-      }
-    }
+    var rotated = values.slice();
+    rotated[2] = token.refresh_token;
+    cacheKeys.push(dmvOAuthCacheKey_(provider, rotated));
   }
+  dmvCacheAccessToken_(cacheKeys, token, startedAt, provider.label);
   return token.access_token;
 }
 
@@ -243,17 +265,25 @@ function dmvGoogleToken_(credentials, scopes, deadline) {
   } catch (error) {
     throw new Error('Paste a valid service-account JSON key.');
   }
-  if (key.type !== 'service_account' || !key.client_email || !key.private_key)
+  if (
+    !key ||
+    typeof key !== 'object' ||
+    key.type !== 'service_account' ||
+    typeof key.client_email !== 'string' ||
+    !key.client_email ||
+    typeof key.private_key !== 'string' ||
+    !key.private_key
+  )
     throw new Error('The service-account JSON needs client_email and private_key.');
   var cacheKey =
     'dmv:token:' +
     Utilities.base64EncodeWebSafe(
       Utilities.computeDigest(
         Utilities.DigestAlgorithm.SHA_256,
-        key.client_email + key.private_key + scopes.join(' ')
+        JSON.stringify([key.client_email, key.private_key, scopes])
       )
     ).slice(0, 80);
-  var cached = CacheService.getUserCache().get(cacheKey);
+  var cached = dmvCachedAccessToken_(cacheKey);
   if (cached) return cached;
   var now = Math.floor(Date.now() / 1000);
   var encode = function (value) {
@@ -277,6 +307,7 @@ function dmvGoogleToken_(credentials, scopes, deadline) {
   } catch (error) {
     throw new Error('The service-account private key could not be read.');
   }
+  var startedAt = Date.now();
   var token = dmvHttp_(
     {
       url: 'https://oauth2.googleapis.com/token',
@@ -289,13 +320,8 @@ function dmvGoogleToken_(credentials, scopes, deadline) {
     ['oauth2.googleapis.com'],
     deadline
   );
-  if (!token.access_token)
-    throw new Error('Google did not issue an access token. Check the service account.');
-  CacheService.getUserCache().put(
-    cacheKey,
-    token.access_token,
-    Math.max(1, Math.min(3300, Number(token.expires_in || 3600) - 120))
-  );
+  dmvValidateAccessToken_(token, 'Google service account');
+  dmvCacheAccessToken_([cacheKey], token, startedAt, 'Google service account');
   return token.access_token;
 }
 
@@ -328,10 +354,14 @@ function dmvContext_(connector, connection, report, dates, deadline) {
       return dmvGoogleToken_(connection.credentials, connector.googleScopes || [], deadline);
     },
     rotateCredentials: function (patch) {
-      Object.keys(patch).forEach(function (key) {
-        connection.credentials[key] = patch[key];
+      var replacement = dmvCredentialRotationPatch_(connector.authFields || [], patch);
+      var expected = Object.assign({}, connection.credentials);
+      dmvRotateCredentials_(connection, replacement, expected);
+      // This execution may finish with its own replacement even when a newer rotation already
+      // won persistence. Its stale snapshot never replaces that saved secret bundle.
+      Object.keys(replacement).forEach(function (key) {
+        connection.credentials[key] = replacement[key];
       });
-      dmvRotateCredentials_(connection, patch);
     },
   };
 }

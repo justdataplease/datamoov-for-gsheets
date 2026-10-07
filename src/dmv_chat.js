@@ -24,6 +24,8 @@ var DMV_CHAT = {
   maxToolResultChars: 24000,
   // A reply whose tool call the provider could not use is retried this often per request.
   toolErrorRetries: 2,
+  // A final answer may be corrected this many times within the existing request budget.
+  correctionRounds: 2,
   // The prompt lists at most this many header cells of the active tab, each this long, within
   // this many characters of JSON, from the first non-empty row of the first few.
   activeHeaders: 30,
@@ -406,7 +408,7 @@ function dmvChatWeekComparison_(today) {
 function dmvChatSystemPrompt_(session) {
   var weeks = dmvChatWeekComparison_(session.today);
   return [
-    "You are DataMoov, a data assistant inside a Google Sheets sidebar. You answer questions about the user's data (selected sources, tabs) with tools, writing results and charts into the spreadsheet. You never invent numbers.",
+    "You are DataMoov in Google Sheets. Use tools to answer questions about the user's selected sources and tabs, writing results and charts into the spreadsheet. Quote numbers only from successful tools or cells.",
     '',
     'RULES',
     '- Use only the selected sources and reports in the catalog below. If none fits, say so and name what would.',
@@ -1233,10 +1235,9 @@ function dmvChatClosing_(session, text, until) {
   );
 }
 
-// What an answer the model ended with gets wrong, or null: it describes a change while no tool
-// changed anything (and it asked no confirmation), or cells the request wrote show formula
-// errors. note sends it back to the model; mark is the line the answer gets when it stays.
-function dmvChatProblems_(session, reply, until) {
+// Review a final answer against successful actions, tool results and current written cells.
+// note sends problems back to the model; mark identifies what remains unverified.
+function dmvChatProblems_(session, reply, until, messages) {
   var asked = session.events.some(function (event) {
       return /^confirmToken /.test(String(event.ref || ''));
     }),
@@ -1261,7 +1262,14 @@ function dmvChatProblems_(session, reply, until) {
     );
     marks.push('Cells this request wrote still show errors: ' + errors.join(', ') + '.');
   }
-  return notes.length ? { note: notes.join(' '), mark: marks.join(' ') } : null;
+  var review = dmvChatReview_(session, reply, messages || [], until);
+  if (review) {
+    notes.push(review.note);
+    marks.push(review.mark);
+  }
+  return notes.length
+    ? { note: notes.join(' '), mark: marks.join(' '), segments: !!(review && review.segments) }
+    : null;
 }
 
 // True when an earlier turn of the conversation lists actions, so this request may speak of
@@ -1464,6 +1472,7 @@ function dmvChatExecute_(input, progress, spreadsheet) {
     session.wrote = state.wrote || [];
     session.priorResults = state.priorResults || [];
     session.priorActions = !!state.priorActions;
+    session.reviewSegmentsSent = !!state.reviewSegmentsSent;
     // Replies of another provider or model are replayed from their neutral content.
     if (state.model !== model)
       state.messages.forEach(function (message) {
@@ -1489,10 +1498,11 @@ function dmvChatExecute_(input, progress, spreadsheet) {
   var finalText = '',
     rounds = state ? state.rounds : 0,
     toolErrors = state ? state.toolErrors || 0 : 0,
-    // The answer was checked once against what the tools did (dmvChatProblems_).
-    checked = !!(state && state.checked),
+    // Correction attempts span executions and share the request's time and step limits.
+    corrections = state ? state.corrections || (state.checked ? 1 : 0) : 0,
     // Reading written cells for errors keeps this much of the final answer's reserve.
     until = deadline - 25000,
+    finalReviewed = false,
     failed = false;
   try {
     while (true) {
@@ -1570,11 +1580,16 @@ function dmvChatExecute_(input, progress, spreadsheet) {
         continue;
       }
       if (!reply.toolCalls.length) {
-        // An answer that describes a change no tool made, or leaves formula errors in cells the
-        // request wrote, goes back once with what the tools did; after that it is marked.
-        var problems = reply.text ? dmvChatProblems_(session, reply.text, until) : null;
-        if (problems && !checked) {
-          checked = true;
+        // Review successful tool results and current cells before accepting a final answer.
+        // Corrections use the existing tools and budget; unresolved problems are marked.
+        var problems = reply.text ? dmvChatProblems_(session, reply.text, until, messages) : null;
+        if (
+          problems &&
+          corrections < DMV_CHAT.correctionRounds &&
+          Date.now() <= session.deadline - DMV_CHAT.toolMarginMs
+        ) {
+          corrections++;
+          if (problems.segments) session.reviewSegmentsSent = true;
           messages.push({
             role: 'assistant',
             content: [{ type: 'text', text: reply.text }],
@@ -1607,6 +1622,7 @@ function dmvChatExecute_(input, progress, spreadsheet) {
             ? 'The model stopped without an answer (' + reply.reason + '). Try again.'
             : 'The model returned no answer. Try rephrasing the question.');
         failed = !reply.text;
+        finalReviewed = true;
         break;
       }
       var assistantContent = [];
@@ -1714,7 +1730,8 @@ function dmvChatExecute_(input, progress, spreadsheet) {
             wrote: session.wrote,
             priorResults: session.priorResults,
             priorActions: session.priorActions,
-            checked: checked,
+            corrections: corrections,
+            reviewSegmentsSent: !!session.reviewSegmentsSent,
             selectedConnectionIds: session.connections.map(function (connection) {
               return connection.id;
             }),
@@ -1727,10 +1744,16 @@ function dmvChatExecute_(input, progress, spreadsheet) {
   } catch (error) {
     // A provider failure after tools already changed the sheet is reported with those steps,
     // so the user can tell partial success from no action.
-    var failure = dmvSafeError_(error, { apiKey: settings.apiKey });
+    var failure = dmvSafeError_(error, { apiKey: settings.apiKey }, ['apiKey']);
     if (!session.events.length) throw new Error(failure);
     finalText = 'The AI provider failed after the steps listed below. ' + failure;
     failed = true;
+  }
+  // Budget and output-limit closing answers cannot restart spreadsheet work, but still name
+  // unsupported claims. Questions wait for the user and do not enter the final-answer review.
+  if (!session.question && !finalReviewed && finalText) {
+    var remaining = dmvChatProblems_(session, finalText, until, messages);
+    if (remaining) finalText += '\n\n' + remaining.mark;
   }
   // Result ids ride along in the replayed actions so follow-up turns can reuse cached results.
   var actions = session.events.map(function (event) {

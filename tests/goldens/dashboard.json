@@ -386,5 +386,12 @@
    "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
    "page: Dashboard report": "334cc0bfe2985cd7"
   }
+ ],
+ "dropping a dashboard dataset prunes its journal entry and retains the remaining recovery": [
+  {
+   "data: Source 1 data": "cac8cc4a2cbbaf04",
+   "charts: Dashboard report (chart data)": "7dc53b732f03aac6",
+   "page: Dashboard report": "7838798fb4ff3e0d"
+  }
  ]
 }

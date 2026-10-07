@@ -1457,6 +1457,69 @@ test('journal recovery never adopts manually edited cells as dashboard-owned out
   assert.equal(f.state.batches.length, 1);
 });
 
+test('removing a dashboard after a receipt outage recovers and deletes all matching owned tabs', () => {
+  const f = fixture(), saved = f.save();
+  const original = f.book.sheets.map((sheet) => sheet.id);
+  const set = f.state.user.setProperty;
+  let fail = true;
+  f.state.user.setProperty = function (key, value) {
+    if (fail && key.endsWith(saved.id + '-report')) throw new Error('Receipt outage');
+    return set.call(this, key, value);
+  };
+  assert.throws(() => f.run(saved.id), /receipts could not be saved/);
+  fail = false;
+  assert.equal(f.readOutput(saved.id + '-report'), null);
+  assert.equal(f.api.dmvDeleteDashboard(saved.id).deletedTabs, 4);
+  assert.deepEqual(f.book.sheets.map((sheet) => sheet.id), original);
+  const journalKey = 'dmv:v1:write-journal:' + f.book.id;
+  assert.equal(f.state.user.getProperty(journalKey), null);
+  f.api.dmvRecoverOutputJournal_(f.reopen(), f.state.user);
+  assert.deepEqual(f.receipts(saved.id), [null, null, null, null]);
+});
+
+test('dashboard removal does not adopt an edited tab with a missing receipt', () => {
+  const f = fixture(), saved = f.save();
+  const set = f.state.user.setProperty;
+  let fail = true;
+  f.state.user.setProperty = function (key, value) {
+    if (fail && key.endsWith(saved.id + '-report')) throw new Error('Receipt outage');
+    return set.call(this, key, value);
+  };
+  assert.throws(() => f.run(saved.id), /receipts could not be saved/);
+  fail = false;
+  const page = f.tab('Dashboard report');
+  f.setCell(page, 2, 3, 'Manual');
+  assert.equal(f.api.dmvDeleteDashboard(saved.id).deletedTabs, 3);
+  assert.equal(f.tab('Dashboard report').id, page.id);
+  assert.equal(f.shown(page, 2, 3), 'Manual');
+  assert.equal(f.state.user.getProperty('dmv:v1:write-journal:' + f.book.id), null);
+  f.api.dmvRecoverOutputJournal_(f.reopen(), f.state.user);
+  assert.equal(f.readOutput(saved.id + '-report'), null);
+});
+
+test('dropping a dashboard dataset prunes its journal entry and retains the remaining recovery', () => {
+  const f = fixture(), saved = f.save();
+  const remove = f.state.user.deleteProperty;
+  const journalKey = 'dmv:v1:write-journal:' + f.book.id;
+  let fail = true;
+  f.state.user.deleteProperty = function (key) {
+    if (fail && key === journalKey) throw new Error('Journal cleanup outage');
+    return remove.call(this, key);
+  };
+  f.run(saved.id);
+  fail = false;
+  const before = plain(JSON.parse(f.state.user.getProperty(journalKey)).receipts);
+  const droppedKey = f.api.dmvOutputKey_(f.book.id, saved.id + '-d-source1');
+  f.save({ ...f.input, id: saved.id, revision: saved.revision, datasets: [f.input.datasets[0]] });
+  assert.equal(f.readOutput(saved.id + '-d-source1'), null);
+  assert.deepEqual(plain(JSON.parse(f.state.user.getProperty(journalKey)).receipts), before.filter((receipt) => receipt.key !== droppedKey));
+  const droppedCells = plain([...f.tab('Source 2 data').cells]);
+  f.api.dmvRecoverOutputJournal_(f.reopen(), f.state.user);
+  assert.equal(f.readOutput(saved.id + '-d-source1'), null, 'a dropped dataset receipt cannot resurrect');
+  assert.deepEqual(plain([...f.tab('Source 2 data').cells]), droppedCells);
+  assert.equal(f.state.user.getProperty(journalKey), null);
+});
+
 test('the cell budget of the datasets together and cumulative workbook capacity stop every output', () => {
   const f = fixture();
   f.input.datasets.forEach((dataset) => {
